@@ -11,7 +11,7 @@
 - pnpmへ移行
 
 ## これなに
-Misskey用の日本語Botです。
+Misskeyで動作する日本語のBotです。
 
 ## インストール
 > Node.js と npm と MeCab (オプション) がインストールされている必要があります。
