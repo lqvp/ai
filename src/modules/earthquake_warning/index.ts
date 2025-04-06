@@ -70,6 +70,7 @@ export default class extends Module {
 	public readonly name = "earthquake_warning";
 
 	private readonly WEBSOCKET_URL = "wss://ws-api.wolfx.jp/jma_eew";
+	// private readonly WEBSOCKET_URL = "ws://localhost:8765/"; // ローカルでのテスト用
 	private ws: WebSocket | null = null;
 	private reconnectAttempts = 0;
 	private maxReconnectAttempts = 10;
@@ -77,6 +78,7 @@ export default class extends Module {
 	private heartbeatInterval: NodeJS.Timeout | null = null;
 	private lastHeartbeat = 0;
 	private activeEvents: Map<string, EarthquakeEvent> = new Map();
+	private lastEarthquakeData: Map<string, WolfxEarthquakeData> = new Map();
 
 	@bindThis
 	public install() {
@@ -301,13 +303,12 @@ export default class extends Module {
 		data: WolfxEarthquakeData,
 		existingEvent: EarthquakeEvent
 	): Promise<void> {
-		// 前回の更新から一定時間（例: 30秒）経過していない場合はスキップ
-		if (Date.now() - existingEvent.lastUpdate < 30000) {
-			return;
-		}
+		// 報告回数をインクリメント
+		const reportNumber = existingEvent.reportCount + 1;
 
 		// 続報メッセージ生成
-		const message = this.generateEarthquakeMessage(data, false);
+		let message = `【続報 #${reportNumber}】\n`;
+		message += this.generateEarthquakeMessage(data, false);
 
 		try {
 			// 返信として投稿
@@ -320,7 +321,7 @@ export default class extends Module {
 			this.activeEvents.set(data.EventID, {
 				...existingEvent,
 				lastUpdate: Date.now(),
-				reportCount: existingEvent.reportCount + 1,
+				reportCount: reportNumber,
 			});
 
 			this.log(
@@ -367,7 +368,7 @@ export default class extends Module {
 		data: WolfxEarthquakeData,
 		existingEvent: EarthquakeEvent
 	): Promise<void> {
-		const message = `これは最終報です。\n\n${this.generateEarthquakeMessage(
+		const message = `【最終報】\n${this.generateEarthquakeMessage(
 			data,
 			false
 		)}`;
@@ -442,7 +443,9 @@ export default class extends Module {
 
 		const announcedTime = this.formatJSTDateTime(new Date(data.AnnouncedTime));
 		message += `${announcedTime}、地震速報を受信しました！\n`;
-		message += `${data.Hypocenter}付近で震度${data.MaxIntensity}の揺れが予想されます！\n`;
+		message += `${data.Hypocenter}付近で震度${this.convertIntensityDisplay(
+			data.MaxIntensity
+		)}の揺れが予想されます！\n`;
 		message += `マグニチュードは${data.Magunitude}、震源の深さは約${data.Depth}kmです。\n`;
 
 		// 警報の場合は特別な表示
@@ -470,9 +473,61 @@ export default class extends Module {
 
 		// 震度変更情報がある場合
 		if (data.MaxIntChange && data.MaxIntChange.String) {
-			message += `\n震度情報が変更されました: ${data.MaxIntChange.String}\n`;
+			// 震度表示を変換
+			const convertedString = data.MaxIntChange.String.replace(
+				"震度5-",
+				"震度5弱"
+			)
+				.replace("震度5+", "震度5強")
+				.replace("震度6-", "震度6弱")
+				.replace("震度6+", "震度6強");
+
+			message += `\n震度情報が変更されました: ${convertedString}\n`;
 			if (data.MaxIntChange.Reason) {
 				message += `変更理由: ${data.MaxIntChange.Reason}\n`;
+			}
+		}
+
+		// 更新情報の追加（初回以外で表示）
+		if (!isInitial && this.lastEarthquakeData.has(data.EventID)) {
+			const lastData = this.lastEarthquakeData.get(data.EventID);
+			if (lastData) {
+				const updates: string[] = [];
+
+				// マグニチュードの変化
+				if (lastData.Magunitude !== data.Magunitude) {
+					const diff = data.Magunitude - lastData.Magunitude;
+					const direction = diff > 0 ? "上方" : "下方";
+					updates.push(
+						`マグニチュード: ${lastData.Magunitude} → ${data.Magunitude} (${direction}修正)`
+					);
+				}
+
+				// 震源の深さの変化
+				if (lastData.Depth !== data.Depth) {
+					const diff = data.Depth - lastData.Depth;
+					updates.push(
+						`震源の深さ: ${lastData.Depth}km → ${data.Depth}km (${
+							diff > 0 ? "深く" : "浅く"
+						}修正)`
+					);
+				}
+
+				// 震度の変化（MaxIntChangeとは別に、単純な前回との比較）
+				if (lastData.MaxIntensity !== data.MaxIntensity) {
+					updates.push(
+						`震度: ${this.convertIntensityDisplay(
+							lastData.MaxIntensity
+						)} → ${this.convertIntensityDisplay(data.MaxIntensity)}`
+					);
+				}
+
+				if (updates.length > 0) {
+					message += "\n📊 前回からの更新情報:\n";
+					updates.forEach((update) => {
+						message += `・${update}\n`;
+					});
+				}
 			}
 		}
 
@@ -482,12 +537,17 @@ export default class extends Module {
 			for (let i = 0; i < Math.min(data.WarnArea.length, 5); i++) {
 				// 最大5地域まで表示
 				const area = data.WarnArea[i];
-				message += `- ${area.Chiiki}: 震度${area.Shindo1}～${area.Shindo2} (${area.Type})\n`;
+				message += `- ${area.Chiiki}: 震度${this.convertIntensityDisplay(
+					area.Shindo1
+				)}～${this.convertIntensityDisplay(area.Shindo2)} (${area.Type})\n`;
 			}
 			if (data.WarnArea.length > 5) {
 				message += `他${data.WarnArea.length - 5}地域...\n`;
 			}
 		}
+
+		// データを保存して次回の比較に使用
+		this.lastEarthquakeData.set(data.EventID, { ...data });
 
 		return message;
 	}
@@ -495,7 +555,7 @@ export default class extends Module {
 	// ユーティリティ関数
 	@bindThis
 	private convertIntensityToNumber(intensity: string): number {
-		// 震度文字列を数値に変換
+		// 震度文字列を数値に変換 (互換性を保持しつつ処理)
 		if (intensity.includes("7")) return 7;
 		if (intensity.includes("6+") || intensity.includes("6強")) return 6;
 		if (intensity.includes("6-") || intensity.includes("6弱")) return 6;
@@ -506,6 +566,16 @@ export default class extends Module {
 		if (intensity.includes("2")) return 2;
 		if (intensity.includes("1")) return 1;
 		return 0;
+	}
+
+	@bindThis
+	private convertIntensityDisplay(intensity: string): string {
+		// -/+ を 弱/強 に変換して表示する (元のデータは変更しない)
+		return intensity
+			.replace("5-", "5弱")
+			.replace("5+", "5強")
+			.replace("6-", "6弱")
+			.replace("6+", "6強");
 	}
 
 	@bindThis
