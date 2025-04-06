@@ -1,7 +1,10 @@
 {
 	"host": "https://example.com",
 	"i": "token",
-	"aiName": ["藍", "三須木"],
+	"aiName": [
+		"藍",
+		"三須木"
+	],
 	"master": "admin",
 	"notingEnabled": true,
 	"keywordEnabled": true,
@@ -24,20 +27,24 @@
 	"mecab": "/usr/bin/mecab",
 	"mecabDic": "/usr/lib/x86_64-linux-gnu/mecab/dic/mecab-ipadic-neologd/",
 	"memoryDir": "data",
-	"followAllowedHosts": ["example.com", "example2.com"],
-	"followExcludeInstances": ["example.com", "example2.com"],
+	"followAllowedHosts": [
+		"example.com",
+		"example2.com"
+	],
+	"followExcludeInstances": [
+		"example.com",
+		"example2.com"
+	],
 	"mazeEnable": true,
 	"pollEnable": true,
 	"postNotPublic": true,
 	"defaultVisibility": "public",
 	"earthquakeWarning": {
-		"requestTimeoutMs": 10000,
-		"maxErrorRetries": 5,
-		"errorCooldownMs": 60000,
 		"minIntensityThreshold": 3,
 		"minMagunitudeForWeak": 4.0,
-		"maxReportHistory": 100,
-		"checkIntervalMs": 1000
+		"websocketReconnectMaxAttempts": 10,
+		"websocketReconnectDelay": 5000,
+		"heartbeatTimeoutMs": 120000
 	},
 	"kiatsu": {
 		"locationCode": "13102",
