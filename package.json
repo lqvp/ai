@@ -12,6 +12,7 @@
     "preinstall": "npx only-allow pnpm"
   },
   "dependencies": {
+    "@google/generative-ai": "0.24.1",
     "@napi-rs/canvas": "0.1.70",
     "@types/lokijs": "1.5.14",
     "@types/node": "22.15.15",

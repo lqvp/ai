@@ -6,6 +6,7 @@ import config from '@/config.js';
 import Friend from '@/friend.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
+import { generateText } from '@/utils/gemini.js';
 import got from 'got';
 import loki from 'lokijs';
 
@@ -18,6 +19,7 @@ type AiChat = {
   friendName?: string;
   grounding?: boolean;
   history?: { role: string; content: string }[];
+  youtubeUrls?: string[];
 };
 type base64File = {
   type: string;
@@ -210,292 +212,22 @@ export default class extends Module {
   @bindThis
   private async genTextByGemini(aiChat: AiChat, files: base64File[]) {
     this.log('Generate Text By Gemini...');
-    let parts: GeminiParts = [];
-    const now = new Date().toLocaleString('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    let systemInstructionText =
-      aiChat.prompt +
-      'また、現在日時は' +
-      now +
-      'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
-    if (aiChat.friendName != undefined) {
-      systemInstructionText +=
-        'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
-    }
-    // ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
-    if (!aiChat.fromMention) {
-      systemInstructionText +=
-        'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
-    }
-    // グラウンディングについてもsystemInstructionTextに追記(こうしないとあまり使わないので)
-    if (aiChat.grounding) {
-      systemInstructionText += '返答のルール2:Google search with grounding.';
+    const result = await generateText(
+      aiChat.question,
+      aiChat.prompt,
+      aiChat.history,
+      aiChat.friendName,
+      aiChat.fromMention,
+      aiChat.grounding,
+      files,
+      aiChat.youtubeUrls || []
+    );
+
+    if (result.error) {
+      return result;
     }
 
-    // URLから情報を取得
-    let youtubeURLs: string[] = [];
-    let hasYoutubeUrl = false;
-
-    if (aiChat.question !== undefined) {
-      const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
-      const urlarray = [...aiChat.question.matchAll(urlexp)];
-      if (urlarray.length > 0) {
-        for (const url of urlarray) {
-          this.log('URL:' + url[0]);
-
-          // YouTubeのURLの場合は特別処理
-          if (this.isYoutubeUrl(url[0])) {
-            this.log('YouTube URL detected: ' + url[0]);
-            const normalizedUrl = this.normalizeYoutubeUrl(url[0]);
-            this.log('Normalized YouTube URL: ' + normalizedUrl);
-            youtubeURLs.push(normalizedUrl);
-            hasYoutubeUrl = true;
-            continue;
-          }
-
-          let result: unknown = null;
-          try {
-            result = await urlToJson(url[0]);
-          } catch (err: unknown) {
-            systemInstructionText +=
-              '補足として提供されたURLは無効でした:URL=>' + url[0];
-            this.log('Skip url becase error in urlToJson');
-            continue;
-          }
-          const urlpreview: UrlPreview = result as UrlPreview;
-          if (urlpreview.title) {
-            systemInstructionText +=
-              '補足として提供されたURLの情報は次の通り:URL=>' +
-              urlpreview.url +
-              'サイト名(' +
-              urlpreview.sitename +
-              ')、';
-            if (!urlpreview.sensitive) {
-              systemInstructionText +=
-                'タイトル(' +
-                urlpreview.title +
-                ')、' +
-                '説明(' +
-                urlpreview.description +
-                ')、' +
-                '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。';
-              this.log('urlpreview.sitename:' + urlpreview.sitename);
-              this.log('urlpreview.title:' + urlpreview.title);
-              this.log('urlpreview.description:' + urlpreview.description);
-            } else {
-              systemInstructionText +=
-                'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。';
-            }
-          } else {
-            // 多分ここにはこないが念のため
-            this.log('urlpreview.title is nothing');
-          }
-        }
-      }
-    }
-
-    // 保存されたYouTubeのURLを会話履歴から取得
-    if (aiChat.history && aiChat.history.length > 0) {
-      // historyの最初のユーザーメッセージをチェック
-      const firstUserMessage = aiChat.history.find(
-        (entry) => entry.role === 'user'
-      );
-      if (firstUserMessage) {
-        const urlexp = RegExp(
-          "(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)",
-          'g'
-        );
-        const urlarray = [...firstUserMessage.content.matchAll(urlexp)];
-
-        for (const url of urlarray) {
-          if (this.isYoutubeUrl(url[0])) {
-            const normalizedUrl = this.normalizeYoutubeUrl(url[0]);
-            // 重複を避ける
-            if (!youtubeURLs.includes(normalizedUrl)) {
-              this.log('Found YouTube URL in history: ' + normalizedUrl);
-              youtubeURLs.push(normalizedUrl);
-              hasYoutubeUrl = true;
-            }
-          }
-        }
-      }
-    }
-
-    const systemInstruction: GeminiSystemInstruction = {
-      role: 'system',
-      parts: [{ text: systemInstructionText }],
-    };
-
-    // ファイルが存在する場合、ファイルを添付して問い合わせ
-    parts = [{ text: aiChat.question }];
-
-    // YouTubeのURLをfileDataとして追加
-    for (const youtubeURL of youtubeURLs) {
-      parts.push({
-        fileData: {
-          mimeType: 'video/mp4',
-          fileUri: youtubeURL,
-        },
-      });
-    }
-
-    // 画像ファイルを追加
-    if (files.length >= 1) {
-      for (const file of files) {
-        parts.push({
-          inlineData: {
-            mimeType: file.type,
-            data: file.base64,
-          },
-        });
-      }
-    }
-
-    let contents: GeminiContents[] = [];
-    if (aiChat.history != null) {
-      aiChat.history.forEach((entry) => {
-        contents.push({
-          role: entry.role,
-          parts: [{ text: entry.content }],
-        });
-      });
-    }
-    contents.push({ role: 'user', parts: parts });
-
-    let geminiOptions: GeminiOptions = {
-      contents: contents,
-      systemInstruction: systemInstruction,
-    };
-
-    // YouTubeURLがある場合はグラウンディングを無効化
-    if (aiChat.grounding && !hasYoutubeUrl) {
-      geminiOptions.tools = [{ google_search: {} }];
-    }
-
-    let options = {
-      url: aiChat.api,
-      searchParams: {
-        key: aiChat.key,
-      },
-      json: geminiOptions,
-    };
-    this.log(JSON.stringify(options));
-    let res_data: any = null;
-    let responseText: string = '';
-    try {
-      res_data = await got
-        .post(options, { parseJson: (res: string) => JSON.parse(res) })
-        .json();
-      this.log(JSON.stringify(res_data));
-      if (res_data.hasOwnProperty('candidates')) {
-        if (res_data.candidates?.length > 0) {
-          // 結果を取得
-          if (res_data.candidates[0].hasOwnProperty('content')) {
-            if (res_data.candidates[0].content.hasOwnProperty('parts')) {
-              for (
-                let i = 0;
-                i < res_data.candidates[0].content.parts.length;
-                i++
-              ) {
-                if (
-                  res_data.candidates[0].content.parts[i].hasOwnProperty('text')
-                ) {
-                  responseText += res_data.candidates[0].content.parts[i].text;
-                }
-              }
-            }
-          }
-        }
-        // groundingMetadataを取得
-        let groundingMetadata = '';
-        if (res_data.candidates[0].hasOwnProperty('groundingMetadata')) {
-          // 参考サイト情報
-          if (
-            res_data.candidates[0].groundingMetadata.hasOwnProperty(
-              'groundingChunks'
-            )
-          ) {
-            // 参考サイトが多すぎる場合があるので、3つに制限
-            let checkMaxLength =
-              res_data.candidates[0].groundingMetadata.groundingChunks.length;
-            if (
-              res_data.candidates[0].groundingMetadata.groundingChunks.length >
-              3
-            ) {
-              checkMaxLength = 3;
-            }
-            for (let i = 0; i < checkMaxLength; i++) {
-              if (
-                res_data.candidates[0].groundingMetadata.groundingChunks[
-                  i
-                ].hasOwnProperty('web')
-              ) {
-                if (
-                  res_data.candidates[0].groundingMetadata.groundingChunks[
-                    i
-                  ].web.hasOwnProperty('uri') &&
-                  res_data.candidates[0].groundingMetadata.groundingChunks[
-                    i
-                  ].web.hasOwnProperty('title')
-                ) {
-                  groundingMetadata += `参考(${i + 1}): [${
-                    res_data.candidates[0].groundingMetadata.groundingChunks[i]
-                      .web.title
-                  }](${
-                    res_data.candidates[0].groundingMetadata.groundingChunks[i]
-                      .web.uri
-                  })\n`;
-                }
-              }
-            }
-          }
-          // 検索ワード
-          if (
-            res_data.candidates[0].groundingMetadata.hasOwnProperty(
-              'webSearchQueries'
-            )
-          ) {
-            if (
-              res_data.candidates[0].groundingMetadata.webSearchQueries.length >
-              0
-            ) {
-              groundingMetadata +=
-                '検索ワード: ' +
-                res_data.candidates[0].groundingMetadata.webSearchQueries.join(
-                  ','
-                ) +
-                '\n';
-            }
-          }
-        }
-        responseText += groundingMetadata;
-      }
-    } catch (err: unknown) {
-      this.log('Error By Call Gemini');
-      let errorCode = null;
-      let errorMessage = null;
-
-      // HTTPErrorからエラーコードと内容を取得
-      if (err && typeof err === 'object' && 'response' in err) {
-        const httpError = err as any;
-        errorCode = httpError.response?.statusCode;
-        errorMessage = httpError.response?.statusMessage || httpError.message;
-      }
-
-      if (err instanceof Error) {
-        this.log(`${err.name}\n${err.message}\n${err.stack}`);
-      }
-
-      // エラー情報を返す
-      return { error: true, errorCode, errorMessage };
-    }
-    return responseText;
+    return result.text;
   }
 
   @bindThis
@@ -893,6 +625,7 @@ export default class extends Module {
       friendName: friendName,
       fromMention: exist.fromMention,
       grounding: exist.grounding,
+      youtubeUrls: youtubeUrls,
     };
 
     const base64Files: base64File[] = await this.note2base64File(
