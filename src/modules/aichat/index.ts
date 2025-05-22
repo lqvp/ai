@@ -6,7 +6,7 @@ import config from '@/config.js';
 import Friend from '@/friend.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
-import { generateText } from '@/utils/gemini.js';
+import { GeminiResponse, generateText } from '@/utils/gemini.js';
 import got from 'got';
 import loki from 'lokijs';
 
@@ -210,7 +210,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async genTextByGemini(aiChat: AiChat, files: base64File[]) {
+  private async genTextByGemini(aiChat: AiChat, files: base64File[]): Promise<string | GeminiResponse> {
     this.log('Generate Text By Gemini...');
     const result = await generateText(
       aiChat.question,
@@ -625,7 +625,7 @@ export default class extends Module {
       friendName: friendName,
       fromMention: exist.fromMention,
       grounding: exist.grounding,
-      youtubeUrls: youtubeUrls,
+			youtubeUrls: youtubeUrls ?? [],
     };
 
     const base64Files: base64File[] = await this.note2base64File(
