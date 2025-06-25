@@ -16,6 +16,8 @@ type Config = {
   geminiApiKey?: string;
   geminiModel?: string;
   geminiPostMode?: string;
+  imagenEnabled?: boolean;
+  imagenApiKey?: string;
   prompt?: string;
   autoNotePrompt?: string;
   autoNoteIntervalMinutes?: number;
@@ -104,6 +106,10 @@ if (config.kiatsu.postIntervalMs === undefined)
 if (config.kiatsu.errorCooldownMs === undefined)
   config.kiatsu.errorCooldownMs = 60 * 60 * 1000;
 if (config.kiatsu.minPostLevel === undefined) config.kiatsu.minPostLevel = 2;
+
+// Imagenモジュールの設定デフォルト値
+if (config.imagenEnabled === undefined) config.imagenEnabled = false;
+if (config.imagenApiKey === undefined) config.imagenApiKey = null;
 
 // 天気予報自動投稿の設定デフォルト値
 if (!config.weatherAutoNotePref) config.weatherAutoNotePref = '東京都';

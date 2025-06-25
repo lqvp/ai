@@ -42,6 +42,7 @@ import EarthQuakeWarningModule from './modules/earthquake_warning/index.js';
 import AiChatModule from './modules/aichat/index.js';
 import KiatsuModule from './modules/kiatsu/index.js';
 import WeatherModule from './modules/weather/index.js';
+import ImagenModule from './modules/imagen/index.js';
 
 console.log('   __    ____  _____  ___ ');
 console.log('  /__\\  (_  _)(  _  )/ __)');
@@ -115,6 +116,7 @@ promiseRetry(
       new EarthQuakeWarningModule(),
       new KiatsuModule(),
       new WeatherModule(),
+      new ImagenModule(),
     ]);
   })
   .catch((e) => {

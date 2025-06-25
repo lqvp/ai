@@ -220,8 +220,12 @@ export default class extends Module {
       hour: '2-digit',
       minute: '2-digit',
     });
-    let systemInstructionText =
-      aiChat.prompt +
+    let systemInstructionText = config.prompt || '';
+    if (config.imagenEnabled) {
+      systemInstructionText +=
+        '\n\nもしユーザーが画像の生成を望んでいると判断した場合、あなた自身は画像を生成できません。代わりに、「imagen (キーワード)」や「画像生成 (キーワード)」と話しかけると画像を生成できることを、キャラクターとして親切に教えてあげてください。';
+    }
+    systemInstructionText +=
       'また、現在日時は' +
       now +
       'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
