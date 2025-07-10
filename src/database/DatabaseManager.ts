@@ -6,6 +6,7 @@ import type { Meta } from '@/ai.js';
 import type { FriendDoc } from '@/friend.js';
 import * as fs from 'fs';
 import path from 'path';
+import SqliteDatabaseManager from './SqliteDatabaseManager.js';
 
 // LokiJSがドキュメントに付加するメタデータ
 interface LokiObj {
@@ -21,8 +22,24 @@ interface LokiObj {
 /**
  * データベース管理クラス
  * LokiJSデータベースの初期化と管理を担当
+ * 環境変数USE_SQLITE=trueでSQLiteを使用
  */
 export default class DatabaseManager {
+  // SQLiteを使用する場合は、SqliteDatabaseManagerのインスタンスを返す
+  public static create(
+    onReady: () => void,
+    onError: (err: any) => void,
+    log: (message: string) => void = console.log,
+  ): DatabaseManager {
+    if (process.env.USE_SQLITE === 'true' || config.useSqlite) {
+      log(chalk.cyan('Using SQLite database'));
+      return new SqliteDatabaseManager(onReady, onError, log) as any;
+    } else {
+      log(chalk.cyan('Using LokiJS database'));
+      return new DatabaseManager(onReady, onError, log);
+    }
+  }
+
   public db!: loki;
   public meta!: loki.Collection<Meta>;
   public contexts!: loki.Collection<{
@@ -47,7 +64,7 @@ export default class DatabaseManager {
   constructor(
     onReady: () => void,
     onError: (err: any) => void,
-    log: (message: string) => void = console.log
+    log: (message: string) => void = console.log,
   ) {
     this.log = log;
 
@@ -63,7 +80,7 @@ export default class DatabaseManager {
       }
     } catch (e: any) {
       const error = new Error(
-        `Failed to create memory directory: ${e.message}`
+        `Failed to create memory directory: ${e.message}`,
       );
       this.log(chalk.red(error.message));
       onError(error);
@@ -101,7 +118,7 @@ export default class DatabaseManager {
   private attemptRecovery(
     file: string,
     onReady: () => void,
-    onError: (err: any) => void
+    onError: (err: any) => void,
   ) {
     try {
       this.log(chalk.yellow('Attempting to recover database...'));
@@ -190,7 +207,7 @@ export default class DatabaseManager {
   @bindThis
   public getCollection<T extends object = any>(
     name: string,
-    opts?: any
+    opts?: any,
   ): loki.Collection<T> {
     let collection = this.db.getCollection<T>(name);
 
