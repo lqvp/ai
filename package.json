@@ -47,7 +47,7 @@
     "ws": "8.18.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.1.1",
+    "@biomejs/biome": "2.1.2",
     "@types/iarna__toml": "2.0.5"
   },
   "nodemonConfig": {
