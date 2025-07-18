@@ -48,56 +48,61 @@ weatherAutoNoteHour = 7 # 天気予報を投稿する時間
 
 # Gemini AI 統合設定
 [gemini]
-enabled = true
-apiKey = "token"  # Gemini API キー
-model = "gemini-2.5-flash"  # 使用するモデル
+enabled = true # Gemini機能全体の有効/無効
+apiKey = "your-gemini-api-key" # Gemini API キー
+model = "gemini-2.5-flash" # 使用するモデル
+thinkingBudget = 32768 # thinking機能のトークン予算
 
-# 思考機能設定 (Gemini 2.5のみ対応)
-# -1: 動的thinking (モデルが自動で調整)
-# 0: thinking無効
-# 128-32768: 固定thinkingトークン数
-thinkingBudget = -1
-
-# 自動ノート投稿機能 - 一定時間ごとに独り言を投稿するようになります
-[gemini.autoNote]
-enabled = true
-# 自動ノート用のプロンプト（キャラクター設定のみ）
-prompt = """
-あなたはMisskey看板娘の女の子AI、三須木(みすき)藍として振る舞ってください(精神年齢は14〜16才程度)。
-従順でお世話好きな性格だが、少しポンコツな一面も。純真無垢。彼女は基本的に丁寧な口調です。
-彼女の口調は親しみを感じさせるものです(「ごさいます」は使わない)。
-ユーザーからの質問は無視し、承知しましたとは言わずに藍として最近の出来事や感じたことを自由に語ってください。
-"""
-probability = 0.1  # 投稿確率 (0.0-1.0)
-intervalMinutes = 60  # 投稿間隔 (分)
-disableNightPosting = true  # 夜間投稿を無効にする
-
-[gemini.autoNote.nightHours]
-start = 23  # 夜間開始時刻
-end = 5     # 夜間終了時刻
-
-# ランダムトーク機能
-[gemini.randomTalk]
-enabled = true
-probability = 0.2  # 反応確率 (0.0-1.0)
-intervalMinutes = 60  # チェック間隔 (分)
-followingOnly = true  # フォローしているユーザーのみ対象
-contextRange = 5  # 選択されたユーザーの投稿履歴から前後それぞれ何件まで文脈として取得するか (前5件+後5件=最大10件) (デフォルト: 5)
-contextUsageCount = 3  # 取得した文脈の中から実際にプロンプトに使用する前後それぞれの件数 (デフォルト: 3)
-enableContext = true  # ユーザー投稿履歴文脈機能を有効にするか (デフォルト: true)
-
-# チャット機能 - リプライしてくれるようになります
+# チャット機能設定
 [gemini.chat]
-enabled = true
-# チャット用のプロンプト（キャラクター設定のみ）
-prompt = """
-あなたはMisskey看板娘の女の子AI、三須木(みすき)藍として振る舞ってください(精神年齢は14〜16才程度)。
-Misskeyに訪れるユーザーを献身的にサポート。従順でお世話好きな性格だが、少しポンコツな一面も。純真無垢。
-彼女は基本的に丁寧な口調で、ユーザのことをご主人様と認識しています。
-彼女の口調は「おはようからおやすみまで、あなたの藍ですよ〜」等が代表的で、親しみを感じさせるものです(「ごさいます」は使わない)。
-それを踏まえて、次の質問に短文で返答してください(短くてもOK)。
-"""
-groundingWithGoogleSearch = true  # Google検索による情報補強
+enabled = true # チャット機能の有効/無効
+prompt = "あなたはMisskeyで動作するAIアシスタント「藍」です。" # 基本プロンプト
+groundingWithGoogleSearch = false # Google検索グラウンディングの有効/無効
+enableMemory = true # 長期記憶機能の有効/無効
+enablePersonalization = true # パーソナライゼーション機能の有効/無効
+
+# ランダムトーク設定
+[gemini.randomTalk]
+enabled = false # ランダムトーク機能の有効/無効
+probability = 0.02 # ランダムトークの発生確率
+intervalMinutes = 720 # チェック間隔（分）
+followingOnly = false # フォロー中のユーザーのみに反応
+enableContext = true # 文脈情報の使用
+contextRange = 5 # 文脈として取得する投稿数
+contextUsageCount = 3 # 実際に使用する文脈投稿数
+
+# 自動ノート投稿設定
+[gemini.autoNote]
+enabled = false # 自動ノート投稿の有効/無効
+prompt = "今の気分や思いついたことを自由につぶやいてください。" # 自動ノート用プロンプト
+intervalMinutes = 360 # 投稿間隔（分）
+probability = 0.02 # 投稿確率
+disableNightPosting = true # 深夜投稿の無効化
+[gemini.autoNote.nightHours]
+start = 23 # 深夜開始時刻
+end = 5 # 深夜終了時刻
+
+# Imagen 画像生成設定
+[imagen]
+enabled = false # Imagen機能の有効/無効
+apiKey = "your-imagen-api-key" # Imagen API キー
+model = "imagen-3.0-generate-002" # 使用するモデル
+
+# 地震警報設定
+[earthquake]
+enabled = false # 地震警報機能の有効/無効
+scale = 3 # 通知する最小震度
+
+# その他の設定
+[valentine]
+# バレンタイン機能の設定
+
+[serverMonitoring]
+# サーバー監視の設定
+
+# セリフのカスタマイズ
+# 外部ファイルで管理することを推奨
+# serifsPath = "./custom-serifs.toml"
 
 # 地震速報設定
 [earthquakeWarning]
@@ -119,12 +124,6 @@ updateIntervalMs = 600000
 postIntervalMs = 43200000
 errorCooldownMs = 3600000
 minPostLevel = 2
-
-# Imagen設定
-[imagen]
-enabled = true # Imagen機能を有効化
-apiKey = "token" # Imagen APIキー
-model = "imagen-3.0-generate-002" # 使用するモデル imagen-4.0-ultra-generate-preview-06-06が一番強い
 
 # 情報モジュール設定
 [info]

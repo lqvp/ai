@@ -10,6 +10,9 @@ import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
+import MemoryManager from './utils/MemoryManager.js';
+import PersonalizationEngine from './utils/PersonalizationEngine.js';
+import ContextAnalyzer from './utils/ContextAnalyzer.js';
 
 type AiChat = {
   question: string;
@@ -132,6 +135,11 @@ export default class extends Module {
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
+  
+  // 新しいユーティリティクラスのインスタンス
+  private memoryManager!: MemoryManager;
+  private personalizationEngine!: PersonalizationEngine;
+  private contextAnalyzer!: ContextAnalyzer;
 
   // 型ガード関数
   private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
@@ -148,6 +156,11 @@ export default class extends Module {
     this.aichatHist = this.ai.getCollection('aichatHist', {
       indices: ['postId', 'originalNoteId'],
     });
+
+    // ユーティリティクラスの初期化
+    this.memoryManager = new MemoryManager(this.ai);
+    this.personalizationEngine = new PersonalizationEngine();
+    this.contextAnalyzer = new ContextAnalyzer();
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -267,7 +280,8 @@ export default class extends Module {
   @bindThis
   private async genTextByGemini(
     aiChat: AiChat,
-    files: Base64File[]
+    files: Base64File[],
+    userId?: string
   ): Promise<GeminiApiResponse> {
     this.log('Generate Text By Gemini...');
     let parts: GeminiParts = [];
@@ -294,9 +308,40 @@ export default class extends Module {
       '\n\nまた、現在日時は' +
       now +
       'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
+    
+    // ユーザーの記憶とコンテキストを取得
+    if (userId && config.gemini?.chat?.enableMemory !== false) {
+      const context = await this.memoryManager.buildContext(userId, aiChat.question);
+      
+      if (context.memories.length > 0) {
+        systemInstructionText += '\n\n【関連する過去の記憶】\n';
+        context.memories.forEach((memory, index) => {
+          systemInstructionText += `記憶${index + 1}: ${memory.content}\n`;
+        });
+      }
+      
+      if (context.currentTopic) {
+        systemInstructionText += `\n現在の話題: ${context.currentTopic.topic}`;
+      }
+    }
+    
     if (aiChat.friendName != undefined) {
       systemInstructionText +=
-        'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
+        '\nなお、会話相手の名前は' + aiChat.friendName + 'とする。';
+      
+      // パーソナライゼーションを適用
+      if (userId && config.gemini?.chat?.enablePersonalization !== false) {
+        const preferences = this.memoryManager.getPreferences(userId);
+        const profile = this.personalizationEngine.generateProfile(preferences);
+        const style = this.personalizationEngine.determineResponseStyle(profile);
+        
+        systemInstructionText = this.personalizationEngine.generateSystemPrompt(
+          systemInstructionText,
+          profile,
+          style,
+          aiChat.friendName
+        );
+      }
     }
     // ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
     if (!aiChat.fromMention) {
@@ -1187,7 +1232,7 @@ export default class extends Module {
       base64Files.push(...exist.quotedFiles);
     }
 
-    text = await this.genTextByGemini(aiChat, base64Files);
+    text = await this.genTextByGemini(aiChat, base64Files, msg.userId);
 
     if (this.isApiError(text)) {
       this.log('The result is invalid due to an HTTP error.');
@@ -1228,7 +1273,7 @@ export default class extends Module {
       );
     }
 
-    msg.reply(serifs.aichat.post(responseText)).then((reply) => {
+    msg.reply(serifs.aichat.post(responseText)).then(async (reply) => {
       if (!exist.history) {
         exist.history = [];
       }
@@ -1236,6 +1281,37 @@ export default class extends Module {
       exist.history.push({ role: 'model', content: text as string });
       if (exist.history.length > DEFAULTS.MAX_HISTORY_LENGTH) {
         exist.history.shift();
+      }
+
+      // 文脈分析と記憶の保存
+      if (config.gemini?.chat?.enableMemory !== false) {
+        const analysis = this.contextAnalyzer.analyzeSentiment(question);
+        const topicExtraction = this.contextAnalyzer.extractTopic(question);
+        const importantInfo = this.contextAnalyzer.extractImportantInfo(question);
+        
+        // 重要な情報を記憶として保存
+        for (const info of importantInfo) {
+          if (info.confidence > 0.7) {
+            await this.memoryManager.saveMemory(
+              msg.userId,
+              info.content,
+              topicExtraction.mainTopic || 'general',
+              info.confidence,
+              info.tags
+            );
+          }
+        }
+        
+        // ユーザーの好みを学習
+        const preferences = this.personalizationEngine.inferPreferencesFromReaction(question);
+        for (const pref of preferences) {
+          await this.memoryManager.updatePreference(
+            msg.userId,
+            pref.category,
+            pref.preference,
+            pref.positive
+          );
+        }
       }
 
       const newRecord: AiChatHist = {
