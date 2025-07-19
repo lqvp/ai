@@ -229,7 +229,32 @@ ${dynamicPrompt}
           .join('\n'),
       });
 
-      return JSON.parse(result);
+  try {
+    const result = await chain.invoke({
+      // ... parameters ...
+    });
+
+    try {
+      const parsed = JSON.parse(result);
+      // 必要なフィールドの検証
+      if (!parsed.style || !parsed.reasoning) {
+        throw new Error('Invalid response structure');
+      }
+      return parsed;
+    } catch (parseError) {
+      console.error('Failed to parse LLM response:', parseError);
+      return {
+        style: this.getDefaultStyle(),
+        reasoning: 'LLMレスポンスの解析に失敗しました',
+      };
+    }
+  } catch (error) {
+    console.error('Failed to recommend response style:', error);
+    return {
+      style: this.getDefaultStyle(),
+      reasoning: 'デフォルトスタイルを使用',
+    };
+  }
     } catch (error) {
       console.error('Failed to recommend response style:', error);
       return {
