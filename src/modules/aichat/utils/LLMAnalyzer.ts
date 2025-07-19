@@ -176,10 +176,10 @@ JSONフォーマットで返答してください:
       if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
         const results = JSON.parse(response.candidates[0].content.parts[0].text);
         return results.results.map((r: any) => ({
-          memory: memories[r.index],
+          memory: memories[r.index] || null,
           relevance: r.relevance,
           reason: r.reason
-        }));
+        })).filter(result => result.memory !== null);
       }
     } catch (error) {
       console.error('Memory search error:', error);
