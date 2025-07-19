@@ -350,7 +350,11 @@ export default class SmartMemoryManager {
       // 提案された記憶を削除
       suggestedDeletions.forEach(index => {
         if (oldMemories[index]) {
-          this.memories.remove(oldMemories[index]);
+          try {
+            this.memories.remove(oldMemories[index]);
+          } catch (error) {
+            console.error(`Failed to remove memory at index ${index}:`, error);
+          }
         }
       });
     }
