@@ -9,6 +9,7 @@
     "test": "jest",
     "lint": "biome lint src --write",
     "format": "biome format src --write",
+    "migrate": "node ./built/migrate-to-sqlite.js",
     "preinstall": "npx only-allow pnpm"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "@types/uuid": "10.0.0",
     "@types/ws": "8.18.1",
     "axios": "1.10.0",
+    "better-sqlite3": "11.7.0",
     "chalk": "5.4.1",
     "dayjs": "1.11.13",
     "days": "1.1.1",
@@ -48,11 +50,13 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.1.2",
+    "@types/better-sqlite3": "7.6.14",
     "@types/iarna__toml": "2.0.5"
   },
   "nodemonConfig": {
     "ignore": [
-      "memory.json"
+      "memory.json",
+      "ai.db"
     ]
   }
 }

@@ -1,8 +1,8 @@
 import { bindThis } from '@/decorators.js';
-import loki from 'lokijs';
 import Module from '@/module.js';
 import Message from '@/message.js';
 import serifs from '@/serifs.js';
+import * as seedrandom from 'seedrandom';
 import type { User } from '@/misskey/user.js';
 import { acct } from '@/utils/acct.js';
 
@@ -25,7 +25,7 @@ const limitMinutes = 10;
 export default class extends Module {
   public readonly name = 'kazutori';
 
-  private games!: loki.Collection<Game>;
+  private games!: any;
 
   @bindThis
   public install() {

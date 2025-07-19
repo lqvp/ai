@@ -58,6 +58,24 @@ function log(msg: string): void {
 
 log(chalk.bold(`Ai v${pkg._v}`));
 
+let ai: 藍 | null = null;
+
+process.on('SIGINT', () => {
+  log('SIGINT received, shutting down gracefully...');
+  if (ai) {
+    ai.shutdown();
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  log('SIGTERM received, shutting down gracefully...');
+  if (ai) {
+    ai.shutdown();
+  }
+  process.exit(0);
+});
+
 process.on('uncaughtException', (err) => {
   try {
     console.error(`Uncaught exception: ${err.message}`);
@@ -90,7 +108,7 @@ promiseRetry(
     log('Starting AiOS...');
 
     // 藍起動
-    new 藍(account, [
+    ai = new 藍(account, [
       new CoreModule(),
       new AiChatModule(),
       new ReminderModule(),

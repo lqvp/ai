@@ -1,5 +1,4 @@
 import { bindThis } from '@/decorators.js';
-import loki from 'lokijs';
 import Module from '@/module.js';
 import Message from '@/message.js';
 import serifs, { getSerif } from '@/serifs.js';
@@ -11,15 +10,7 @@ const NOTIFY_INTERVAL = 1000 * 60 * 60 * 12;
 export default class extends Module {
   public readonly name = 'reminder';
 
-  private reminds!: loki.Collection<{
-    userId: string;
-    id: string;
-    isChat: boolean;
-    thing: string | null;
-    quoteId: string | null;
-    times: number; // 催促した回数(使うのか？)
-    createdAt: number;
-  }>;
+  private reminds!: any;
 
   @bindThis
   public install() {

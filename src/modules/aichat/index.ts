@@ -1,5 +1,4 @@
 import got from 'got';
-import loki from 'lokijs';
 import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Friend from '@/friend.js';
@@ -128,7 +127,7 @@ const DEFAULTS = {
 
 export default class extends Module {
   public readonly name = 'aichat';
-  private aichatHist!: loki.Collection<AiChatHist>;
+  private aichatHist!: any;
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
@@ -145,8 +144,9 @@ export default class extends Module {
 
   @bindThis
   public install() {
+    if (config.openAiApiKey == null) return {};
     this.aichatHist = this.ai.getCollection('aichatHist', {
-      indices: ['postId', 'originalNoteId'],
+      indices: ['userId'],
     });
 
     // Gemini全体が有効かチェック
