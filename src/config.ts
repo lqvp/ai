@@ -44,6 +44,8 @@ type Config = {
       enabled?: boolean;
       prompt?: string;
       groundingWithGoogleSearch?: boolean;
+      enableMemory?: boolean;
+      enablePersonalization?: boolean;
     };
   };
   mecab?: string;

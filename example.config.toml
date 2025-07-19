@@ -98,6 +98,14 @@ Misskeyに訪れるユーザーを献身的にサポート。従順でお世話�
 それを踏まえて、次の質問に短文で返答してください(短くてもOK)。
 """
 groundingWithGoogleSearch = true  # Google検索による情報補強
+enableMemory = true # 長期記憶機能の有効/無効
+enablePersonalization = true # パーソナライゼーション機能の有効/無効
+
+# Imagen設定
+[imagen]
+enabled = true # Imagen機能を有効化
+apiKey = "token" # Imagen APIキー
+model = "imagen-3.0-generate-002" # 使用するモデル imagen-4.0-ultra-generate-preview-06-06が一番強い
 
 # 地震速報設定
 [earthquakeWarning]
@@ -119,12 +127,6 @@ updateIntervalMs = 600000
 postIntervalMs = 43200000
 errorCooldownMs = 3600000
 minPostLevel = 2
-
-# Imagen設定
-[imagen]
-enabled = true # Imagen機能を有効化
-apiKey = "token" # Imagen APIキー
-model = "imagen-3.0-generate-002" # 使用するモデル imagen-4.0-ultra-generate-preview-06-06が一番強い
 
 # 情報モジュール設定
 [info]
