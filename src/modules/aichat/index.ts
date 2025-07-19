@@ -10,6 +10,7 @@ import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
+import SmartMemoryManager from '@/memory/SmartMemoryManager.js';
 
 type AiChat = {
   question: string;
@@ -21,6 +22,7 @@ type AiChat = {
   grounding?: boolean;
   history?: ChatHistoryItem[];
   timelineContext?: { before?: any[]; after?: any[] };
+  userId?: string;
 };
 
 type ChatHistoryItem = {
@@ -132,6 +134,7 @@ export default class extends Module {
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
+  private memoryManager!: SmartMemoryManager;
 
   // 型ガード関数
   private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
@@ -148,6 +151,8 @@ export default class extends Module {
     this.aichatHist = this.ai.getCollection('aichatHist', {
       indices: ['postId', 'originalNoteId'],
     });
+
+    this.memoryManager = new SmartMemoryManager(this.ai);
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -424,6 +429,21 @@ export default class extends Module {
             }
           }
         }
+      }
+    }
+
+    // メモリから関連するメモリを取得して追加
+    if (aiChat.userId) {
+      const memories = this.memoryManager.getRelevantMemories(
+        aiChat.userId,
+        aiChat.question,
+        5
+      );
+      if (memories.length > 0) {
+        systemInstructionText += '\n\n【このユーザーに関する記憶】\n';
+        memories.forEach((m) => {
+          systemInstructionText += `・${m.content}\n`;
+        });
       }
     }
 
@@ -1174,6 +1194,7 @@ export default class extends Module {
       fromMention: exist.fromMention,
       grounding: exist.grounding,
       timelineContext: exist.timelineContext,
+      userId: msg.userId,
     };
 
     const base64Files: Base64File[] = await this.note2base64File(
@@ -1237,6 +1258,8 @@ export default class extends Module {
       if (exist.history.length > DEFAULTS.MAX_HISTORY_LENGTH) {
         exist.history.shift();
       }
+
+      this.memoryManager.storeUserMessage(msg.userId, question);
 
       const newRecord: AiChatHist = {
         postId: reply.id,
