@@ -1429,16 +1429,6 @@ export default class extends Module {
           }
         }
         
-        if (config.gemini?.chat?.enablePersonalization !== false) {
-          // パーソナライゼーションの記録
-          await this.personalization.recordInteraction({
-            userId: msg.userId,
-            message: question,
-            response: '', // 後で更新
-            timestamp: Date.now()
-          }, analysis);
-        }
-      }
 
       const newRecord: AiChatHist = {
         postId: reply.id,
