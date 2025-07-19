@@ -61,9 +61,14 @@ export default class AdaptivePersonalization {
     this.personas = new Map();
     this.interactionHistory = new Map();
 
+    const apiKey = config.gemini?.apiKey || '';
+    if (!apiKey) {
+      console.warn('Gemini API key is not configured. AdaptivePersonalization features will be disabled.');
+    }
+
     this.llm = new ChatGoogleGenerativeAI({
       model: config.gemini?.model || 'gemini-2.5-flash',
-      apiKey: config.gemini?.apiKey || '',
+      apiKey: apiKey,
       temperature: 0.4,
     });
 

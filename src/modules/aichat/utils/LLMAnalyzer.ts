@@ -63,14 +63,12 @@ export default class LLMAnalyzer {
   private apiUrl: string;
 
   constructor() {
-constructor() {
-  this.apiKey = config.gemini?.apiKey || '';
-  if (!this.apiKey) {
-    console.warn('Gemini API key is not configured. LLMAnalyzer features will be disabled.');
-  }
-  this.model = config.gemini?.model || 'gemini-2.5-flash';
-  this.apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
-}
+    this.apiKey = config.gemini?.apiKey || '';
+    if (!this.apiKey) {
+      console.warn('Gemini API key is not configured. LLMAnalyzer features will be disabled.');
+    }
+    this.model = config.gemini?.model || 'gemini-2.5-flash';
+    this.apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
   }
 
   /**

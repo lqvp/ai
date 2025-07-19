@@ -54,9 +54,14 @@ export default class ConversationManager {
     this.analyzer = new LLMAnalyzer();
     this.conversations = new Map();
 
+    const apiKey = config.gemini?.apiKey || '';
+    if (!apiKey) {
+      console.warn('Gemini API key is not configured. ConversationManager features will be disabled.');
+    }
+
     this.llm = new ChatGoogleGenerativeAI({
       model: config.gemini?.model || 'gemini-2.5-flash',
-      apiKey: config.gemini?.apiKey || '',
+      apiKey: apiKey,
       temperature: 0.3,
     });
 

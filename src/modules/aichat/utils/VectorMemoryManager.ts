@@ -43,15 +43,20 @@ export default class VectorMemoryManager {
     this.ai = ai;
     this.analyzer = new LLMAnalyzer();
     
+    const apiKey = config.gemini?.apiKey || '';
+    if (!apiKey) {
+      console.warn('Gemini API key is not configured. VectorMemoryManager features will be disabled.');
+    }
+    
     // LangChain設定
     this.embeddings = new GoogleGenerativeAIEmbeddings({
       model: 'gemini-embedding-001',
-      apiKey: config.gemini?.apiKey || '',
+      apiKey: apiKey,
     });
 
     this.llm = new ChatGoogleGenerativeAI({
       model: config.gemini?.model || 'gemini-2.5-flash',
-      apiKey: config.gemini?.apiKey || '',
+      apiKey: apiKey,
       temperature: 0.3,
     });
 
