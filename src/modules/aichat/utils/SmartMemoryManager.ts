@@ -143,8 +143,8 @@ export default class SmartMemoryManager {
       .filter(r => r.relevance > 0.3)
       .sort((a, b) => b.relevance - a.relevance)
       .slice(0, limit)
-      .map(r => userMemories.find(m => m.id === r.memory.id)!)
-      .filter(Boolean);
+      .map(r => userMemories.find(m => m.id === r.memory.id))
+      .filter((memory): memory is SmartMemory => memory !== undefined);
 
     // アクセス情報を更新
     relevantMemories.forEach(memory => {
