@@ -4,7 +4,8 @@ import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { RunnableSequence } from '@langchain/core/runnables';
-import config from '@/config.js';
+-import config from '@/config.js';
++import { config } from '@/config.js';
 import LLMAnalyzer, { AnalysisResult } from './LLMAnalyzer.js';
 
 export interface UserInteraction {
