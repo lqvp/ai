@@ -40,22 +40,6 @@ LLMを活用した高度な記憶管理システムです。
 - **動的カテゴリ分類**: LLMが内容に応じて適切なカテゴリを判定
 
 #### 記憶の構造：
-```typescript
-{
-  id: string;
-  userId: string;
-  content: string;        // 元のメッセージ
-  summary: string;        // LLMによる要約
-  category: string;       // LLMが判定したカテゴリ
-  importance: number;     // LLMが判定した重要度（0-1）
-  tags: string[];         // 関連キーワード
-  relatedMemoryIds: string[]; // 関連する他の記憶
-  metadata: {
-    sentiment: string;    // 感情
-    entities: Array<...>; // 抽出されたエンティティ
-  }
-}
-```
 
 ### 3. ユーザープロファイル管理
 
