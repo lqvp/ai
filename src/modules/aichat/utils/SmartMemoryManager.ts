@@ -431,9 +431,18 @@ export default class SmartMemoryManager {
         frequent: '多め',
         moderate: '適度',
         minimal: '控えめ'
+      },
+      technicalLevel: {
+        beginner: '初心者',
+        intermediate: '中級',
+        advanced: '上級'
+      },
+      humorAppreciation: {
+        low: '低',
+        medium: '中',
+        high: '高'
       }
     };
-
     return translations[key]?.[value] || value;
   }
 }
