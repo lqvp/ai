@@ -10,8 +10,11 @@ import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
-import LLMAnalyzer from './utils/LLMAnalyzer.js';
-import SmartMemoryManager from './utils/SmartMemoryManager.js';
+import LLMAnalyzer from '@/modules/aichat/utils/LLMAnalyzer.js';
+import SmartMemoryManager from '@/modules/aichat/utils/SmartMemoryManager.js';
+import VectorMemoryManager from '@/modules/aichat/utils/VectorMemoryManager.js';
+import AdaptivePersonalization from '@/modules/aichat/utils/AdaptivePersonalization.js';
+import ConversationManager from '@/modules/aichat/utils/ConversationManager.js';
 
 type AiChat = {
   question: string;
@@ -138,6 +141,9 @@ export default class extends Module {
   // 新しいユーティリティクラスのインスタンス
   private llmAnalyzer!: LLMAnalyzer;
   private memoryManager!: SmartMemoryManager;
+  private vectorMemoryManager!: VectorMemoryManager;
+  private personalization!: AdaptivePersonalization;
+  private conversationManager!: ConversationManager;
 
   // 型ガード関数
   private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
@@ -158,6 +164,9 @@ export default class extends Module {
     // ユーティリティクラスの初期化
     this.llmAnalyzer = new LLMAnalyzer();
     this.memoryManager = new SmartMemoryManager(this.ai);
+    this.vectorMemoryManager = new VectorMemoryManager(this.ai);
+    this.personalization = new AdaptivePersonalization(this.ai);
+    this.conversationManager = new ConversationManager(this.ai);
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -306,17 +315,106 @@ export default class extends Module {
       now +
       'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
     
-    // ユーザーの記憶とコンテキストを取得
-    if (userId && config.gemini?.chat?.enableMemory !== false) {
-      const memories = await this.memoryManager.getContextualMemories(userId, aiChat.question);
-      const profile = this.memoryManager.getUserProfile(userId);
+    // 高度なパーソナライゼーションとコンテキスト管理
+    if (userId) {
+      // アクティブな会話を取得または新規作成
+      let conversationId = this.conversationManager.getActiveConversation(userId);
+      if (!conversationId) {
+        conversationId = this.conversationManager.startConversation(userId);
+      }
       
-      systemInstructionText = this.memoryManager.enhanceSystemPrompt(
-        systemInstructionText,
-        userId,
-        memories,
-        profile
-      );
+      // 会話分析
+      const analysis = await this.llmAnalyzer.analyzeConversation(aiChat.question, {
+        previousMessages: exist.history?.slice(-5).map(h => ({
+          role: h.role === 'user' ? 'user' : 'assistant',
+          content: h.content
+        }))
+      });
+      
+      if (analysis) {
+        // 会話にターンを追加
+        await this.conversationManager.addTurn(conversationId, {
+          role: 'user',
+          content: aiChat.question,
+          timestamp: Date.now()
+        }, analysis);
+      }
+      
+      // メモリ機能が有効な場合
+      if (config.gemini?.chat?.enableMemory !== false) {
+        // ベクトル検索で関連記憶を取得
+        const conversationContext = this.conversationManager.getConversationContext(conversationId);
+        const vectorMemories = await this.vectorMemoryManager.getSemanticMemories(
+          userId,
+          aiChat.question,
+          5,
+          conversationContext ? {
+            recentMessages: conversationContext.recentTurns.map(t => ({
+              role: t.role,
+              content: t.content,
+              timestamp: t.timestamp
+            })),
+            currentTopic: conversationContext.currentTopic,
+            sentiment: conversationContext.emotionalState,
+          } : undefined
+        );
+        
+        // スマートメモリからも取得
+        const smartMemories = await this.memoryManager.getContextualMemories(userId, aiChat.question);
+        const profile = this.memoryManager.getUserProfile(userId);
+        
+        // 基本的なプロンプト拡張
+        systemInstructionText = this.memoryManager.enhanceSystemPrompt(
+          systemInstructionText,
+          userId,
+          smartMemories,
+          profile
+        );
+        
+        // ベクトル記憶を追加
+        if (vectorMemories.length > 0) {
+          systemInstructionText += '\n\n【関連する詳細記憶】\n';
+          vectorMemories.forEach((mem, idx) => {
+            systemInstructionText += `${idx + 1}. ${mem.summary}\n`;
+          });
+        }
+      }
+      
+      // パーソナライゼーションが有効な場合
+      if (config.gemini?.chat?.enablePersonalization !== false) {
+        const context = {
+          timeOfDay: new Date().getHours() < 12 ? '朝' : 
+                     new Date().getHours() < 18 ? '昼' : '夜',
+          recentTopics: this.conversationManager.getConversationContext(conversationId)?.recentTurns
+            .map(t => t.metadata?.topic)
+            .filter(Boolean) || []
+        };
+        
+        systemInstructionText = await this.personalization.generatePersonalizedPrompt(
+          userId,
+          systemInstructionText,
+          context
+        );
+        
+        // 応答スタイルの推奨を取得
+        if (analysis) {
+          const styleRecommendation = await this.personalization.recommendResponseStyle(
+            userId,
+            aiChat.question,
+            analysis
+          );
+          
+          if (styleRecommendation.style) {
+            systemInstructionText += `\n\n【推奨応答スタイル】\n`;
+            systemInstructionText += `トーン: ${styleRecommendation.style.tone}\n`;
+            systemInstructionText += `長さ: ${styleRecommendation.style.length}\n`;
+            if (styleRecommendation.style.includeEmoji) {
+              systemInstructionText += `絵文字を適度に使用してください。\n`;
+            }
+            systemInstructionText += `理由: ${styleRecommendation.reasoning}`;
+          }
+        }
+      }
     }
     
     if (aiChat.friendName != undefined) {
@@ -1253,7 +1351,25 @@ export default class extends Module {
       );
     }
 
-    msg.reply(serifs.aichat.post(responseText)).then(async (reply) => {
+    // 応答の一貫性チェックと強化
+    let finalResponse = responseText;
+    if (conversationId && config.gemini?.chat?.enablePersonalization !== false) {
+      // 応答の一貫性をチェック
+      const coherenceCheck = await this.conversationManager.checkResponseCoherence(
+        conversationId,
+        responseText
+      );
+      
+      if (!coherenceCheck.coherent && coherenceCheck.suggestions.length > 0) {
+        // 応答を強化
+        finalResponse = await this.conversationManager.enhanceResponse(
+          conversationId,
+          responseText
+        );
+      }
+    }
+
+    msg.reply(serifs.aichat.post(finalResponse)).then(async (reply) => {
       if (!exist.history) {
         exist.history = [];
       }
@@ -1263,30 +1379,64 @@ export default class extends Module {
         exist.history.shift();
       }
 
-      // LLMベースの文脈分析と記憶の保存
-      if (config.gemini?.chat?.enableMemory !== false) {
-        // 会話を分析
-        const analysis = await this.llmAnalyzer.analyzeConversation(question, {
-          previousMessages: exist.history?.slice(-5),
-          currentTopic: exist.history?.length ? exist.history[exist.history.length - 1].content : undefined
+      // 会話にアシスタントターンを追加
+      if (conversationId) {
+        await this.conversationManager.addTurn(conversationId, {
+          role: 'assistant',
+          content: finalResponse,
+          timestamp: Date.now()
         });
-        
-        if (analysis) {
-          // 記憶を保存
-          await this.memoryManager.saveFromAnalysis(msg.userId, question, analysis);
+      }
+      
+      // パーソナライゼーションの更新
+      if (config.gemini?.chat?.enablePersonalization !== false) {
+        // インタラクションを更新
+        const interaction = {
+          userId: msg.userId,
+          message: question,
+          response: finalResponse,
+          timestamp: Date.now()
+        };
+        await this.personalization.recordInteraction(interaction, analysis);
+      }
+            conversationContext ? {
+              recentMessages: conversationContext.recentTurns.map(t => ({
+                role: t.role,
+                content: t.content,
+                timestamp: t.timestamp
+              })),
+              currentTopic: conversationContext.currentTopic,
+              sentiment: conversationContext.emotionalState,
+            } : undefined
+          );
           
-          // ユーザープロファイルを更新（定期的に）
-          if (Math.random() < 0.2) { // 20%の確率で実行
-            const recentInteractions = exist.history?.slice(-10).map((h, i) => ({
-              message: i % 2 === 0 ? h.content : '',
-              response: i % 2 === 1 ? h.content : '',
-              timestamp: Date.now() - (10 - i) * 60000
-            })).filter(i => i.message && i.response) || [];
-            
-            if (recentInteractions.length > 0) {
-              await this.memoryManager.updateUserProfile(msg.userId, recentInteractions);
-            }
+          // ユーザープロファイルを更新
+          const recentInteractions = exist.history?.slice(-10).map((h, i) => ({
+            message: i % 2 === 0 ? h.content : '',
+            response: i % 2 === 1 ? h.content : '',
+            timestamp: Date.now() - (10 - i) * 60000,
+            sentiment: analysis?.sentiment.type,
+            topic: analysis?.topics.main
+          })).filter(i => i.message && i.response) || [];
+          
+          if (recentInteractions.length > 0) {
+            await this.memoryManager.updateUserProfile(msg.userId, recentInteractions);
           }
+          
+          // 記憶の整理（定期的に）
+          if (Math.random() < 0.05) { // 5%の確率
+            await this.vectorMemoryManager.consolidateMemories(msg.userId);
+          }
+        }
+        
+        if (config.gemini?.chat?.enablePersonalization !== false) {
+          // パーソナライゼーションの記録
+          await this.personalization.recordInteraction({
+            userId: msg.userId,
+            message: question,
+            response: '', // 後で更新
+            timestamp: Date.now()
+          }, analysis);
         }
       }
 
