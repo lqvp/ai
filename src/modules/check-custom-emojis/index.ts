@@ -1,24 +1,19 @@
 import { bindThis } from '@/decorators.js';
-import loki from 'lokijs';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
+import { Note } from '@/misskey/note.js';
 import config from '@/config.js';
 import Message from '@/message.js';
 
 export default class extends Module {
   public readonly name = 'checkCustomEmojis';
 
-  private lastEmoji!: loki.Collection<{
-    id: string;
-    updatedAt: number;
-  }>;
+  private lastEmoji!: any;
 
   @bindThis
   public install() {
     if (!config.checkEmojisEnabled) return {};
-    this.lastEmoji = this.ai.getCollection('lastEmoji', {
-      indices: ['id'],
-    });
+    this.lastEmoji = this.ai.getCollection('_lastEmoji', {});
 
     this.timeCheck();
     setInterval(this.timeCheck, 1000 * 60 * 3);

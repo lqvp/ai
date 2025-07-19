@@ -2,7 +2,6 @@
 
 import * as fs from 'fs';
 import { bindThis } from '@/decorators.js';
-import loki from 'lokijs';
 import got from 'got';
 import { FormData, File } from 'formdata-node';
 import chalk from 'chalk';
@@ -82,20 +81,23 @@ export default class 藍 {
    */
   @bindThis
   public getDatabaseStats() {
-    const collections = this.dbManager.db.collections?.filter(Boolean) || [];
-    let totalDocuments = 0;
-    let totalSize = 0;
+    return this.dbManager.getStats();
+  }
 
-    for (const collection of collections) {
-      totalDocuments += collection.count();
-      totalSize += JSON.stringify(collection.data).length;
-    }
+  /**
+   * データベースをバックアップします
+   */
+  @bindThis
+  public backupDatabase(backupPath?: string) {
+    return this.dbManager.backup(backupPath);
+  }
 
-    return {
-      collections: collections.length,
-      documents: totalDocuments,
-      size: totalSize,
-    };
+  /**
+   * データベースを最適化します
+   */
+  @bindThis
+  public optimizeDatabase() {
+    this.dbManager.vacuum();
   }
 
   /**
@@ -371,10 +373,10 @@ export default class 藍 {
   }
 
   /**
-   * データベースのコレクションを取得します
+   * コレクションを取得
    */
   @bindThis
-  public getCollection(name: string, opts?: any): loki.Collection {
+  public getCollection(name: string, opts?: any): any {
     return this.dbManager.getCollection(name, opts);
   }
 
@@ -508,5 +510,25 @@ export default class 藍 {
   @bindThis
   public setMeta(meta: Partial<Meta>) {
     return this.dbManager.setMeta(meta);
+  }
+
+  /**
+   * AIを停止します
+   */
+  @bindThis
+  public shutdown() {
+    this.log('Shutting down...');
+    
+    // タイマー監視を停止
+    if (this.timerManager) {
+      this.timerManager.stopMonitoring();
+    }
+    
+    // データベースを閉じる
+    if (this.dbManager) {
+      this.dbManager.close();
+    }
+    
+    this.log('Shutdown complete');
   }
 }

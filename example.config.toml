@@ -26,7 +26,7 @@ checkEmojisAtOnce = true
 # システム設定 - Docker環境向け
 mecab = "/usr/bin/mecab" # MeCabのパス
 mecabDic = "/usr/lib/x86_64-linux-gnu/mecab/dic/mecab-ipadic-neologd/" # MeCabの辞書のパス
-memoryDir = "data" # メモリファイルの保存先
+memoryDir = "data" # データベースファイルの保存先
 
 # フォロー設定
 # followAllowedHostsが優先され、followExcludeInstancesを無視します。

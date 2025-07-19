@@ -1,5 +1,4 @@
 import { bindThis } from '@/decorators.js';
-import loki from 'lokijs';
 import Module from '@/module.js';
 import config from '@/config.js';
 import serifs from '@/serifs.js';
@@ -15,10 +14,7 @@ function kanaToHira(str: string) {
 export default class extends Module {
   public readonly name = 'keyword';
 
-  private learnedKeywords!: loki.Collection<{
-    keyword: string;
-    learnedAt: number;
-  }>;
+  private learnedKeywords!: any;
 
   @bindThis
   public install() {

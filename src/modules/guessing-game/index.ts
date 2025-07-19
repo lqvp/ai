@@ -1,5 +1,4 @@
 import { bindThis } from '@/decorators.js';
-import loki from 'lokijs';
 import Module from '@/module.js';
 import Message from '@/message.js';
 import serifs from '@/serifs.js';
@@ -7,18 +6,11 @@ import serifs from '@/serifs.js';
 export default class extends Module {
   public readonly name = 'guessingGame';
 
-  private guesses!: loki.Collection<{
-    userId: string;
-    secret: number;
-    tries: number[];
-    isEnded: boolean;
-    startedAt: number;
-    endedAt: number | null;
-  }>;
+  private guesses!: any;
 
   @bindThis
   public install() {
-    this.guesses = this.ai.getCollection('guessingGame', {
+    this.guesses = this.ai.getCollection('_guesses', {
       indices: ['userId'],
     });
 
