@@ -10,9 +10,8 @@ import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
-import MemoryManager from './utils/MemoryManager.js';
-import PersonalizationEngine from './utils/PersonalizationEngine.js';
-import ContextAnalyzer from './utils/ContextAnalyzer.js';
+import LLMAnalyzer from './utils/LLMAnalyzer.js';
+import SmartMemoryManager from './utils/SmartMemoryManager.js';
 
 type AiChat = {
   question: string;
@@ -137,9 +136,8 @@ export default class extends Module {
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
   
   // 新しいユーティリティクラスのインスタンス
-  private memoryManager!: MemoryManager;
-  private personalizationEngine!: PersonalizationEngine;
-  private contextAnalyzer!: ContextAnalyzer;
+  private llmAnalyzer!: LLMAnalyzer;
+  private memoryManager!: SmartMemoryManager;
 
   // 型ガード関数
   private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
@@ -158,9 +156,8 @@ export default class extends Module {
     });
 
     // ユーティリティクラスの初期化
-    this.memoryManager = new MemoryManager(this.ai);
-    this.personalizationEngine = new PersonalizationEngine();
-    this.contextAnalyzer = new ContextAnalyzer();
+    this.llmAnalyzer = new LLMAnalyzer();
+    this.memoryManager = new SmartMemoryManager(this.ai);
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -311,37 +308,20 @@ export default class extends Module {
     
     // ユーザーの記憶とコンテキストを取得
     if (userId && config.gemini?.chat?.enableMemory !== false) {
-      const context = await this.memoryManager.buildContext(userId, aiChat.question);
+      const memories = await this.memoryManager.getContextualMemories(userId, aiChat.question);
+      const profile = this.memoryManager.getUserProfile(userId);
       
-      if (context.memories.length > 0) {
-        systemInstructionText += '\n\n【関連する過去の記憶】\n';
-        context.memories.forEach((memory, index) => {
-          systemInstructionText += `記憶${index + 1}: ${memory.content}\n`;
-        });
-      }
-      
-      if (context.currentTopic) {
-        systemInstructionText += `\n現在の話題: ${context.currentTopic.topic}`;
-      }
+      systemInstructionText = this.memoryManager.enhanceSystemPrompt(
+        systemInstructionText,
+        userId,
+        memories,
+        profile
+      );
     }
     
     if (aiChat.friendName != undefined) {
       systemInstructionText +=
         '\nなお、会話相手の名前は' + aiChat.friendName + 'とする。';
-      
-      // パーソナライゼーションを適用
-      if (userId && config.gemini?.chat?.enablePersonalization !== false) {
-        const preferences = this.memoryManager.getPreferences(userId);
-        const profile = this.personalizationEngine.generateProfile(preferences);
-        const style = this.personalizationEngine.determineResponseStyle(profile);
-        
-        systemInstructionText = this.personalizationEngine.generateSystemPrompt(
-          systemInstructionText,
-          profile,
-          style,
-          aiChat.friendName
-        );
-      }
     }
     // ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
     if (!aiChat.fromMention) {
@@ -1283,34 +1263,30 @@ export default class extends Module {
         exist.history.shift();
       }
 
-      // 文脈分析と記憶の保存
+      // LLMベースの文脈分析と記憶の保存
       if (config.gemini?.chat?.enableMemory !== false) {
-        const analysis = this.contextAnalyzer.analyzeSentiment(question);
-        const topicExtraction = this.contextAnalyzer.extractTopic(question);
-        const importantInfo = this.contextAnalyzer.extractImportantInfo(question);
+        // 会話を分析
+        const analysis = await this.llmAnalyzer.analyzeConversation(question, {
+          previousMessages: exist.history?.slice(-5),
+          currentTopic: exist.history?.length ? exist.history[exist.history.length - 1].content : undefined
+        });
         
-        // 重要な情報を記憶として保存
-        for (const info of importantInfo) {
-          if (info.confidence > 0.7) {
-            await this.memoryManager.saveMemory(
-              msg.userId,
-              info.content,
-              topicExtraction.mainTopic || 'general',
-              info.confidence,
-              info.tags
-            );
+        if (analysis) {
+          // 記憶を保存
+          await this.memoryManager.saveFromAnalysis(msg.userId, question, analysis);
+          
+          // ユーザープロファイルを更新（定期的に）
+          if (Math.random() < 0.2) { // 20%の確率で実行
+            const recentInteractions = exist.history?.slice(-10).map((h, i) => ({
+              message: i % 2 === 0 ? h.content : '',
+              response: i % 2 === 1 ? h.content : '',
+              timestamp: Date.now() - (10 - i) * 60000
+            })).filter(i => i.message && i.response) || [];
+            
+            if (recentInteractions.length > 0) {
+              await this.memoryManager.updateUserProfile(msg.userId, recentInteractions);
+            }
           }
-        }
-        
-        // ユーザーの好みを学習
-        const preferences = this.personalizationEngine.inferPreferencesFromReaction(question);
-        for (const pref of preferences) {
-          await this.memoryManager.updatePreference(
-            msg.userId,
-            pref.category,
-            pref.preference,
-            pref.positive
-          );
         }
       }
 
