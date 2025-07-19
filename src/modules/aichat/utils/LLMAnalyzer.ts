@@ -116,7 +116,11 @@ constructor() {
         return JSON.parse(analysisText) as AnalysisResult;
       }
     } catch (error) {
-      console.error('LLM Analysis error:', error);
+      console.error('LLMAnalyzer.analyzeConversation failed:', {
+        error: error.message,
+        stack: error.stack,
+        apiUrl: this.apiUrl
+      });
     }
 
     return null;
