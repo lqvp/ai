@@ -434,7 +434,7 @@ export default class extends Module {
 
     // メモリから関連するメモリを取得して追加
     if (aiChat.userId) {
-      const memories = this.memoryManager.getRelevantMemories(
+      const memories = await this.memoryManager.getRelevantMemories(
         aiChat.userId,
         aiChat.question,
         5

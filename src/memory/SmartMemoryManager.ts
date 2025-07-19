@@ -2,6 +2,9 @@ import loki from 'lokijs';
 import { v4 as uuid } from 'uuid';
 import type 藍 from '@/ai.js';
 import { similarity } from '@/utils/similarity.js';
+import got from 'got';
+import config from '@/config.js';
+import { cosineSimilarity } from '@/utils/cosine.js';
 
 export type MemoryItem = {
   id: string;
@@ -11,6 +14,7 @@ export type MemoryItem = {
   createdAt: number;
   lastAccessed: number;
   meta?: any;
+  vector?: number[] | null;
 };
 
 /**
@@ -26,6 +30,10 @@ export type MemoryItem = {
 export default class SmartMemoryManager {
   private ai: 藍;
   private memories: loki.Collection<MemoryItem>;
+
+  // Gemini embed endpoint
+  private readonly embedEndpoint =
+    'https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent';
 
   constructor(ai: 藍) {
     this.ai = ai;
@@ -48,17 +56,44 @@ export default class SmartMemoryManager {
     const text = content?.trim();
     if (!text) return;
 
-    const item: MemoryItem = {
-      id: uuid(),
-      userId,
-      content: text,
-      importance: Math.min(Math.max(importance, 0), 1),
-      createdAt: Date.now(),
-      lastAccessed: Date.now(),
-      meta,
-    };
+    // Fire-and-forget async embedding fetch
+    (async () => {
+      let vector: number[] | null = null;
+      if (config.gemini?.apiKey) {
+        try {
+          const res: any = await got
+            .post(this.embedEndpoint, {
+              searchParams: { key: config.gemini.apiKey },
+              json: {
+                content: {
+                  parts: [{ text }],
+                },
+              },
+              responseType: 'json',
+            })
+            .json();
 
-    this.memories.insertOne(item);
+          if (res?.embedding?.values) {
+            vector = res.embedding.values as number[];
+          }
+        } catch (e) {
+          // silently ignore embedding errors
+        }
+      }
+
+      const item: MemoryItem = {
+        id: uuid(),
+        userId,
+        content: text,
+        importance: Math.min(Math.max(importance, 0), 1),
+        createdAt: Date.now(),
+        lastAccessed: Date.now(),
+        meta,
+        vector,
+      };
+
+      this.memories.insertOne(item);
+    })();
   }
 
   /**
@@ -66,17 +101,45 @@ export default class SmartMemoryManager {
    * A very small Jaccard-style similarity is used.  Importance acts as a
    * multiplier so that LLM-flagged important memories float to the top.
    */
-  public getRelevantMemories(
+  public async getRelevantMemories(
     userId: string,
     query: string,
     limit = 5
-  ): MemoryItem[] {
+  ): Promise<MemoryItem[]> {
     const userMemories = this.memories.find({ userId });
     if (userMemories.length === 0) return [];
 
+    // Obtain query embedding (if possible)
+    let queryVector: number[] | null = null;
+    if (config.gemini?.apiKey) {
+      try {
+        const res: any = await got
+          .post(this.embedEndpoint, {
+            searchParams: { key: config.gemini.apiKey },
+            json: {
+              content: {
+                parts: [{ text: query }],
+              },
+            },
+            responseType: 'json',
+          })
+          .json();
+        if (res?.embedding?.values) {
+          queryVector = res.embedding.values as number[];
+        }
+      } catch (_) {
+        // ignore embedding errors
+      }
+    }
+
     const scored = userMemories
       .map((m) => {
-        const score = similarity(query, m.content) * (0.5 + m.importance);
+        let baseScore = similarity(query, m.content);
+        if (queryVector && m.vector) {
+          const cos = cosineSimilarity(queryVector, m.vector);
+          baseScore = Math.max(baseScore, cos); // choose higher
+        }
+        const score = baseScore * (0.5 + m.importance);
         return { ...m, _score: score } as MemoryItem & { _score: number };
       })
       .sort((a, b) => b._score - a._score)
