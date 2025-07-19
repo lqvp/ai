@@ -69,10 +69,19 @@ export default class VectorMemoryManager {
   @bindThis
   private async initializeVectorStore(): Promise<void> {
     try {
-      this.vectorStore = new Chroma(this.embeddings, {
-        collectionName: this.collectionName,
-        url: 'http://localhost:8000', // ChromaDBのデフォルトURL
-      });
+   @bindThis
+   private async initializeVectorStore(): Promise<void> {
+     try {
+       this.vectorStore = new Chroma(this.embeddings, {
+         collectionName: this.collectionName,
+-        url: 'http://localhost:8000', // ChromaDBのデフォルトURL
++        url: config.chromadb?.url || 'http://localhost:8000',
+       });
+       // …existing fallback logic…
+     } catch (error) {
+       // …
+     }
+   }
     } catch (error) {
       console.error('Failed to initialize vector store:', error);
       // フォールバック: インメモリベクトルストアを使用
