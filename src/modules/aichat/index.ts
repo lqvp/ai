@@ -1353,6 +1353,8 @@ export default class extends Module {
 
     // 応答の一貫性チェックと強化
     let finalResponse = responseText;
+    // conversationIdを適切に取得または定義する必要があります
+    const conversationId = this.conversationManager.getActiveConversation(msg.userId);
     if (conversationId && config.gemini?.chat?.enablePersonalization !== false) {
       // 応答の一貫性をチェック
       const coherenceCheck = await this.conversationManager.checkResponseCoherence(
