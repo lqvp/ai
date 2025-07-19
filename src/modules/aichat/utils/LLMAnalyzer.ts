@@ -94,6 +94,9 @@ constructor() {
     try {
       const response = await got.post(this.apiUrl, {
         searchParams: { key: this.apiKey },
+        timeout: {
+          request: 30000 // 30秒のタイムアウト
+        },
         json: {
           contents: [{
             role: 'user',
