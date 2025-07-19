@@ -342,7 +342,29 @@ ${dynamicPrompt}
         interactions: interactionSummary,
       });
 
-      const parsed = JSON.parse(result);
+try {
+  const result = await chain.invoke({
+    interactions: interactionSummary,
+  });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(result);
+    // 必要なフィールドの検証
+    if (!parsed.personality || !parsed.preferences) {
+      throw new Error('Invalid personality analysis structure');
+    }
+  } catch (parseError) {
+    console.error('Failed to parse personality analysis:', parseError);
+    return this.getDefaultPersona(userId);
+  }
+
+  return {
+    userId,
+    ...parsed,
+    lastUpdated: Date.now(),
+  };
+}
       return {
         userId,
         ...parsed,
