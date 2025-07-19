@@ -74,7 +74,13 @@ export default class ConversationManager {
    */
   @bindThis
   public startConversation(userId: string): string {
-    const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+import { randomUUID } from 'crypto';
+
+@bindThis
+public startConversation(userId: string): string {
+    const conversationId = `conv_${randomUUID()}`;
+    // …rest of the method…
+}
     
     const state: ConversationState = {
       userId,
