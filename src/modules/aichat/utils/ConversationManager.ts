@@ -6,6 +6,7 @@ import { StringOutputParser } from '@langchain/core/output_parsers';
 import { RunnableSequence } from '@langchain/core/runnables';
 import config from '@/config.js';
 import LLMAnalyzer, { AnalysisResult } from './LLMAnalyzer.js';
+import { randomUUID } from 'crypto';
 
 export interface ConversationTurn {
   role: 'user' | 'assistant';
@@ -74,13 +75,7 @@ export default class ConversationManager {
    */
   @bindThis
   public startConversation(userId: string): string {
-import { randomUUID } from 'crypto';
-
-@bindThis
-public startConversation(userId: string): string {
     const conversationId = `conv_${randomUUID()}`;
-    // …rest of the method…
-}
     
     const state: ConversationState = {
       userId,

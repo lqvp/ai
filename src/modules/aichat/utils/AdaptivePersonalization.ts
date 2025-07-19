@@ -4,8 +4,7 @@ import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { RunnableSequence } from '@langchain/core/runnables';
--import config from '@/config.js';
-+import { config } from '@/config.js';
+import { config } from '@/config.js';
 import LLMAnalyzer, { AnalysisResult } from './LLMAnalyzer.js';
 
 export interface UserInteraction {
@@ -342,38 +341,27 @@ ${dynamicPrompt}
         interactions: interactionSummary,
       });
 
-try {
-  const result = await chain.invoke({
-    interactions: interactionSummary,
-  });
-
-  let parsed;
-  try {
-    parsed = JSON.parse(result);
-    // 必要なフィールドの検証
-    if (!parsed.personality || !parsed.preferences) {
-      throw new Error('Invalid personality analysis structure');
-    }
-  } catch (parseError) {
-    console.error('Failed to parse personality analysis:', parseError);
-    return this.getDefaultPersona(userId);
-  }
-
-  return {
-    userId,
-    ...parsed,
-    lastUpdated: Date.now(),
-  };
-}
-      return {
-        userId,
-        ...parsed,
-        lastUpdated: Date.now(),
-      };
-    } catch (error) {
-      console.error('Failed to analyze personality:', error);
+      let parsed;
+    try {
+      parsed = JSON.parse(result);
+      // 必要なフィールドの検証
+      if (!parsed.personality || !parsed.preferences) {
+        throw new Error('Invalid personality analysis structure');
+      }
+    } catch (parseError) {
+      console.error('Failed to parse personality analysis:', parseError);
       return this.getDefaultPersona(userId);
     }
+
+    return {
+      userId,
+      ...parsed,
+      lastUpdated: Date.now(),
+    };
+  } catch (error) {
+    console.error('Failed to analyze personality:', error);
+    return this.getDefaultPersona(userId);
+  }
   }
 
   /**
