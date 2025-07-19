@@ -1,6 +1,6 @@
 import { bindThis } from '@/decorators.js';
 import got from 'got';
-import config from '@/config.js';
+import { config } from '@/config.js';
 
 export interface AnalysisResult {
   sentiment: {
