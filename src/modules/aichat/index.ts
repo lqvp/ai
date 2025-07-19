@@ -1426,8 +1426,13 @@ export default class extends Module {
           }
           
           // 記憶の整理（定期的に）
+          // 記憶の整理（定期的に）
           if (Math.random() < 0.05) { // 5%の確率
-            await this.vectorMemoryManager.consolidateMemories(msg.userId);
+            try {
+              await this.vectorMemoryManager.consolidateMemories(msg.userId);
+            } catch (error) {
+              this.log('メモリ統合エラー: ' + error);
+            }
           }
         }
         
