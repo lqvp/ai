@@ -530,14 +530,11 @@ JSON配列形式でスコアを返してください。
   resetUserMemories(userId: string): boolean {
     try {
       // ユーザーの全ての記憶を削除
-      const userMemories = this.memories.find({ userId });
-      userMemories.forEach(memory => this.memories.remove(memory));
-      
-      // ユーザープロファイルをリセット
-      const profile = this.profiles.findOne({ userId });
-      if (profile) {
-        this.profiles.remove(profile);
-      }
+// ユーザーの全ての記憶を削除
+this.memories.removeWhere({ userId });
+
+// ユーザープロファイルをリセット
+this.profiles.removeWhere({ userId });
       
       return true;
     } catch (error) {
