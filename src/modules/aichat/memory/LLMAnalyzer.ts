@@ -144,14 +144,37 @@ ${contextStr}
       }
     };
 
-    const response = await got.post(this.apiUrl, {
-      searchParams: { key: this.apiKey },
-      json: requestBody,
-      timeout: { request: 30000 },
-    }).json<any>();
+private async callGeminiAPI(prompt: string): Promise<string> {
+  const maxRetries = 3;
+  let lastError: any;
 
-    return response.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const requestBody = {
+        // ... existing code
+      };
+
+      const response = await got
+        .post(this.apiUrl, {
+          searchParams: { key: this.apiKey },
+          json: requestBody,
+          timeout: { request: 30000 },
+        })
+        .json<any>();
+
+      return response.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries - 1) {
+        // 指数バックオフで待機
+        const delayMs = Math.pow(2, attempt) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
   }
+
+  throw lastError;
+}
 
   @bindThis
   private parseAnalysisResponse(response: string): AnalysisPromptResult {
