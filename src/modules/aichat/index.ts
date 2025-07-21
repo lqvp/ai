@@ -166,10 +166,17 @@ export default class extends Module {
     });
 
     // Memory and Personalization components の初期化
-    this.llmAnalyzer = new LLMAnalyzer();
-    this.memoryManager = new SmartMemoryManager(this.ai.db);
-    this.personalization = new AdaptivePersonalization();
-    this.conversationManager = new ConversationManager(this.ai.db);
+    // Memory and Personalization components の初期化
+    try {
+      this.llmAnalyzer = new LLMAnalyzer();
+      this.memoryManager = new SmartMemoryManager(this.ai.db);
+      this.personalization = new AdaptivePersonalization();
+      this.conversationManager = new ConversationManager(this.ai.db);
+    } catch (error) {
+      this.log('Failed to initialize memory components: ' + error);
+      // メモリ機能を無効化してフォールバック
+      config.memoryEnabled = false;
+    }
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
