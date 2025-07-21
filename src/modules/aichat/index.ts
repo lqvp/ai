@@ -330,52 +330,14 @@ export default class extends Module {
     
     // ユーザーIDがある場合はメモリーとプロファイルを取得
     if (userId) {
-      try {
-        // 会話を分析
-        const context = aiChat.history?.map(h => `${h.role}: ${h.content}`).slice(-5) || [];
-        analysis = await this.llmAnalyzer.analyzeConversation(
-          aiChat.question,
-          context,
-          userId,
-          aiChat.friendName
-        );
-        
-        // ユーザープロファイルを取得
-        userProfile = this.memoryManager.getUserProfile(userId);
-        
-        // 関連する記憶を取得
-        relatedMemories = await this.memoryManager.getRelatedMemories(
-          userId,
-          aiChat.question,
-          3
-        );
-        
-        // 会話状態を更新
-        const conversationState = await this.conversationManager.updateConversationState({
-          userId,
-          currentMessage: aiChat.question,
-          previousMessages: context,
-          analysis,
-          relatedMemories,
-        });
-        
-        // 会話の要約を生成
-        conversationSummary = this.conversationManager.generateConversationSummary(conversationState);
-        
-        // 記憶を保存
-        await this.memoryManager.saveMemory(
-          userId,
-          aiChat.question,
-          analysis,
-          {
-            previousMessages: context,
-            isChat: aiChat.fromMention,
-          }
-        );
       } catch (error) {
         this.log(`Memory/Personalization error: ${error}`);
+        // メモリ機能のエラーをユーザーに通知（オプション）
+        if (config.memory?.notifyErrors) {
+          // エラーを含む応答を生成する際のフラグを設定
+          aiChat.memoryError = true;
+        }
       }
-    }
     
     // 技術的制約をハードコード
     const technicalConstraints = [
