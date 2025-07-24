@@ -10,6 +10,14 @@ import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
+import {
+  LLMAnalyzer,
+  SmartMemoryManager,
+  AdaptivePersonalization,
+  ConversationManager,
+  type ConversationAnalysis,
+  type UserProfile,
+} from './memory/index.js';
 
 type AiChat = {
   question: string;
@@ -18,6 +26,7 @@ type AiChat = {
   key: string;
   fromMention: boolean;
   friendName?: string;
+  userId?: string; // 追加: メモリー機能用のユーザーID
   grounding?: boolean;
   history?: ChatHistoryItem[];
   timelineContext?: { before?: any[]; after?: any[] };
@@ -77,6 +86,7 @@ type AiChatHist = {
   youtubeUrls?: string[];
   isChat?: boolean;
   chatUserId?: string;
+  userId?: string; // 追加: メモリー機能用のユーザーID
   timelineContext?: { before?: any[]; after?: any[] };
   quotedFiles?: Base64File[];
 };
@@ -132,6 +142,12 @@ export default class extends Module {
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
+  
+  // Memory and Personalization components
+  private llmAnalyzer!: LLMAnalyzer;
+  private memoryManager!: SmartMemoryManager;
+  private personalization!: AdaptivePersonalization;
+  private conversationManager!: ConversationManager;
 
   // 型ガード関数
   private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
@@ -148,6 +164,19 @@ export default class extends Module {
     this.aichatHist = this.ai.getCollection('aichatHist', {
       indices: ['postId', 'originalNoteId'],
     });
+
+    // Memory and Personalization components の初期化
+    // Memory and Personalization components の初期化
+    try {
+      this.llmAnalyzer = new LLMAnalyzer();
+      this.memoryManager = new SmartMemoryManager(this.ai.db);
+      this.personalization = new AdaptivePersonalization();
+      this.conversationManager = new ConversationManager(this.ai.db);
+    } catch (error) {
+      this.log('Failed to initialize memory components: ' + error);
+      // メモリ機能を無効化してフォールバック
+      config.memoryEnabled = false;
+    }
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -218,6 +247,11 @@ export default class extends Module {
       this.log('Gemini自動ノート投稿確率: probability=' + probability);
     }
 
+    // メモリークリーンアップタスクの設定（1日1回）
+    setInterval(() => {
+      this.cleanupOldMemories();
+    }, 24 * 60 * 60 * 1000);
+
     return {
       mentionHook: this.mentionHook,
       contextHook: this.contextHook,
@@ -279,6 +313,32 @@ export default class extends Module {
       hour: '2-digit',
       minute: '2-digit',
     });
+    
+    // メモリーとパーソナライゼーション機能の統合
+    let userId: string | undefined;
+    let analysis: ConversationAnalysis | undefined;
+    let userProfile: UserProfile | null = null;
+    let relatedMemories: any[] = [];
+    let conversationSummary = '';
+    
+    // ユーザーIDの取得
+    if (aiChat.history && aiChat.history.length > 0) {
+      // AiChatオブジェクトにuserIdを追加する必要があるため、
+      // 呼び出し元でuserIdを設定するように変更する
+      userId = (aiChat as any).userId || aiChat.friendName;
+    }
+    
+    // ユーザーIDがある場合はメモリーとプロファイルを取得
+    if (userId) {
+      } catch (error) {
+        this.log(`Memory/Personalization error: ${error}`);
+        // メモリ機能のエラーをユーザーに通知（オプション）
+        if (config.memory?.notifyErrors) {
+          // エラーを含む応答を生成する際のフラグを設定
+          aiChat.memoryError = true;
+        }
+      }
+    
     // 技術的制約をハードコード
     const technicalConstraints = [
       'Markdownを使って返答してください。',
@@ -297,6 +357,47 @@ export default class extends Module {
     if (aiChat.friendName != undefined) {
       systemInstructionText +=
         'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
+    }
+    
+    // パーソナライゼーションを適用
+    let generationConfig = {
+      temperature: 0.8,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 2048,
+    };
+    
+    if (userProfile && analysis) {
+      const personalizationContext = {
+        userProfile,
+        currentAnalysis: analysis,
+        timeOfDay: new Date().getHours(),
+        dayOfWeek: new Date().getDay(),
+        recentInteractions: userProfile.statistics.totalInteractions,
+      };
+      
+      const responseStyle = this.personalization.generatePersonalizedStyle(personalizationContext);
+      systemInstructionText = this.personalization.buildPersonalizedSystemPrompt(
+        systemInstructionText,
+        responseStyle
+      );
+      generationConfig = this.personalization.adjustGenerationConfig(
+        generationConfig,
+        responseStyle
+      );
+    }
+    
+    // 関連する記憶を追加
+    if (relatedMemories.length > 0) {
+      systemInstructionText += '\n\n【関連する過去の記憶】\n';
+      relatedMemories.forEach((memory, i) => {
+        systemInstructionText += `${i + 1}. ${memory.summary}\n`;
+      });
+    }
+    
+    // 会話の文脈を追加
+    if (conversationSummary) {
+      systemInstructionText += '\n\n【会話の文脈】\n' + conversationSummary;
     }
     // ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
     if (!aiChat.fromMention) {
@@ -473,9 +574,13 @@ export default class extends Module {
       systemInstruction: systemInstruction,
     };
 
-    // thinkingConfigの設定
+    // generationConfigの設定（パーソナライゼーションを含む）
+    geminiOptions.generationConfig = generationConfig;
+    
+    // thinkingConfigの追加設定
     if (config.gemini?.thinkingBudget !== undefined) {
       geminiOptions.generationConfig = {
+        ...geminiOptions.generationConfig,
         thinkingConfig: {
           thinkingBudget: config.gemini.thinkingBudget,
         },
@@ -785,6 +890,7 @@ export default class extends Module {
       fromMention: true,
       isChat: msg.isChat,
       chatUserId: msg.isChat ? msg.userId : undefined,
+      userId: msg.userId, // 追加: メモリー機能用のユーザーID
     };
 
     if (msg.quoteId) {
@@ -813,9 +919,26 @@ export default class extends Module {
   }
 
   @bindThis
-  private async contextHook(key: any, msg: Message) {
+  private async contextHook(key: any, msg: Message, data?: any) {
     this.log('contextHook...');
     if (msg.text == null) return false;
+
+    // メモリーリセットの確認処理
+    if (key === 'memory_reset_confirm' && data?.userId) {
+      if (msg.includes(['はい、リセットして'])) {
+        // メモリーをリセット
+        const success = this.memoryManager.resetUserMemories(data.userId);
+        if (success) {
+          msg.reply('記憶をリセットしました。新しい思い出を作りましょう！');
+        } else {
+          msg.reply('記憶のリセットに失敗しました。もう一度お試しください。');
+        }
+      } else {
+        msg.reply('記憶のリセットをキャンセルしました。');
+      }
+      this.unsubscribeReply(key);
+      return true;
+    }
 
     // チャットモードでaichatを終了するコマンドを追加
     if (
@@ -838,6 +961,99 @@ export default class extends Module {
         );
         return true;
       }
+    }
+
+    // メモリー関連のコマンド
+    if (msg.includes(['記憶を見せて']) || msg.includes(['メモリーを見せて'])) {
+      const memories = await this.memoryManager.searchMemories({
+        userId: msg.userId,
+        limit: 5,
+      });
+      
+      if (memories.entries.length === 0) {
+        msg.reply('まだ記憶がありません。もっとお話ししましょう！');
+      } else {
+        let response = '最近の記憶:\n';
+        memories.entries.forEach((memory, i) => {
+          response += `${i + 1}. ${memory.summary}\n`;
+        });
+        msg.reply(response);
+      }
+      return true;
+    }
+
+    if (msg.includes(['プロファイルを見せて']) || msg.includes(['私のことどう思ってる'])) {
+      const profile = this.memoryManager.getUserProfile(msg.userId);
+      if (!profile) {
+        msg.reply('まだあなたのことをよく知りません。もっとお話ししましょう！');
+      } else {
+        const summary = await this.memoryManager.generateUserProfileSummary(msg.userId);
+        msg.reply(summary);
+      }
+      return true;
+    }
+
+    if (msg.includes(['記憶をリセット']) || msg.includes(['メモリーをリセット'])) {
+      // 安全のため、確認メッセージを送信
+      msg.reply('本当に記憶をリセットしますか？「はい、リセットして」と返信してください。');
+      this.subscribeReply('memory_reset_confirm', msg.isChat, msg.isChat ? msg.userId : msg.id, {
+        userId: msg.userId,
+      });
+      return true;
+    }
+
+    // 記憶検索コマンド
+    if (msg.text.match(/記憶を検索[：:]\s*(.+)/)) {
+      const match = msg.text.match(/記憶を検索[：:]\s*(.+)/);
+      if (match) {
+        const searchQuery = match[1];
+        const memories = await this.memoryManager.searchMemories({
+          userId: msg.userId,
+          query: searchQuery,
+          limit: 5,
+        });
+        
+        if (memories.entries.length === 0) {
+          msg.reply(`「${searchQuery}」に関する記憶は見つかりませんでした。`);
+        } else {
+          let response = `「${searchQuery}」に関する記憶:\n`;
+          memories.entries.forEach((memory, i) => {
+            response += `${i + 1}. ${memory.summary} (${new Date(memory.metadata.createdAt).toLocaleDateString('ja-JP')})\n`;
+          });
+          msg.reply(response);
+        }
+      }
+      return true;
+    }
+
+    // 記憶統計コマンド
+    if (msg.includes(['記憶の統計']) || msg.includes(['メモリー統計'])) {
+      const memories = await this.memoryManager.searchMemories({
+        userId: msg.userId,
+      });
+      const profile = this.memoryManager.getUserProfile(msg.userId);
+      
+      let response = '📊 記憶の統計:\n';
+      response += `・総記憶数: ${memories.totalCount}件\n`;
+      response += `・カテゴリ: ${memories.categories.join(', ')}\n`;
+      response += `・よく使うタグ: ${memories.commonTags.slice(0, 5).join(', ')}\n`;
+      
+      if (profile) {
+        response += `\n📈 インタラクション統計:\n`;
+        response += `・総会話数: ${profile.statistics.totalInteractions}回\n`;
+        response += `・興味のあるトピック: ${profile.interests.slice(0, 3).map(i => i.topic).join(', ')}\n`;
+        
+        // 感情の傾向
+        const recentSentiments = profile.statistics.sentimentHistory.slice(-10);
+        const positiveCount = recentSentiments.filter(s => s.sentiment === 'positive').length;
+        const negativeCount = recentSentiments.filter(s => s.sentiment === 'negative').length;
+        const neutralCount = recentSentiments.filter(s => s.sentiment === 'neutral').length;
+        
+        response += `・最近の感情傾向: ポジティブ${positiveCount}回、ネガティブ${negativeCount}回、ニュートラル${neutralCount}回`;
+      }
+      
+      msg.reply(response);
+      return true;
     }
 
     let exist: AiChatHist | null = null;
@@ -1026,6 +1242,7 @@ export default class extends Module {
       type: TYPE_GEMINI,
       fromMention: false,
       timelineContext: timelineContext, // 文脈情報を保存
+      userId: choseNote.userId, // 追加: メモリー機能用のユーザーID
     };
 
     let targetedMessage = choseNote;
@@ -1171,6 +1388,7 @@ export default class extends Module {
       key: config.gemini.apiKey,
       history: exist.history,
       friendName: friendName,
+      userId: msg.userId, // 追加: ユーザーIDを設定
       fromMention: exist.fromMention,
       grounding: exist.grounding,
       timelineContext: exist.timelineContext,
@@ -1250,6 +1468,7 @@ export default class extends Module {
         youtubeUrls: youtubeUrls.length > 0 ? youtubeUrls : undefined,
         isChat: msg.isChat,
         chatUserId: msg.isChat ? msg.userId : undefined,
+        userId: msg.userId, // 追加: メモリー機能用のユーザーID
       };
 
       this.aichatHist.insertOne(newRecord);
@@ -1295,6 +1514,30 @@ export default class extends Module {
 
     if (exist != null) {
       this.aichatHist.remove(exist);
+    }
+  }
+
+  @bindThis
+  private async cleanupOldMemories() {
+    this.log('Starting memory cleanup...');
+    
+    try {
+      // 古い会話履歴を削除（30日以上前）
+      const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+      const oldChats = this.aichatHist.find({
+        createdAt: { $lt: thirtyDaysAgo }
+      });
+      
+      oldChats.forEach(chat => {
+        this.aichatHist.remove(chat);
+      });
+      
+      // 古い会話状態をクリーンアップ
+      const removedConversations = this.conversationManager.clearOldConversations(30);
+      
+      this.log(`Memory cleanup completed. Removed ${oldChats.length} old chats and ${removedConversations} old conversation states.`);
+    } catch (error) {
+      this.log(`Error during memory cleanup: ${error}`);
     }
   }
 }
