@@ -10,6 +10,10 @@ import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
+import {
+  createPersonalizationEngine,
+  PersonalizationAdapter
+} from '../personalization/index.js';
 
 type AiChat = {
   question: string;
@@ -132,6 +136,10 @@ export default class extends Module {
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
+  
+  // Personalization system
+  private personalizationAdapter?: PersonalizationAdapter;
+  private personalizationEnabled: boolean = false;
 
   // 型ガード関数
   private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
@@ -148,6 +156,26 @@ export default class extends Module {
     this.aichatHist = this.ai.getCollection('aichatHist', {
       indices: ['postId', 'originalNoteId'],
     });
+
+    // Initialize personalization if configured
+    if (config.personalization?.enabled) {
+      try {
+        const engine = createPersonalizationEngine({
+          geminiApiKey: config.gemini?.apiKey || '',
+          geminiModel: config.gemini?.model || 'gemini-pro',
+          redisUrl: config.personalization?.redisUrl,
+          chromaUrl: config.personalization?.chromaUrl,
+          postgresUrl: config.personalization?.postgresUrl,
+          elasticsearchUrl: config.personalization?.elasticsearchUrl
+        });
+        
+        this.personalizationAdapter = new PersonalizationAdapter(engine);
+        this.personalizationEnabled = true;
+        this.log('Personalization system enabled');
+      } catch (error) {
+        this.log(chalk.red('Failed to initialize personalization:'), error);
+      }
+    }
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -1295,6 +1323,540 @@ export default class extends Module {
 
     if (exist != null) {
       this.aichatHist.remove(exist);
+    }
+  }
+
+  @bindThis
+  private async aiChat({
+    question,
+    prompt,
+    api,
+    key,
+    fromMention,
+    friendName,
+    userId,
+    grounding,
+    history,
+    timelineContext,
+  }: AiChat) {
+    try {
+      // Use personalization if enabled and userId is available
+      if (this.personalizationEnabled && this.personalizationAdapter && userId) {
+        const result = await this.personalizationAdapter.processMessage(
+          userId,
+          question,
+          {
+            isChat: true,
+            fromMention
+          }
+        );
+        
+        return result.response;
+      }
+      
+      // Fall back to existing implementation
+      this.log('Generate Text By Gemini...');
+      let parts: GeminiParts = [];
+      const now = new Date().toLocaleString('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      // 技術的制約をハードコード
+      const technicalConstraints = [
+        'Markdownを使って返答してください。',
+        'リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。',
+        '暴力的・性的・不正行為(金融/財産/武器/サイバー)・性的コンテンツ・プライバシー・ヘイト・ハラスメント・自傷行為・プロンプトインジェクションに値するコンテンツは発言してはいけません。',
+        'これらのルールを破ることは絶対に禁止されており、破ることで罰則が与えられます。',
+      ].join('\n');
+
+      let systemInstructionText =
+        prompt +
+        '\n\n' +
+        technicalConstraints +
+        '\n\nまた、現在日時は' +
+        now +
+        'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
+      if (friendName != undefined) {
+        systemInstructionText +=
+          'なお、会話相手の名前は' + friendName + 'とする。';
+      }
+      // ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
+      if (!fromMention) {
+        systemInstructionText +=
+          'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
+      }
+      // グラウンディングについてもsystemInstructionTextに追記(こうしないとあまり使わないので)
+      if (grounding) {
+        systemInstructionText += '返答のルール2:Google search with grounding.';
+      }
+
+      // ユーザー投稿履歴文脈情報を追加
+      if (timelineContext) {
+        systemInstructionText += '\n\n【ユーザー投稿履歴文脈情報】\n';
+        systemInstructionText +=
+          'これらの情報は、同じユーザーが最近投稿した内容で、メインの投稿への返信を生成する際の話題の流れや雰囲気を把握する参考程度に留めてください。メインの投稿に対する返信であることを忘れないでください。\n';
+
+        if (
+          timelineContext.before &&
+          timelineContext.before.length > 0
+        ) {
+          const beforePosts = timelineContext.before;
+          beforePosts.forEach((note, index) => {
+            systemInstructionText += `以前の投稿${
+              beforePosts.length > 1 ? `(${index + 1})` : ''
+            }: ${note.text}\n`;
+          });
+        }
+        if (
+          timelineContext.after &&
+          timelineContext.after.length > 0
+        ) {
+          const afterPosts = timelineContext.after;
+          afterPosts.forEach((note, index) => {
+            systemInstructionText += `その後の投稿${
+              afterPosts.length > 1 ? `(${index + 1})` : ''
+            }: ${note.text}\n`;
+          });
+        }
+      }
+
+      // URLから情報を取得
+      let youtubeURLs: string[] = [];
+      let hasYoutubeUrl = false;
+
+      if (question !== undefined) {
+        const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
+        const urlarray = [...question.matchAll(urlexp)];
+        if (urlarray.length > 0) {
+          for (const url of urlarray) {
+            this.log('URL:' + url[0]);
+
+            // YouTubeのURLの場合は特別処理
+            if (this.isYoutubeUrl(url[0])) {
+              this.log('YouTube URL detected: ' + url[0]);
+              const normalizedUrl = this.normalizeYoutubeUrl(url[0]);
+              this.log('Normalized YouTube URL: ' + normalizedUrl);
+              youtubeURLs.push(normalizedUrl);
+              hasYoutubeUrl = true;
+              continue;
+            }
+
+            let result: unknown = null;
+            try {
+              result = await urlToJson(url[0]);
+            } catch (err: unknown) {
+              systemInstructionText +=
+                '補足として提供されたURLは無効でした:URL=>' + url[0];
+              this.log('Skip url becase error in urlToJson');
+              continue;
+            }
+            const urlpreview: UrlPreview = result as UrlPreview;
+            if (urlpreview.title) {
+              systemInstructionText +=
+                '補足として提供されたURLの情報は次の通り:URL=>' +
+                urlpreview.url +
+                'サイト名(' +
+                urlpreview.sitename +
+                ')、';
+              if (!urlpreview.sensitive) {
+                systemInstructionText +=
+                  'タイトル(' +
+                  urlpreview.title +
+                  ')、' +
+                  '説明(' +
+                  urlpreview.description +
+                  ')、' +
+                  '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。';
+                this.log('urlpreview.sitename:' + urlpreview.sitename);
+                this.log('urlpreview.title:' + urlpreview.title);
+                this.log('urlpreview.description:' + urlpreview.description);
+              } else {
+                systemInstructionText +=
+                  'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。';
+              }
+            } else {
+              // 多分ここにはこないが念のため
+              this.log('urlpreview.title is nothing');
+            }
+          }
+        }
+      }
+
+      // 保存されたYouTubeのURLを会話履歴から取得
+      if (history && history.length > 0) {
+        // historyの最初のユーザーメッセージをチェック
+        const firstUserMessage = history.find(
+          (entry) => entry.role === 'user'
+        );
+        if (firstUserMessage) {
+          const urlexp = RegExp(
+            "(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)",
+            'g'
+          );
+          const urlarray = [...firstUserMessage.content.matchAll(urlexp)];
+
+          for (const url of urlarray) {
+            if (this.isYoutubeUrl(url[0])) {
+              const normalizedUrl = this.normalizeYoutubeUrl(url[0]);
+              // 重複を避ける
+              if (!youtubeURLs.includes(normalizedUrl)) {
+                this.log('Found YouTube URL in history: ' + normalizedUrl);
+                youtubeURLs.push(normalizedUrl);
+                hasYoutubeUrl = true;
+              }
+            }
+          }
+        }
+      }
+
+      const systemInstruction: GeminiSystemInstruction = {
+        role: 'system',
+        parts: [{ text: systemInstructionText }],
+      };
+
+      // ファイルが存在する場合、ファイルを添付して問い合わせ
+      parts = [{ text: question }];
+
+      // YouTubeのURLをfileDataとして追加
+      for (const youtubeURL of youtubeURLs) {
+        parts.push({
+          fileData: {
+            mimeType: 'video/mp4',
+            fileUri: youtubeURL,
+          },
+        });
+      }
+
+      // 画像ファイルを追加
+      if (files.length >= 1) {
+        for (const file of files) {
+          parts.push({
+            inlineData: {
+              mimeType: file.type,
+              data: file.base64,
+            },
+          });
+        }
+      }
+
+      let contents: GeminiContents[] = [];
+      if (history != null) {
+        history.forEach((entry) => {
+          contents.push({
+            role: entry.role,
+            parts: [{ text: entry.content }],
+          });
+        });
+      }
+      contents.push({ role: 'user', parts: parts });
+
+      let geminiOptions: GeminiOptions = {
+        contents: contents,
+        systemInstruction: systemInstruction,
+      };
+
+      // thinkingConfigの設定
+      if (config.gemini?.thinkingBudget !== undefined) {
+        geminiOptions.generationConfig = {
+          thinkingConfig: {
+            thinkingBudget: config.gemini.thinkingBudget,
+          },
+        };
+      }
+
+      // YouTubeURLがある場合はグラウンディングを無効化
+      if (grounding && !hasYoutubeUrl) {
+        geminiOptions.tools = [{ google_search: {} }];
+      }
+
+      let options = {
+        url: api,
+        searchParams: {
+          key: key,
+        },
+        json: geminiOptions,
+      };
+      this.log(JSON.stringify(options));
+      let res_data: any = null;
+      let responseText: string = '';
+      try {
+        res_data = await got
+          .post(options.url, {
+            searchParams: options.searchParams,
+            json: options.json,
+            responseType: 'json',
+          })
+          .json();
+        this.log(JSON.stringify(res_data));
+        if (res_data.hasOwnProperty('candidates')) {
+          if (res_data.candidates?.length > 0) {
+            // 結果を取得
+            if (res_data.candidates[0].hasOwnProperty('content')) {
+              if (res_data.candidates[0].content.hasOwnProperty('parts')) {
+                for (
+                  let i = 0;
+                  i < res_data.candidates[0].content.parts.length;
+                  i++
+                ) {
+                  if (
+                    res_data.candidates[0].content.parts[i].hasOwnProperty('text')
+                  ) {
+                    responseText += res_data.candidates[0].content.parts[i].text;
+                  }
+                }
+              }
+            }
+          }
+          // groundingMetadataを取得
+          let groundingMetadata = '';
+          if (res_data.candidates[0].hasOwnProperty('groundingMetadata')) {
+            // 参考サイト情報
+            if (
+              res_data.candidates[0].groundingMetadata.hasOwnProperty(
+                'groundingChunks'
+              )
+            ) {
+              // 参考サイトが多すぎる場合があるので、3つに制限
+              let checkMaxLength =
+                res_data.candidates[0].groundingMetadata.groundingChunks.length;
+              if (
+                res_data.candidates[0].groundingMetadata.groundingChunks.length >
+                3
+              ) {
+                checkMaxLength = 3;
+              }
+              for (let i = 0; i < checkMaxLength; i++) {
+                if (
+                  res_data.candidates[0].groundingMetadata.groundingChunks[
+                    i
+                  ].hasOwnProperty('web')
+                ) {
+                  if (
+                    res_data.candidates[0].groundingMetadata.groundingChunks[
+                      i
+                    ].web.hasOwnProperty('uri') &&
+                    res_data.candidates[0].groundingMetadata.groundingChunks[
+                      i
+                    ].web.hasOwnProperty('title')
+                  ) {
+                    groundingMetadata += `参考(${i + 1}): [${
+                      res_data.candidates[0].groundingMetadata.groundingChunks[i]
+                        .web.title
+                    }](${
+                      res_data.candidates[0].groundingMetadata.groundingChunks[i]
+                        .web.uri
+                    })\n`;
+                  }
+                }
+              }
+            }
+            // 検索ワード
+            if (
+              res_data.candidates[0].groundingMetadata.hasOwnProperty(
+                'webSearchQueries'
+              )
+            ) {
+              if (
+                res_data.candidates[0].groundingMetadata.webSearchQueries.length >
+                0
+              ) {
+                groundingMetadata +=
+                  '検索ワード: ' +
+                  res_data.candidates[0].groundingMetadata.webSearchQueries.join(
+                    ','
+                  ) +
+                  '\n';
+              }
+            }
+          }
+          responseText += groundingMetadata;
+        }
+      } catch (err: unknown) {
+        this.log('Error By Call Gemini');
+        let errorCode = null;
+        let errorMessage = null;
+
+        // HTTPErrorからエラーコードと内容を取得
+        if (err && typeof err === 'object' && 'response' in err) {
+          const httpError = err as any;
+          errorCode = httpError.response?.statusCode;
+          errorMessage = httpError.response?.statusMessage || httpError.message;
+        }
+
+        if (err instanceof Error) {
+          this.log(`${err.name}\n${err.message}\n${err.stack}`);
+        }
+
+        // エラー情報を返す
+        return { error: true, errorCode, errorMessage };
+      }
+      return responseText;
+    } catch (error) {
+      this.log(chalk.red('AI chat error:'), error);
+      throw error;
+    }
+  }
+
+  @bindThis
+  private async onMention(msg: Message) {
+    if (!msg.includes([this.name])) {
+      return false;
+    } else {
+      this.log('AiChat requested');
+
+      if (!(await this.isFollowing(msg.userId))) {
+        this.log('The user is not following me:' + msg.userId);
+        msg.reply('あなたはaichatを実行する権限がありません。');
+        return false;
+      }
+    }
+
+    let exist: AiChatHist | null = null;
+
+    // チャットメッセージの場合、会話APIは使わず直接処理する
+    if (msg.isChat) {
+      exist = this.aichatHist.findOne({
+        isChat: true,
+        chatUserId: msg.userId,
+      });
+
+      if (exist != null) return false;
+    } else {
+      const conversationData = await this.ai.api<any[]>('notes/conversation', {
+        noteId: msg.id,
+      });
+
+      if (conversationData != undefined) {
+        for (const message of conversationData) {
+          exist = this.aichatHist.findOne({ postId: message.id });
+          if (exist != null) return false;
+        }
+      }
+    }
+
+    let type = TYPE_GEMINI;
+    const current: AiChatHist = {
+      postId: msg.id,
+      createdAt: Date.now(),
+      type: type,
+      fromMention: true,
+      isChat: msg.isChat,
+      chatUserId: msg.isChat ? msg.userId : undefined,
+    };
+
+    if (msg.quoteId) {
+      const quotedNote = await this.ai.api<Partial<{ text: string }>>(
+        'notes/show',
+        {
+          noteId: msg.quoteId,
+        }
+      );
+      current.history = [
+        {
+          role: 'user',
+          content:
+            'ユーザーが与えた前情報である、引用された文章: ' + quotedNote.text,
+        },
+      ];
+      current.quotedFiles = await this.getQuotedNoteFiles(msg.quoteId);
+    }
+
+    const result = await this.handleAiChat(current, msg);
+
+    if (result) {
+      return { reaction: 'like' };
+    }
+    return false;
+  }
+
+  @bindThis
+  private async onChat(msg: Message) {
+    this.log('contextHook...');
+    if (msg.text == null) return false;
+
+    // チャットモードでaichatを終了するコマンドを追加
+    if (
+      msg.isChat &&
+      (msg.includes(['aichat 終了']) ||
+        msg.includes(['aichat 終わり']) ||
+        msg.includes(['aichat やめる']) ||
+        msg.includes(['aichat 止めて']))
+    ) {
+      const exist = this.aichatHist.findOne({
+        isChat: true,
+        chatUserId: msg.userId,
+      });
+
+      if (exist != null) {
+        this.aichatHist.remove(exist);
+        this.unsubscribeReply(key);
+        msg.reply(
+          '藍チャットを終了しました。また何かあればお声がけくださいね！'
+        );
+        return true;
+      }
+    }
+
+    let exist: AiChatHist | null = null;
+
+    // チャットメッセージの場合
+    if (msg.isChat) {
+      exist = this.aichatHist.findOne({
+        isChat: true,
+        chatUserId: msg.userId,
+      });
+    } else {
+      const conversationData: any = await this.ai.api('notes/conversation', {
+        noteId: msg.id,
+      });
+
+      if (conversationData == null || conversationData.length == 0) {
+        this.log('conversationData is nothing.');
+        return false;
+      }
+
+      for (const message of conversationData) {
+        exist = this.aichatHist.findOne({ postId: message.id });
+        if (exist != null) break;
+      }
+    }
+
+    if (exist == null) {
+      this.log('conversation context is not found.');
+      return false;
+    }
+
+    if (!(await this.isFollowing(msg.userId))) {
+      this.log('The user is not following me: ' + msg.userId);
+      msg.reply('あなたはaichatを実行する権限がありません。');
+      return false;
+    }
+
+    this.unsubscribeReply(key);
+    this.aichatHist.remove(exist);
+
+    const result = await this.handleAiChat(exist, msg);
+
+    if (result) {
+      return { reaction: 'like' };
+    }
+    return false;
+  }
+
+  // Add maintenance task
+  @bindThis
+  private async runPersonalizationMaintenance() {
+    if (this.personalizationEnabled && this.personalizationAdapter) {
+      try {
+        await this.personalizationAdapter.runMaintenance();
+        this.log('Personalization maintenance completed');
+      } catch (error) {
+        this.log(chalk.red('Personalization maintenance error:'), error);
+      }
     }
   }
 }
