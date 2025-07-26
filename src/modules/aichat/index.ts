@@ -8,6 +8,7 @@ import { Note } from '@/misskey/note.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
+import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
 
 type AiChat = {
@@ -253,6 +254,9 @@ export default class extends Module {
   ): Promise<GeminiApiResponse> {
     this.log('Generate Text By Gemini...');
     let parts: GeminiParts = [];
+    let youtubeURLs: string[] = [];
+    let hasYoutubeUrl = false;
+    let nonYoutubeUrls: string[] = []; // This needs to be in function scope
     const now = new Date().toLocaleString('ja-JP', {
       timeZone: 'Asia/Tokyo',
       year: 'numeric',
@@ -321,10 +325,6 @@ export default class extends Module {
     }
 
     // URLから情報を取得
-    let youtubeURLs: string[] = [];
-    let hasYoutubeUrl = false;
-    let nonYoutubeUrls: string[] = [];
-
     if (aiChat.question !== undefined) {
       const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
       const urlarray = [...aiChat.question.matchAll(urlexp)];
@@ -585,6 +585,8 @@ export default class extends Module {
           const urlMetadata = res_data.candidates[0].urlContextMetadata;
           if (urlMetadata?.urlMetadata?.length > 0) {
             let urlContextInfo = '\n\n【URL Context情報】\n';
+            const failedUrls: string[] = [];
+            
             for (const urlInfo of urlMetadata.urlMetadata) {
               if (urlInfo.retrievedUrl && urlInfo.urlRetrievalStatus === 'URL_RETRIEVAL_STATUS_SUCCESS') {
                 urlContextInfo += `✓ ${urlInfo.retrievedUrl}\n`;
@@ -592,10 +594,68 @@ export default class extends Module {
               } else if (urlInfo.retrievedUrl) {
                 urlContextInfo += `✗ ${urlInfo.retrievedUrl} (取得失敗)\n`;
                 this.log(`URL Context failed: ${urlInfo.retrievedUrl} - ${urlInfo.urlRetrievalStatus}`);
+                failedUrls.push(urlInfo.retrievedUrl);
               }
             }
+            
+            // URL Context取得に失敗したURLに対してurlToJsonでフォールバック
+            if (failedUrls.length > 0) {
+              this.log(`Attempting fallback with urlToJson for ${failedUrls.length} failed URLs`);
+              let fallbackInfo = '\n【フォールバック情報】\n';
+              
+              for (const failedUrl of failedUrls) {
+                try {
+                  const result = await urlToJson(failedUrl);
+                  const urlpreview = result as any;
+                  if (urlpreview.title) {
+                    fallbackInfo += `URL: ${urlpreview.url}\n`;
+                    fallbackInfo += `サイト名: ${urlpreview.sitename || '不明'}\n`;
+                    if (!urlpreview.sensitive) {
+                      fallbackInfo += `タイトル: ${urlpreview.title}\n`;
+                      fallbackInfo += `説明: ${urlpreview.description || 'なし'}\n\n`;
+                    } else {
+                      fallbackInfo += `(センシティブなコンテンツの可能性)\n\n`;
+                    }
+                    this.log(`Fallback successful for ${failedUrl}`);
+                  }
+                } catch (err) {
+                  this.log(`Fallback also failed for ${failedUrl}: ${err}`);
+                  fallbackInfo += `${failedUrl} - フォールバックも失敗\n\n`;
+                }
+              }
+              
+              responseText += fallbackInfo;
+            }
+            
             responseText += urlContextInfo;
           }
+        }
+        // URL Contextが期待されていたが、メタデータが返されなかった場合
+        else if (nonYoutubeUrls.length > 0) {
+          this.log('URL Context was expected but no metadata returned. Attempting fallback...');
+          let fallbackInfo = '\n\n【URL情報 (フォールバック)】\n';
+          
+          for (const url of nonYoutubeUrls) {
+            try {
+              const result = await urlToJson(url);
+              const urlpreview = result as any;
+              if (urlpreview.title) {
+                fallbackInfo += `URL: ${urlpreview.url}\n`;
+                fallbackInfo += `サイト名: ${urlpreview.sitename || '不明'}\n`;
+                if (!urlpreview.sensitive) {
+                  fallbackInfo += `タイトル: ${urlpreview.title}\n`;
+                  fallbackInfo += `説明: ${urlpreview.description || 'なし'}\n\n`;
+                } else {
+                  fallbackInfo += `(センシティブなコンテンツの可能性)\n\n`;
+                }
+                this.log(`Fallback successful for ${url}`);
+              }
+            } catch (err) {
+              this.log(`Fallback failed for ${url}: ${err}`);
+            }
+          }
+          
+          responseText += fallbackInfo;
         }
       }
     } catch (err: unknown) {
