@@ -318,7 +318,7 @@ export default class HybridMemorySystem {
         // Check content relevance
         const contentScore = keywords.reduce((score, keyword) => {
           return score + (memory.content.toLowerCase().includes(keyword) ? 1 : 0);
-        }, 0) / keywords.length;
+        }, 0) / Math.max(1, keywords.length);
         
         // Check tag relevance
         const tagScore = memory.metadata.tags.reduce((score, tag) => {
