@@ -4,6 +4,7 @@ import {
   MemoryType,
   UserProfile,
   MemoryQuery,
+  CommandResult,
   PersonalizationError,
   PersonalizationErrorCode
 } from './types.js';
@@ -38,35 +39,62 @@ export default class UserMemoryInterface {
   public async processCommand(
     userId: string,
     command: string
-  ): Promise<{ success: boolean; message: string; data?: any }> {
+  ): Promise<CommandResult> {
+    // Validate input
+    if (!userId || !command) {
+      return {
+        success: false,
+        message: '無効な入力です。'
+      };
+    }
+
     // Check for memory-related commands
     for (const [cmdName, pattern] of Object.entries(this.COMMANDS)) {
       const match = command.match(pattern);
       if (match) {
-        switch (cmdName) {
-          case 'SHOW_MEMORIES':
-            return await this.showMemories(userId, match[2] || '');
-          
-          case 'FORGET':
-            return await this.forgetMemory(userId, match[2] || '');
-          
-          case 'UPDATE_INFO':
-            return await this.updateInfo(userId, match[2] || '');
-          
-          case 'SHOW_PROFILE':
-            return await this.showProfile(userId);
-          
-          case 'EXPORT_DATA':
-            return await this.exportUserData(userId);
-          
-          case 'DELETE_ALL':
-            return await this.deleteAllData(userId);
-          
-          case 'HELP':
-            return this.showHelp();
-          
-          default:
-            break;
+        try {
+          switch (cmdName) {
+            case 'SHOW_MEMORIES':
+              return await this.showMemories(userId, match[2] || '');
+            
+            case 'FORGET':
+              // Ensure there's an argument for forget command
+              if (!match[2] || !match[2].trim()) {
+                return {
+                  success: false,
+                  message: '忘れる対象を指定してください。'
+                };
+              }
+              return await this.forgetMemory(userId, match[2].trim());
+            
+            case 'UPDATE_INFO':
+              // Ensure there's an argument for update command
+              if (!match[2] || !match[2].trim()) {
+                return {
+                  success: false,
+                  message: '更新する情報を指定してください。'
+                };
+              }
+              return await this.updateInfo(userId, match[2].trim());
+            
+            case 'SHOW_PROFILE':
+              return await this.showProfile(userId);
+            
+            case 'EXPORT_DATA':
+              return await this.exportUserData(userId);
+            
+            case 'DELETE_ALL':
+              return await this.deleteAllData(userId);
+            
+            case 'HELP':
+              return this.showHelp();
+          }
+        } catch (error) {
+          console.error(`Error processing command ${cmdName}:`, error);
+          return {
+            success: false,
+            message: 'コマンドの処理中にエラーが発生しました。'
+          };
         }
       }
     }

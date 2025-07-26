@@ -225,6 +225,26 @@ export interface VectorMetadata {
 }
 
 // ユーザー制御型
+export interface UserCommand {
+  command: string;
+  userId: string;
+  timestamp: number;
+}
+
+export interface CommandResult {
+  success: boolean;
+  message: string;
+  data?: any;
+}
+
+export interface MemoryStats {
+  total: number;
+  byType: Record<MemoryType, number>;
+  averageImportance: number;
+  oldestMemory?: Date;
+  newestMemory?: Date;
+}
+
 export interface MemoryQuery {
   userId: string;
   filters?: {

@@ -302,7 +302,7 @@ export default class PersonalizationEngine {
     
     for (const pattern of patterns) {
       const match = message.match(pattern.regex);
-      if (match) {
+      if (match && match[0] && match[1]) {
         facts.push({
           content: match[0],
           entities: this.extractEntities(match[1]),

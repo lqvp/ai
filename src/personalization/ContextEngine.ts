@@ -421,22 +421,27 @@ export default class ContextEngine {
     
     // Extract explicit information from user message
     const nameMatch = userMessage.match(/(?:my name is|i'm|i am) ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i);
-    if (nameMatch) {
-      info.explicit = { name: nameMatch[1] };
+    if (nameMatch && nameMatch[1]) {
+      info.explicit = { name: nameMatch[1].trim() };
     }
     
     const ageMatch = userMessage.match(/(?:i'm|i am) (\d+) years old/i);
-    if (ageMatch) {
-      info.explicit = { ...info.explicit, age: parseInt(ageMatch[1]) };
+    if (ageMatch && ageMatch[1]) {
+      const age = parseInt(ageMatch[1], 10);
+      if (!isNaN(age) && age > 0 && age < 150) {
+        info.explicit = { ...info.explicit, age };
+      }
     }
     
     const interestMatch = userMessage.match(/(?:i like|i love|i enjoy|interested in) ([^.!?]+)/i);
-    if (interestMatch) {
+    if (interestMatch && interestMatch[1]) {
       const interest = interestMatch[1].trim();
-      info.explicit = { 
-        ...info.explicit, 
-        interests: [interest]
-      };
+      if (interest.length > 0) {
+        info.explicit = { 
+          ...info.explicit, 
+          interests: [interest]
+        };
+      }
     }
     
     // Mark for implicit analysis if patterns detected

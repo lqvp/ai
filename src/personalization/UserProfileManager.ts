@@ -169,23 +169,31 @@ export default class UserProfileManager {
     userId: string,
     quality: number = 1.0
   ): Promise<UserProfile> {
-    const profile = await this.getOrCreateProfile(userId);
-    
-    profile.relationship.totalInteractions++;
-    profile.relationship.lastInteraction = Date.now();
-    
-    // Update trust score based on interaction quality
-    profile.relationship.trustScore = this.updateTrustScore(
-      profile.relationship.trustScore,
-      quality,
-      profile.relationship.totalInteractions
-    );
-    
-    // Check for relationship level upgrade
-    this.updateRelationshipLevel(profile);
-    
-    this.profiles.update(profile);
-    return profile;
+    try {
+      const profile = await this.getOrCreateProfile(userId);
+      
+      profile.relationship.totalInteractions++;
+      profile.relationship.lastInteraction = Date.now();
+      
+      // Update trust score based on interaction quality
+      profile.relationship.trustScore = this.updateTrustScore(
+        profile.relationship.trustScore,
+        quality,
+        profile.relationship.totalInteractions
+      );
+      
+      // Check for relationship level upgrade
+      this.updateRelationshipLevel(profile);
+      
+      this.profiles.update(profile);
+      return profile;
+    } catch (error) {
+      console.error('Error recording interaction:', error);
+      throw new PersonalizationError(
+        'Failed to record interaction',
+        PersonalizationErrorCode.PROFILE_UPDATE_FAILED
+      );
+    }
   }
 
   /**
