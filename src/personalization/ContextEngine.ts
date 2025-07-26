@@ -143,7 +143,7 @@ export default class ContextEngine {
     );
     
     // Extract any new information about the user
-    const extractedInfo = this.extractUserInfo(userMessage, aiResponse);
+    const extractedInfo = this.extractUserInfo(userMessage);
     
     if (extractedInfo.explicit) {
       await this.profileManager.addExplicitInfo(userId, extractedInfo.explicit);
