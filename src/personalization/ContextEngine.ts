@@ -410,7 +410,7 @@ export default class ContextEngine {
       .slice(0, 10);
   }
 
-  private extractUserInfo(userMessage: string, aiResponse: string): {
+  private extractUserInfo(userMessage: string): {
     explicit?: Partial<UserProfile['explicit']>;
     implicit?: boolean;
   } {
