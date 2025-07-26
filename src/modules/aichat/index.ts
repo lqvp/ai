@@ -601,30 +601,47 @@ export default class extends Module {
             // URL Context取得に失敗したURLに対してurlToJsonでフォールバック
             if (failedUrls.length > 0) {
               this.log(`Attempting fallback with urlToJson for ${failedUrls.length} failed URLs`);
-              let fallbackInfo = '\n【フォールバック情報】\n';
+              let fallbackSystemInstruction = '';
               
               for (const failedUrl of failedUrls) {
                 try {
                   const result = await urlToJson(failedUrl);
                   const urlpreview = result as any;
                   if (urlpreview.title) {
-                    fallbackInfo += `URL: ${urlpreview.url}\n`;
-                    fallbackInfo += `サイト名: ${urlpreview.sitename || '不明'}\n`;
+                    fallbackSystemInstruction +=
+                      '\n補足として提供されたURLの情報は次の通り:URL=>' +
+                      urlpreview.url +
+                      'サイト名(' +
+                      urlpreview.sitename +
+                      ')、';
                     if (!urlpreview.sensitive) {
-                      fallbackInfo += `タイトル: ${urlpreview.title}\n`;
-                      fallbackInfo += `説明: ${urlpreview.description || 'なし'}\n\n`;
+                      fallbackSystemInstruction +=
+                        'タイトル(' +
+                        urlpreview.title +
+                        ')、' +
+                        '説明(' +
+                        urlpreview.description +
+                        ')、' +
+                        '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。';
+                      this.log('urlpreview.sitename:' + urlpreview.sitename);
+                      this.log('urlpreview.title:' + urlpreview.title);
+                      this.log('urlpreview.description:' + urlpreview.description);
                     } else {
-                      fallbackInfo += `(センシティブなコンテンツの可能性)\n\n`;
+                      fallbackSystemInstruction +=
+                        'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。';
                     }
-                    this.log(`Fallback successful for ${failedUrl}`);
                   }
+                  this.log(`Fallback successful for ${failedUrl}`);
                 } catch (err) {
+                  fallbackSystemInstruction +=
+                    '\n補足として提供されたURLは無効でした:URL=>' + failedUrl;
                   this.log(`Fallback also failed for ${failedUrl}: ${err}`);
-                  fallbackInfo += `${failedUrl} - フォールバックも失敗\n\n`;
                 }
               }
               
-              responseText += fallbackInfo;
+              if (fallbackSystemInstruction) {
+                responseText += '\n\n【フォールバック情報】' + fallbackSystemInstruction;
+              }
             }
             
             responseText += urlContextInfo;
@@ -633,29 +650,49 @@ export default class extends Module {
         // URL Contextが期待されていたが、メタデータが返されなかった場合
         else if (nonYoutubeUrls.length > 0) {
           this.log('URL Context was expected but no metadata returned. Attempting fallback...');
-          let fallbackInfo = '\n\n【URL情報 (フォールバック)】\n';
+          let fallbackSystemInstruction = '';
           
           for (const url of nonYoutubeUrls) {
             try {
               const result = await urlToJson(url);
               const urlpreview = result as any;
               if (urlpreview.title) {
-                fallbackInfo += `URL: ${urlpreview.url}\n`;
-                fallbackInfo += `サイト名: ${urlpreview.sitename || '不明'}\n`;
+                fallbackSystemInstruction +=
+                  '\n補足として提供されたURLの情報は次の通り:URL=>' +
+                  urlpreview.url +
+                  'サイト名(' +
+                  urlpreview.sitename +
+                  ')、';
                 if (!urlpreview.sensitive) {
-                  fallbackInfo += `タイトル: ${urlpreview.title}\n`;
-                  fallbackInfo += `説明: ${urlpreview.description || 'なし'}\n\n`;
+                  fallbackSystemInstruction +=
+                    'タイトル(' +
+                    urlpreview.title +
+                    ')、' +
+                    '説明(' +
+                    urlpreview.description +
+                    ')、' +
+                    '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。';
+                  this.log('urlpreview.sitename:' + urlpreview.sitename);
+                  this.log('urlpreview.title:' + urlpreview.title);
+                  this.log('urlpreview.description:' + urlpreview.description);
                 } else {
-                  fallbackInfo += `(センシティブなコンテンツの可能性)\n\n`;
+                  fallbackSystemInstruction +=
+                    'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。';
                 }
-                this.log(`Fallback successful for ${url}`);
+              } else {
+                this.log('urlpreview.title is nothing');
               }
+              this.log(`Fallback successful for ${url}`);
             } catch (err) {
-              this.log(`Fallback failed for ${url}: ${err}`);
+              fallbackSystemInstruction +=
+                '補足として提供されたURLは無効でした:URL=>' + url;
+              this.log(`Skip url because error in urlToJson: ${err}`);
             }
           }
           
-          responseText += fallbackInfo;
+          if (fallbackSystemInstruction) {
+            responseText += '\n\n【URL情報 (フォールバック)】' + fallbackSystemInstruction;
+          }
         }
       }
     } catch (err: unknown) {
