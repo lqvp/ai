@@ -392,6 +392,20 @@ export default class extends Module {
     // Debug: Log the exact content being sent
     this.log(`DEBUG: Question text in parts: ${aiChat.question}`);
     this.log(`DEBUG: Non-YouTube URLs found: ${nonYoutubeUrls.join(', ')}`);
+    
+    // Validate that URLs are still in the question
+    if (nonYoutubeUrls.length > 0) {
+      const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
+      const questionUrls = [...aiChat.question.matchAll(urlexp)].map(match => match[0]);
+      this.log(`DEBUG: URLs in final question: ${questionUrls.join(', ')}`);
+      
+      // Check if all non-YouTube URLs are still in the question
+      for (const url of nonYoutubeUrls) {
+        if (!aiChat.question.includes(url)) {
+          this.log(`WARNING: URL ${url} was lost during processing!`);
+        }
+      }
+    }
 
     // YouTubeのURLをfileDataとして追加
     for (const youtubeURL of youtubeURLs) {
