@@ -12,12 +12,12 @@ import HybridMemorySystem from './HybridMemorySystem.js';
 import UserProfileManager from './UserProfileManager.js';
 
 /**
- * Context Engine
- * Intelligently retrieves and manages context for personalized responses
+ * コンテキストエンジン
+ * パーソナライズされた応答のためのコンテキストをインテリジェントに取得・管理
  */
 export default class ContextEngine {
   private readonly MAX_CONTEXT_MEMORIES = 10;
-  private readonly CONTEXT_WINDOW_SIZE = 4000; // Characters
+  private readonly CONTEXT_WINDOW_SIZE = 4000; // 文字数
   private readonly RELEVANCE_THRESHOLD = 0.3;
 
   constructor(
@@ -26,7 +26,7 @@ export default class ContextEngine {
   ) {}
 
   /**
-   * Build complete response context
+   * 完全な応答コンテキストを構築
    */
   @bindThis
   public async buildResponseContext(

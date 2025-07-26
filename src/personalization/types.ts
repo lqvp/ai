@@ -1,14 +1,14 @@
 /**
- * Type definitions for the AI Chat Personalization System
+ * AIチャットパーソナライゼーションシステムの型定義
  */
 
-// User Profile Types
+// ユーザープロファイル型
 export interface UserProfile {
   userId: string;
   createdAt: number;
   updatedAt: number;
   
-  // Explicit information
+  // 明示的情報
   explicit: {
     name?: string;
     age?: number;
@@ -19,7 +19,7 @@ export interface UserProfile {
     preferences: Record<string, any>;
   };
   
-  // Inferred information
+  // 推論された情報
   implicit: {
     communicationStyle?: CommunicationStyle;
     expertise: string[];
@@ -28,7 +28,7 @@ export interface UserProfile {
     patterns: BehaviorPattern[];
   };
   
-  // Relationship tracking
+  // 関係性の追跡
   relationship: {
     level: RelationshipLevel;
     firstInteraction: number;
@@ -37,7 +37,7 @@ export interface UserProfile {
     trustScore: number; // 0-1
   };
   
-  // Meta information
+  // メタ情報
   meta: {
     version: number;
     lastAnalyzed: number;
@@ -82,7 +82,7 @@ export enum DataQuality {
   HIGH = 'high'
 }
 
-// Memory Types
+// 記憶型
 export interface Memory {
   id: string;
   userId: string;
@@ -92,7 +92,7 @@ export interface Memory {
   importance: number; // 0-1
   accessCount: number;
   lastAccessed: number;
-  decay: number; // 0-1, where 1 is no decay
+  decay: number; // 0-1、1は減衰なし
   metadata: MemoryMetadata;
 }
 
@@ -125,7 +125,7 @@ export enum MemorySource {
   SYSTEM = 'system'
 }
 
-// Short-term Memory
+// 短期記憶
 export interface ShortTermMemory {
   sessionId: string;
   userId: string;
@@ -175,7 +175,7 @@ export enum EntityType {
   OTHER = 'other'
 }
 
-// Knowledge Graph Types
+// ナレッジグラフ型
 export interface KnowledgeNode {
   id: string;
   userId: string;
@@ -207,7 +207,7 @@ export enum NodeType {
   SKILL = 'skill'
 }
 
-// Vector Embedding Types
+// ベクトル埋め込み型
 export interface VectorMemory {
   id: string;
   userId: string;
@@ -224,7 +224,7 @@ export interface VectorMetadata {
   tags: string[];
 }
 
-// User Control Types
+// ユーザー制御型
 export interface MemoryQuery {
   userId: string;
   filters?: {
@@ -258,7 +258,7 @@ export interface PrivacySettings {
   autoDeletePatterns: string[];
 }
 
-// Response Generation Types
+// 応答生成型
 export interface PersonalizedPrompt {
   systemPrompt: string;
   userContext: string;
@@ -276,7 +276,7 @@ export interface ResponseContext {
   privacySettings: PrivacySettings;
 }
 
-// Analytics Types
+// 分析型
 export interface UserAnalytics {
   userId: string;
   metrics: {
@@ -293,7 +293,7 @@ export interface UserAnalytics {
   };
 }
 
-// Error Types
+// エラー型
 export class PersonalizationError extends Error {
   constructor(
     message: string,

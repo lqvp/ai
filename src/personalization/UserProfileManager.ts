@@ -12,14 +12,14 @@ import {
 } from './types.js';
 
 /**
- * User Profile Manager
- * Manages dynamic user profiles with explicit and implicit information
+ * ユーザープロファイルマネージャー
+ * 明示的および暗黙的な情報を含む動的なユーザープロファイルを管理
  */
 export default class UserProfileManager {
   private profiles: loki.Collection<UserProfile>;
   private readonly PROFILE_VERSION = 1;
   
-  // Relationship level thresholds
+  // 関係性レベルの閾値
   private readonly RELATIONSHIP_THRESHOLDS = {
     ACQUAINTANCE: 5,
     FAMILIAR: 20,
@@ -27,11 +27,11 @@ export default class UserProfileManager {
     COLLABORATOR: 100
   };
   
-  // Decay rates for different information types
+  // 情報タイプ別の減衰率
   private readonly DECAY_RATES = {
-    interests: 0.95, // Slow decay
-    patterns: 0.90, // Medium decay
-    mood: 0.70 // Fast decay
+    interests: 0.95, // 遅い減衰
+    patterns: 0.90, // 中程度の減衰
+    mood: 0.70 // 速い減衰
   };
 
   constructor(private db: loki) {
@@ -43,7 +43,7 @@ export default class UserProfileManager {
   }
 
   /**
-   * Get or create a user profile
+   * ユーザープロファイルを取得または作成
    */
   @bindThis
   public async getOrCreateProfile(userId: string): Promise<UserProfile> {
@@ -58,7 +58,7 @@ export default class UserProfileManager {
   }
 
   /**
-   * Update user profile with new information
+   * 新しい情報でユーザープロファイルを更新
    */
   @bindThis
   public async updateProfile(
@@ -85,7 +85,7 @@ export default class UserProfileManager {
   }
 
   /**
-   * Add explicit information provided by the user
+   * ユーザーが提供した明示的な情報を追加
    */
   @bindThis
   public async addExplicitInfo(
@@ -119,7 +119,7 @@ export default class UserProfileManager {
   }
 
   /**
-   * Infer implicit information from user interactions
+   * ユーザーの対話から暗黙的な情報を推論
    */
   @bindThis
   public async inferImplicitInfo(
@@ -162,7 +162,7 @@ export default class UserProfileManager {
   }
 
   /**
-   * Update interaction statistics
+   * 対話統計を更新
    */
   @bindThis
   public async recordInteraction(
@@ -189,7 +189,7 @@ export default class UserProfileManager {
   }
 
   /**
-   * Get relationship context for response generation
+   * 応答生成のための関係性コンテキストを取得
    */
   @bindThis
   public getRelationshipContext(profile: UserProfile): string {
@@ -198,54 +198,54 @@ export default class UserProfileManager {
     
     switch (level) {
       case RelationshipLevel.NEW_USER:
-        return "This is a new user. Be welcoming and helpful, explain things clearly.";
+        return "新しいユーザーです。歓迎し、親切に対応し、物事を明確に説明してください。";
       
       case RelationshipLevel.ACQUAINTANCE:
-        return `We've had ${interactions} interactions. Be friendly but still explanatory.`;
+        return `${interactions}回の対話がありました。友好的でありながら、まだ説明的に対応してください。`;
       
       case RelationshipLevel.FAMILIAR:
-        return `This is a familiar user with ${interactions} interactions. You can be more casual and reference past conversations.`;
+        return `${interactions}回の対話がある親しいユーザーです。よりカジュアルに、過去の会話を参照できます。`;
       
       case RelationshipLevel.FRIEND:
-        return `This is a friend with ${interactions} interactions. Be warm, personal, and reference shared experiences.`;
+        return `${interactions}回の対話がある友人です。温かく、個人的に、共有した経験を参照してください。`;
       
       case RelationshipLevel.COLLABORATOR:
-        return `This is a close collaborator with ${interactions} interactions. Be highly personalized, anticipate needs, and build on deep shared context.`;
+        return `${interactions}回の対話がある親密な協力者です。高度にパーソナライズし、ニーズを予測し、深い共有コンテキストを構築してください。`;
       
       default:
-        return "Interact naturally and helpfully.";
+        return "自然で親切に対話してください。";
     }
   }
 
   /**
-   * Get communication style guidance
+   * コミュニケーションスタイルのガイダンスを取得
    */
   @bindThis
   public getStyleGuidance(profile: UserProfile): string {
     const style = profile.implicit.communicationStyle;
     
     if (!style) {
-      return "Adapt communication style based on user preferences.";
+      return "ユーザーの好みに基づいてコミュニケーションスタイルを適応させてください。";
     }
     
     switch (style) {
       case CommunicationStyle.FORMAL:
-        return "Use formal language, complete sentences, and professional tone.";
+        return "フォーマルな言葉遣い、完全な文章、プロフェッショナルなトーンを使用してください。";
       
       case CommunicationStyle.CASUAL:
-        return "Use casual, friendly language with contractions and colloquialisms.";
+        return "カジュアルで友好的な言葉遣い、省略形や口語表現を使用してください。";
       
       case CommunicationStyle.TECHNICAL:
-        return "Use precise technical language, include details and specifications.";
+        return "正確な技術用語を使用し、詳細と仕様を含めてください。";
       
       case CommunicationStyle.CREATIVE:
-        return "Use creative, expressive language with metaphors and vivid descriptions.";
+        return "創造的で表現豊かな言葉遣い、比喩や鮮明な描写を使用してください。";
       
       case CommunicationStyle.ANALYTICAL:
-        return "Use logical, structured communication with clear reasoning and evidence.";
+        return "論理的で構造化されたコミュニケーション、明確な理由付けと証拠を使用してください。";
       
       default:
-        return "Use clear, natural communication.";
+        return "明確で自然なコミュニケーションを使用してください。";
     }
   }
 

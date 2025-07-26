@@ -151,9 +151,9 @@ export default class extends Module {
       indices: ['postId', 'originalNoteId'],
     });
 
-    // Initialize personalization engine
+    // パーソナライゼーションエンジンを初期化
     this.personalizationEngine = new PersonalizationEngine(this.ai.db);
-    this.log('Personalization engine initialized');
+    this.log('パーソナライゼーションエンジンが初期化されました');
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -303,7 +303,7 @@ export default class extends Module {
       now +
       'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
     
-    // Integrate personalization if userId is provided
+    // userIdが提供されている場合、パーソナライゼーションを統合
     let personalizedContext = '';
     if (userId && this.personalizationEngine) {
       try {
@@ -314,19 +314,19 @@ export default class extends Module {
         );
         
         if (personalizationResult.commandResult) {
-          // If it's a command, return the command result directly
+          // コマンドの場合、コマンド結果を直接返す
           return personalizationResult.commandResult.message;
         }
         
         if (personalizationResult.personalizedPrompt) {
-          // Build personalized context
+          // パーソナライズされたコンテキストを構築
           personalizedContext = this.personalizationEngine.buildPromptWithContext(
             personalizationResult.personalizedPrompt,
             aiChat.question
           );
         }
       } catch (error) {
-        this.log('Personalization error: ' + error);
+        this.log('パーソナライゼーションエラー: ' + error);
       }
     }
     
@@ -1276,7 +1276,7 @@ export default class extends Module {
         exist.history.shift();
       }
       
-      // Store response in personalization system
+      // パーソナライゼーションシステムに応答を保存
       if (this.personalizationEngine && msg.userId) {
         try {
           await this.personalizationEngine.processResponse(
@@ -1286,7 +1286,7 @@ export default class extends Module {
             text as string
           );
         } catch (error) {
-          this.log('Error storing personalization response: ' + error);
+          this.log('パーソナライゼーション応答の保存エラー: ' + error);
         }
       }
 

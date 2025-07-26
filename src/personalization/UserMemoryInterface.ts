@@ -11,19 +11,19 @@ import HybridMemorySystem from './HybridMemorySystem.js';
 import UserProfileManager from './UserProfileManager.js';
 
 /**
- * User Memory Interface
- * Provides user control over their personal data and memories
+ * ユーザー記憶インターフェース
+ * ユーザーが個人データと記憶を制御できる機能を提供
  */
 export default class UserMemoryInterface {
-  // Command patterns
+  // コマンドパターン
   private readonly COMMANDS = {
-    SHOW_MEMORIES: /^\/memories?\s*(.*)$/i,
-    FORGET: /^\/forget\s+(.+)$/i,
-    UPDATE_INFO: /^\/update_info\s+(.+)$/i,
-    SHOW_PROFILE: /^\/profile$/i,
-    EXPORT_DATA: /^\/export_data$/i,
-    DELETE_ALL: /^\/delete_all_data$/i,
-    HELP: /^\/help$/i
+    SHOW_MEMORIES: /^\/記憶?\s*(.*)$/i,
+    FORGET: /^\/忘れる\s+(.+)$/i,
+    UPDATE_INFO: /^\/情報更新\s+(.+)$/i,
+    SHOW_PROFILE: /^\/プロフィール$/i,
+    EXPORT_DATA: /^\/データエクスポート$/i,
+    DELETE_ALL: /^\/全データ削除$/i,
+    HELP: /^\/ヘルプ$/i
   };
 
   constructor(
@@ -73,7 +73,7 @@ export default class UserMemoryInterface {
     
     return {
       success: false,
-      message: 'Command not recognized. Type /help for available commands.'
+      message: 'コマンドが認識されませんでした。/ヘルプ で利用可能なコマンドを確認してください。'
     };
   }
 
@@ -101,7 +101,7 @@ export default class UserMemoryInterface {
       if (memories.length === 0) {
         return {
           success: true,
-          message: 'No memories found matching your criteria.'
+          message: '条件に一致する記憶が見つかりませんでした。'
         };
       }
       
@@ -110,12 +110,12 @@ export default class UserMemoryInterface {
         this.formatMemory(memory, index + 1)
       ).join('\n\n');
       
-      const message = `📚 **Your Memories** (${memories.length} of ${stats.total} total)\n\n${formattedMemories}\n\n` +
-        `📊 **Statistics**\n` +
-        `- Total memories: ${stats.total}\n` +
-        `- Episodic: ${stats.byType.episodic}\n` +
-        `- Semantic: ${stats.byType.semantic}\n` +
-        `- Average importance: ${(stats.averageImportance * 100).toFixed(1)}%`;
+      const message = `📚 **あなたの記憶** (全${stats.total}件中${memories.length}件)\n\n${formattedMemories}\n\n` +
+        `📊 **統計**\n` +
+        `- 総記憶数: ${stats.total}\n` +
+        `- エピソード記憶: ${stats.byType.episodic}\n` +
+        `- 意味記憶: ${stats.byType.semantic}\n` +
+        `- 平均重要度: ${(stats.averageImportance * 100).toFixed(1)}%`;
       
       return {
         success: true,
@@ -149,7 +149,7 @@ export default class UserMemoryInterface {
       if (memories.length === 0) {
         return {
           success: false,
-          message: `No memories found containing "${searchTerm}"`
+          message: `"${searchTerm}"を含む記憶が見つかりませんでした`
         };
       }
       
@@ -161,8 +161,8 @@ export default class UserMemoryInterface {
         
         return {
           success: false,
-          message: `Found ${memories.length} memories containing "${searchTerm}":\n${preview}\n\n` +
-            `Please be more specific or use memory ID.`
+          message: `"${searchTerm}"を含む記憶が${memories.length}件見つかりました:\n${preview}\n\n` +
+            `より具体的に指定するか、記憶IDを使用してください。`
         };
       }
       
@@ -171,7 +171,7 @@ export default class UserMemoryInterface {
       
       return {
         success: true,
-        message: `✅ Successfully forgot memory: "${memories[0].content.substring(0, 100)}..."`
+        message: `✅ 記憶を忘れました: "${memories[0].content.substring(0, 100)}..."`
       };
     } catch (error) {
       return {
@@ -196,7 +196,7 @@ export default class UserMemoryInterface {
       if (Object.keys(updates).length === 0) {
         return {
           success: false,
-          message: 'Invalid update format. Use: /update_info name=John interests=coding,music'
+          message: '無効な更新形式です。使用例: /情報更新 名前=太郎 興味=プログラミング,音楽'
         };
       }
       
@@ -206,7 +206,7 @@ export default class UserMemoryInterface {
       const updatedFields = Object.keys(updates).join(', ');
       return {
         success: true,
-        message: `✅ Successfully updated: ${updatedFields}`
+        message: `✅ 更新しました: ${updatedFields}`
       };
     } catch (error) {
       return {
@@ -259,7 +259,7 @@ export default class UserMemoryInterface {
       
       return {
         success: true,
-        message: '📦 Your data has been prepared for export. You can save this JSON data.',
+        message: '📦 データのエクスポート準備が完了しました。このJSONデータを保存できます。',
         data: exportData
       };
     } catch (error) {
@@ -286,7 +286,7 @@ export default class UserMemoryInterface {
       
       return {
         success: true,
-        message: '🗑️ All your personal data has been permanently deleted.'
+        message: '🗑️ すべての個人データが完全に削除されました。'
       };
     } catch (error) {
       return {
@@ -301,29 +301,29 @@ export default class UserMemoryInterface {
    */
   private showHelp(): { success: boolean; message: string } {
     const helpMessage = `
-📖 **Memory Management Commands**
+📖 **記憶管理コマンド**
 
-**View your data:**
-• \`/memories [filter]\` - Show your stored memories
-  - Examples: \`/memories\`, \`/memories recent\`, \`/memories important\`
-• \`/profile\` - View your user profile
-• \`/export_data\` - Export all your data as JSON
+**データの確認:**
+• \`/記憶 [フィルター]\` - 保存された記憶を表示
+  - 例: \`/記憶\`, \`/記憶 最近\`, \`/記憶 重要\`
+• \`/プロフィール\` - ユーザープロフィールを表示
+• \`/データエクスポート\` - すべてのデータをJSON形式でエクスポート
 
-**Manage your data:**
-• \`/forget <search term>\` - Delete specific memories
-  - Example: \`/forget project deadline\`
-• \`/update_info <field=value>\` - Update your information
-  - Example: \`/update_info name=Alice interests=music,art\`
-• \`/delete_all_data\` - Permanently delete all your data
+**データの管理:**
+• \`/忘れる <検索語>\` - 特定の記憶を削除
+  - 例: \`/忘れる プロジェクトの締切\`
+• \`/情報更新 <フィールド=値>\` - 情報を更新
+  - 例: \`/情報更新 名前=太郎 興味=音楽,アート\`
+• \`/全データ削除\` - すべてのデータを完全に削除
 
-**Available fields for update_info:**
-• name, age, location, occupation
-• interests (comma-separated)
-• goals (comma-separated)
-• preferences (key=value pairs)
+**情報更新で使用可能なフィールド:**
+• 名前, 年齢, 場所, 職業
+• 興味 (カンマ区切り)
+• 目標 (カンマ区切り)
+• 設定 (キー=値のペア)
 
-**Privacy Notice:**
-Your data is stored securely and you have full control over it. Use these commands to manage what I remember about you.
+**プライバシーに関するお知らせ:**
+あなたのデータは安全に保存され、完全に管理できます。これらのコマンドを使用して、私が覚えている内容を管理してください。
     `.trim();
     
     return {
@@ -339,64 +339,64 @@ Your data is stored securely and you have full control over it. Use these comman
     const importance = `${(memory.importance * 100).toFixed(0)}%`;
     const type = memory.type.charAt(0).toUpperCase() + memory.type.slice(1);
     
-    return `**${index}.** [${type}] ${date} (Importance: ${importance})\n` +
+    return `**${index}.** [${type}] ${date} (重要度: ${importance})\n` +
       `   ${memory.content.substring(0, 150)}${memory.content.length > 150 ? '...' : ''}\n` +
-      `   Tags: ${memory.metadata.tags.join(', ') || 'none'}`;
+      `   タグ: ${memory.metadata.tags.join(', ') || 'なし'}`;
   }
 
   private formatProfile(profile: UserProfile): string {
     const { explicit, implicit, relationship, meta } = profile;
     
-    let message = '👤 **Your Profile**\n\n';
+    let message = '👤 **あなたのプロフィール**\n\n';
     
-    // Explicit information
-    message += '**Basic Information:**\n';
-    if (explicit.name) message += `• Name: ${explicit.name}\n`;
-    if (explicit.age) message += `• Age: ${explicit.age}\n`;
-    if (explicit.location) message += `• Location: ${explicit.location}\n`;
-    if (explicit.occupation) message += `• Occupation: ${explicit.occupation}\n`;
-    if (explicit.interests.length > 0) message += `• Interests: ${explicit.interests.join(', ')}\n`;
-    if (explicit.goals.length > 0) message += `• Goals: ${explicit.goals.join(', ')}\n`;
+    // 明示的情報
+    message += '**基本情報:**\n';
+    if (explicit.name) message += `• 名前: ${explicit.name}\n`;
+    if (explicit.age) message += `• 年齢: ${explicit.age}\n`;
+    if (explicit.location) message += `• 場所: ${explicit.location}\n`;
+    if (explicit.occupation) message += `• 職業: ${explicit.occupation}\n`;
+    if (explicit.interests.length > 0) message += `• 興味: ${explicit.interests.join(', ')}\n`;
+    if (explicit.goals.length > 0) message += `• 目標: ${explicit.goals.join(', ')}\n`;
     
-    // Relationship info
-    message += '\n**Our Relationship:**\n';
-    message += `• Level: ${this.formatRelationshipLevel(relationship.level)}\n`;
-    message += `• Total interactions: ${relationship.totalInteractions}\n`;
-    message += `• Trust score: ${(relationship.trustScore * 100).toFixed(0)}%\n`;
-    message += `• First met: ${new Date(relationship.firstInteraction).toLocaleDateString()}\n`;
+    // 関係性情報
+    message += '\n**私たちの関係:**\n';
+    message += `• レベル: ${this.formatRelationshipLevel(relationship.level)}\n`;
+    message += `• 総対話数: ${relationship.totalInteractions}\n`;
+    message += `• 信頼スコア: ${(relationship.trustScore * 100).toFixed(0)}%\n`;
+    message += `• 初回対話: ${new Date(relationship.firstInteraction).toLocaleDateString()}\n`;
     
-    // Inferred information (if high confidence)
+    // 推論された情報（高い確信度の場合）
     if (implicit.communicationStyle) {
-      message += '\n**Communication Style:**\n';
-      message += `• Preferred style: ${implicit.communicationStyle}\n`;
+      message += '\n**コミュニケーションスタイル:**\n';
+      message += `• 好みのスタイル: ${implicit.communicationStyle}\n`;
     }
     
     if (implicit.expertise.length > 0) {
-      message += `• Expertise areas: ${implicit.expertise.join(', ')}\n`;
+      message += `• 専門分野: ${implicit.expertise.join(', ')}\n`;
     }
     
-    // Data quality
-    message += `\n**Profile Quality:** ${this.formatDataQuality(meta.dataQuality)}`;
+    // データ品質
+    message += `\n**プロフィール品質:** ${this.formatDataQuality(meta.dataQuality)}`;
     
     return message;
   }
 
   private formatRelationshipLevel(level: string): string {
     const levelMap: Record<string, string> = {
-      'new_user': '🆕 New User',
-      'acquaintance': '👋 Acquaintance',
-      'familiar': '🤝 Familiar',
-      'friend': '😊 Friend',
-      'collaborator': '🌟 Close Collaborator'
+      'new_user': '🆕 新規ユーザー',
+      'acquaintance': '👋 知り合い',
+      'familiar': '🤝 親しい',
+      'friend': '😊 友人',
+      'collaborator': '🌟 親密な協力者'
     };
     return levelMap[level] || level;
   }
 
   private formatDataQuality(quality: string): string {
     const qualityMap: Record<string, string> = {
-      'low': '📊 Low (Add more information to improve)',
-      'medium': '📊📊 Medium (Good foundation)',
-      'high': '📊📊📊 High (Comprehensive profile)'
+      'low': '📊 低 (改善のために情報を追加してください)',
+      'medium': '📊📊 中 (良い基盤)',
+      'high': '📊📊📊 高 (包括的なプロフィール)'
     };
     return qualityMap[quality] || quality;
   }
@@ -406,17 +406,17 @@ Your data is stored securely and you have full control over it. Use these comman
     
     if (!filterString) return filters;
     
-    // Parse common filter keywords
-    if (filterString.includes('recent')) {
-      filters.dateRange = {
-        start: Date.now() - 7 * 24 * 60 * 60 * 1000, // Last 7 days
-        end: Date.now()
-      };
-    }
-    
-    if (filterString.includes('important')) {
-      filters.importance = { min: 0.7, max: 1.0 };
-    }
+          // 一般的なフィルターキーワードを解析
+      if (filterString.includes('最近')) {
+        filters.dateRange = {
+          start: Date.now() - 7 * 24 * 60 * 60 * 1000, // 過去7日間
+          end: Date.now()
+        };
+      }
+      
+      if (filterString.includes('重要')) {
+        filters.importance = { min: 0.7, max: 1.0 };
+      }
     
     if (filterString.includes('episodic')) {
       filters.type = [MemoryType.EPISODIC];
@@ -445,26 +445,32 @@ Your data is stored securely and you have full control over it. Use these comman
       if (!key || !value) continue;
       
       switch (key.toLowerCase()) {
+        case '名前':
         case 'name':
           updates.name = value;
           break;
+        case '年齢':
         case 'age':
           updates.age = parseInt(value);
           break;
+        case '場所':
         case 'location':
           updates.location = value;
           break;
+        case '職業':
         case 'occupation':
           updates.occupation = value;
           break;
+        case '興味':
         case 'interests':
           updates.interests = value.split(',').map(i => i.trim());
           break;
+        case '目標':
         case 'goals':
           updates.goals = value.split(',').map(g => g.trim());
           break;
         default:
-          // Store in preferences
+          // 設定に保存
           if (!updates.preferences) updates.preferences = {};
           updates.preferences[key] = value;
       }

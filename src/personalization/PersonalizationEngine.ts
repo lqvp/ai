@@ -13,8 +13,8 @@ import ContextEngine from './ContextEngine.js';
 import UserMemoryInterface from './UserMemoryInterface.js';
 
 /**
- * Personalization Engine
- * Central orchestrator for all personalization features
+ * パーソナライゼーションエンジン
+ * すべてのパーソナライゼーション機能の中央オーケストレーター
  */
 export default class PersonalizationEngine {
   private profileManager: UserProfileManager;
@@ -22,27 +22,27 @@ export default class PersonalizationEngine {
   private contextEngine: ContextEngine;
   private userInterface: UserMemoryInterface;
   
-  // Background task intervals
+  // バックグラウンドタスクの間隔
   private forgettingInterval: NodeJS.Timeout | null = null;
   private consolidationInterval: NodeJS.Timeout | null = null;
   
-  // Configuration
-  private readonly FORGETTING_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-  private readonly CONSOLIDATION_CHECK_MS = 30 * 60 * 1000; // 30 minutes
+  // 設定
+  private readonly FORGETTING_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24時間
+  private readonly CONSOLIDATION_CHECK_MS = 30 * 60 * 1000; // 30分
 
   constructor(private db: loki) {
-    // Initialize components
+    // コンポーネントを初期化
     this.profileManager = new UserProfileManager(db);
     this.memorySystem = new HybridMemorySystem(db);
     this.contextEngine = new ContextEngine(this.memorySystem, this.profileManager);
     this.userInterface = new UserMemoryInterface(this.memorySystem, this.profileManager);
     
-    // Start background tasks
+    // バックグラウンドタスクを開始
     this.startBackgroundTasks();
   }
 
   /**
-   * Process incoming message with personalization
+   * パーソナライゼーションを使用して受信メッセージを処理
    */
   @bindThis
   public async processMessage(
@@ -54,7 +54,7 @@ export default class PersonalizationEngine {
     personalizedPrompt?: PersonalizedPrompt;
     commandResult?: { success: boolean; message: string; data?: any };
   }> {
-    // Check if message is a command
+    // メッセージがコマンドかどうかをチェック
     if (message.startsWith('/')) {
       const commandResult = await this.userInterface.processCommand(userId, message);
       return { commandResult };

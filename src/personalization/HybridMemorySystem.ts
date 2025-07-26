@@ -17,20 +17,20 @@ import {
 } from './types.js';
 
 /**
- * Hybrid Memory System
- * Manages both short-term and long-term memories with intelligent retrieval and forgetting
+ * ハイブリッド記憶システム
+ * インテリジェントな検索と忘却機能を備えた短期および長期記憶を管理
  */
 export default class HybridMemorySystem {
   private memories: loki.Collection<Memory>;
   private shortTermMemories: loki.Collection<ShortTermMemory>;
   private vectorMemories: loki.Collection<VectorMemory>;
   
-  // Memory configuration
+  // 記憶設定
   private readonly MAX_WORKING_MEMORY_SIZE = 10;
   private readonly MAX_SHORT_TERM_SESSIONS = 100;
-  private readonly MEMORY_DECAY_RATE = 0.95; // Per month
+  private readonly MEMORY_DECAY_RATE = 0.95; // 月あたり
   private readonly IMPORTANCE_THRESHOLD = 0.3;
-  private readonly SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+  private readonly SESSION_TIMEOUT = 30 * 60 * 1000; // 30分
 
   constructor(private db: loki) {
     this.memories = this.db.getCollection('memories') || 
@@ -50,7 +50,7 @@ export default class HybridMemorySystem {
   }
 
   /**
-   * Store a new memory
+   * 新しい記憶を保存
    */
   @bindThis
   public async storeMemory(
@@ -90,7 +90,7 @@ export default class HybridMemorySystem {
   }
 
   /**
-   * Retrieve memories based on query
+   * クエリに基づいて記憶を取得
    */
   @bindThis
   public async queryMemories(query: MemoryQuery): Promise<Memory[]> {
