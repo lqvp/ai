@@ -323,7 +323,7 @@ export default class extends Module {
     // URLから情報を取得
     let youtubeURLs: string[] = [];
     let hasYoutubeUrl = false;
-    let urlContextUrls: string[] = [];
+    let hasNonYoutubeUrls = false;
 
     if (aiChat.question !== undefined) {
       const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
@@ -339,18 +339,17 @@ export default class extends Module {
             this.log('Normalized YouTube URL: ' + normalizedUrl);
             youtubeURLs.push(normalizedUrl);
             hasYoutubeUrl = true;
-            continue;
+          } else {
+            // YouTube以外のURLが含まれている
+            hasNonYoutubeUrls = true;
+            this.log('Non-YouTube URL detected: ' + url[0]);
           }
-
-          // Gemini URL Context機能を使用するため、URLを収集
-          urlContextUrls.push(url[0]);
-          this.log('URL added for context: ' + url[0]);
         }
       }
     }
 
     // URL Context使用時の指示を追加
-    if (urlContextUrls.length > 0) {
+    if (hasNonYoutubeUrls) {
       systemInstructionText += '\n\n質問にURLが含まれています。URL Contextツールを使用してURLの内容を取得し、その情報を参考にして回答してください。';
     }
 
@@ -442,14 +441,14 @@ export default class extends Module {
     }
 
     // URL Contextを設定（URLがある場合）
-    if (urlContextUrls.length > 0) {
+    if (hasNonYoutubeUrls) {
       if (!geminiOptions.tools) {
         geminiOptions.tools = [{ url_context: {} }];
       } else {
         // URL Context toolを追加
         geminiOptions.tools.push({ url_context: {} });
       }
-      this.log(`Added URL context tool for ${urlContextUrls.length} URLs`);
+      this.log('Added URL context tool for non-YouTube URLs');
     }
 
     let options = {

@@ -184,17 +184,24 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
       const map: Record<string, string> = {};
 
       // XML構造が期待通りであることを確認
-      if (!obj?.rss?.channel?.['ldWeather:source']?.pref) {
+      const prefs = obj?.rss?.channel?.['ldWeather:source']?.pref;
+      if (!prefs) {
         this.log('Unexpected XML structure in primary_area.xml');
         throw new Error('Failed to parse prefecture data from XML.');
       }
 
-      for (const pref of obj.rss.channel['ldWeather:source'].pref) {
+      // prefが配列でない場合は配列に変換
+      const prefArray = Array.isArray(prefs) ? prefs : [prefs];
+
+      for (const pref of prefArray) {
         const prefName = pref?.['@_title'];
         const cities = pref?.city;
-        if (!prefName || !Array.isArray(cities)) continue;
+        if (!prefName || !cities) continue;
 
-        for (const city of cities) {
+        // cityも配列でない場合は配列に変換
+        const cityArray = Array.isArray(cities) ? cities : [cities];
+
+        for (const city of cityArray) {
           const cityTitle = city?.['@_title'];
           const cityId = city?.['@_id'];
           if (!cityTitle || !cityId) continue;
