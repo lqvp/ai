@@ -184,13 +184,12 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
       const map: Record<string, string> = {};
 
       // XML構造が期待通りであることを確認
-      const prefs = obj?.rss?.channel?.['ldWeather:source']?.pref;
-      if (!Array.isArray(prefs)) {
-        console.error('Unexpected XML structure in primary_area.xml:', obj);
+      if (!obj?.rss?.channel?.['ldWeather:source']?.pref) {
+        this.log('Unexpected XML structure in primary_area.xml');
         throw new Error('Failed to parse prefecture data from XML.');
       }
 
-      for (const pref of prefs) {
+      for (const pref of obj.rss.channel['ldWeather:source'].pref) {
         const prefName = pref?.['@_title'];
         const cities = pref?.city;
         if (!prefName || !Array.isArray(cities)) continue;
@@ -215,7 +214,7 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
       this.prefMapCache = { data: map, fetchedAt: Date.now() };
       return map;
     } catch (e) {
-      console.error('Error fetching prefecture ID map:', e);
+      this.log(`Error fetching prefecture ID map: ${e}`);
       if (this.prefMapCache) return this.prefMapCache.data; // Fallback to old cache
       throw e;
     }
@@ -245,18 +244,18 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
       );
       const weatherData = response.data;
       if (weatherData?.error) {
-        console.error(
+        this.log(
           `Weather API error for areaId ${areaId}: ${weatherData.error}`
         );
         return null;
       }
       if (!weatherData?.forecasts || !weatherData?.location) {
-        console.error('Invalid weather data received:', weatherData);
+        this.log(`Invalid weather data received: ${JSON.stringify(weatherData)}`);
         return null;
       }
       return weatherData;
     } catch (e) {
-      console.error(`Error fetching weather data for areaId ${areaId}:`, e);
+      this.log(`Error fetching weather data for areaId ${areaId}: ${e}`);
       return null;
     }
   }
@@ -299,7 +298,7 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
     try {
       const areaId = await this.getAreaId(place);
       if (!areaId) {
-        console.warn(`Area ID not found for auto-note: ${place}`);
+        this.log(`Area ID not found for auto-note: ${place}`);
         return;
       }
 
@@ -309,7 +308,7 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
         !weatherData.forecasts ||
         weatherData.forecasts.length === 0
       ) {
-        console.warn(`No forecast data for auto-note: ${place}`);
+        this.log(`No forecast data for auto-note: ${place}`);
         return;
       }
 
@@ -331,7 +330,7 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
       const text = this.formatWeatherToMfm(weatherInfo);
       this.ai.api('notes/create', { text: text });
     } catch (e) {
-      console.error('Error in postWeatherNoteForAuto:', e);
+      this.log(`Error in postWeatherNoteForAuto: ${e}`);
     }
   }
 
@@ -354,9 +353,8 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
     try {
       areaId = await this.getAreaId(place);
     } catch (e) {
-      console.error(
-        `Error fetching prefIdMap for mentionHook (place: ${place}):`,
-        e
+      this.log(
+        `Error fetching prefIdMap for mentionHook (place: ${place}): ${e}`
       );
       msg.reply(serifs.weather.areaError);
       return { reaction: '❌' };

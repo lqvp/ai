@@ -557,7 +557,7 @@ export default class extends Module {
         // URL Context metadataを取得
         if (res_data.candidates[0].hasOwnProperty('urlContextMetadata')) {
           const urlMetadata = res_data.candidates[0].urlContextMetadata;
-          if (urlMetadata?.urlMetadata && urlMetadata.urlMetadata.length > 0) {
+          if (urlMetadata?.urlMetadata?.length > 0) {
             let urlContextInfo = '\n\n【URL Context情報】\n';
             for (const urlInfo of urlMetadata.urlMetadata) {
               if (urlInfo.retrievedUrl && urlInfo.urlRetrievalStatus === 'URL_RETRIEVAL_STATUS_SUCCESS') {
@@ -796,7 +796,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async contextHook(key: any, msg: Message) {
+  private async contextHook(key: string, msg: Message) {
     this.log('contextHook...');
     if (msg.text == null) return false;
 
@@ -1261,7 +1261,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async timeoutCallback(data) {
+  private async timeoutCallback(data: { id: string; isChat: boolean; userId: string }) {
     this.log('timeoutCallback...');
     let exist: AiChatHist | null = null;
 

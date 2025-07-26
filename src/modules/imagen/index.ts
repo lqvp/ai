@@ -40,11 +40,17 @@ const DEFAULTS = {
 export default class extends Module {
   public readonly name = 'imagen';
 
+  /**
+   * APIキーを取得（imagen.apiKeyがない場合はgemini.apiKeyを使用）
+   */
+  private get apiKey(): string | undefined {
+    return config.imagen?.apiKey || config.gemini?.apiKey;
+  }
+
   @bindThis
   public install() {
     // Imagen機能が有効かチェック
-    const apiKey = config.imagen?.apiKey || config.gemini?.apiKey;
-    if (!config.imagen?.enabled || !apiKey) {
+    if (!config.imagen?.enabled || !this.apiKey) {
       this.log('Imagen機能が無効、またはAPIキーが設定されていません');
       return {};
     }
@@ -73,9 +79,8 @@ export default class extends Module {
 
   @bindThis
   private async generateImage(prompt: string): Promise<ImagenApiResponse> {
-    // APIキーの存在確認（imagen.apiKeyがない場合はgemini.apiKeyを使用）
-    const apiKey = config.imagen?.apiKey || config.gemini?.apiKey;
-    if (!apiKey) {
+    // APIキーの存在確認
+    if (!this.apiKey) {
       return {
         error: {
           code: 500,
@@ -102,7 +107,7 @@ export default class extends Module {
       const response = await got
         .post(apiUrl, {
           headers: {
-            'x-goog-api-key': apiKey,
+            'x-goog-api-key': this.apiKey,
             'Content-Type': 'application/json',
           },
           json: requestBody,
@@ -169,9 +174,8 @@ export default class extends Module {
     }
 
     // Imagen機能が有効かチェック
-    const apiKey = config.imagen?.apiKey || config.gemini?.apiKey;
-    if (!config.imagen?.enabled || !apiKey) {
-      msg.reply('Imagen機能は現在利用できません。');
+    if (!config.imagen?.enabled || !this.apiKey) {
+      msg.reply(serifs.aichat.nothing('imagen'));
       return false;
     }
 
