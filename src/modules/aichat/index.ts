@@ -389,6 +389,10 @@ export default class extends Module {
     // ファイルが存在する場合、ファイルを添付して問い合わせ
     parts = [{ text: aiChat.question }];
 
+    // Debug: Log the exact content being sent
+    this.log(`DEBUG: Question text in parts: ${aiChat.question}`);
+    this.log(`DEBUG: Non-YouTube URLs found: ${nonYoutubeUrls.join(', ')}`);
+
     // YouTubeのURLをfileDataとして追加
     for (const youtubeURL of youtubeURLs) {
       parts.push({
