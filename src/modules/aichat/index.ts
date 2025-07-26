@@ -8,7 +8,6 @@ import { Note } from '@/misskey/note.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
-import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
 
 type AiChat = {
@@ -88,23 +87,6 @@ type ApiErrorResponse = {
 };
 
 type GeminiApiResponse = string | ApiErrorResponse | null;
-
-type UrlPreview = {
-  title: string;
-  icon: string;
-  description: string;
-  thumbnail: string;
-  player: {
-    url: string;
-    width: number;
-    height: number;
-    allow: [];
-  };
-  sitename: string;
-  sensitive: boolean;
-  activityPub: string;
-  url: string;
-};
 
 // API関連定数
 const TYPE_GEMINI = 'gemini';
@@ -341,6 +323,7 @@ export default class extends Module {
     // URLから情報を取得
     let youtubeURLs: string[] = [];
     let hasYoutubeUrl = false;
+    let urlContextUrls: string[] = [];
 
     if (aiChat.question !== undefined) {
       const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
@@ -359,45 +342,16 @@ export default class extends Module {
             continue;
           }
 
-          let result: unknown = null;
-          try {
-            result = await urlToJson(url[0]);
-          } catch (err: unknown) {
-            systemInstructionText +=
-              '補足として提供されたURLは無効でした:URL=>' + url[0];
-            this.log('Skip url becase error in urlToJson');
-            continue;
-          }
-          const urlpreview: UrlPreview = result as UrlPreview;
-          if (urlpreview.title) {
-            systemInstructionText +=
-              '補足として提供されたURLの情報は次の通り:URL=>' +
-              urlpreview.url +
-              'サイト名(' +
-              urlpreview.sitename +
-              ')、';
-            if (!urlpreview.sensitive) {
-              systemInstructionText +=
-                'タイトル(' +
-                urlpreview.title +
-                ')、' +
-                '説明(' +
-                urlpreview.description +
-                ')、' +
-                '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。';
-              this.log('urlpreview.sitename:' + urlpreview.sitename);
-              this.log('urlpreview.title:' + urlpreview.title);
-              this.log('urlpreview.description:' + urlpreview.description);
-            } else {
-              systemInstructionText +=
-                'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。';
-            }
-          } else {
-            // 多分ここにはこないが念のため
-            this.log('urlpreview.title is nothing');
-          }
+          // Gemini URL Context機能を使用するため、URLを収集
+          urlContextUrls.push(url[0]);
+          this.log('URL added for context: ' + url[0]);
         }
       }
+    }
+
+    // URL Context使用時の指示を追加
+    if (urlContextUrls.length > 0) {
+      systemInstructionText += '\n\n質問にURLが含まれています。URL Contextツールを使用してURLの内容を取得し、その情報を参考にして回答してください。';
     }
 
     // 保存されたYouTubeのURLを会話履歴から取得
@@ -485,6 +439,17 @@ export default class extends Module {
     // YouTubeURLがある場合はグラウンディングを無効化
     if (aiChat.grounding && !hasYoutubeUrl) {
       geminiOptions.tools = [{ google_search: {} }];
+    }
+
+    // URL Contextを設定（URLがある場合）
+    if (urlContextUrls.length > 0) {
+      if (!geminiOptions.tools) {
+        geminiOptions.tools = [{ url_context: {} }];
+      } else {
+        // URL Context toolを追加
+        geminiOptions.tools.push({ url_context: {} });
+      }
+      this.log(`Added URL context tool for ${urlContextUrls.length} URLs`);
     }
 
     let options = {
@@ -588,6 +553,24 @@ export default class extends Module {
           }
         }
         responseText += groundingMetadata;
+        
+        // URL Context metadataを取得
+        if (res_data.candidates[0].hasOwnProperty('urlContextMetadata')) {
+          const urlMetadata = res_data.candidates[0].urlContextMetadata;
+          if (urlMetadata?.urlMetadata && urlMetadata.urlMetadata.length > 0) {
+            let urlContextInfo = '\n\n【URL Context情報】\n';
+            for (const urlInfo of urlMetadata.urlMetadata) {
+              if (urlInfo.retrievedUrl && urlInfo.urlRetrievalStatus === 'URL_RETRIEVAL_STATUS_SUCCESS') {
+                urlContextInfo += `✓ ${urlInfo.retrievedUrl}\n`;
+                this.log(`URL Context retrieved: ${urlInfo.retrievedUrl}`);
+              } else if (urlInfo.retrievedUrl) {
+                urlContextInfo += `✗ ${urlInfo.retrievedUrl} (取得失敗)\n`;
+                this.log(`URL Context failed: ${urlInfo.retrievedUrl} - ${urlInfo.urlRetrievalStatus}`);
+              }
+            }
+            responseText += urlContextInfo;
+          }
+        }
       }
     } catch (err: unknown) {
       this.log('Error By Call Gemini');

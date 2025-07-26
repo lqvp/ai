@@ -118,7 +118,7 @@ export default class WeatherModule extends Module {
     let body = `<center>
 ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
 ---
-今日の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}」みたいですよ！
+${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}」みたいですよ！
 
 `;
 
