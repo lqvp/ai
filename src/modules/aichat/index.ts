@@ -10,6 +10,7 @@ import serifs from '@/serifs.js';
 import urlToBase64 from '@/utils/url2base64.js';
 import urlToJson from '@/utils/url2json.js';
 import { plain } from '@/utils/mfm.js';
+import PersonalizationEngine from '@/personalization/PersonalizationEngine.js';
 
 type AiChat = {
   question: string;
@@ -132,6 +133,7 @@ export default class extends Module {
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
+  private personalizationEngine!: PersonalizationEngine;
 
   // 型ガード関数
   private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
@@ -148,6 +150,10 @@ export default class extends Module {
     this.aichatHist = this.ai.getCollection('aichatHist', {
       indices: ['postId', 'originalNoteId'],
     });
+
+    // パーソナライゼーションエンジンを初期化
+    this.personalizationEngine = new PersonalizationEngine(this.ai.db);
+    this.log('パーソナライゼーションエンジンが初期化されました');
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
@@ -267,7 +273,9 @@ export default class extends Module {
   @bindThis
   private async genTextByGemini(
     aiChat: AiChat,
-    files: Base64File[]
+    files: Base64File[],
+    userId?: string,
+    sessionId?: string
   ): Promise<GeminiApiResponse> {
     this.log('Generate Text By Gemini...');
     let parts: GeminiParts = [];
@@ -294,7 +302,37 @@ export default class extends Module {
       '\n\nまた、現在日時は' +
       now +
       'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
-    if (aiChat.friendName != undefined) {
+    
+    // userIdが提供されている場合、パーソナライゼーションを統合
+    let personalizedContext = '';
+    if (userId && this.personalizationEngine) {
+      try {
+        const personalizationResult = await this.personalizationEngine.processMessage(
+          userId,
+          aiChat.question,
+          sessionId
+        );
+        
+        if (personalizationResult.commandResult) {
+          // コマンドの場合、コマンド結果を直接返す
+          return personalizationResult.commandResult.message;
+        }
+        
+        if (personalizationResult.personalizedPrompt) {
+          // パーソナライズされたコンテキストを構築
+          personalizedContext = this.personalizationEngine.buildPromptWithContext(
+            personalizationResult.personalizedPrompt,
+            aiChat.question
+          );
+        }
+      } catch (error) {
+        this.log('パーソナライゼーションエラー: ' + error);
+      }
+    }
+    
+    if (personalizedContext) {
+      systemInstructionText = personalizedContext + '\n\n' + systemInstructionText;
+    } else if (aiChat.friendName != undefined) {
       systemInstructionText +=
         'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
     }
@@ -1091,7 +1129,7 @@ export default class extends Module {
     };
 
     const base64Files: Base64File[] = [];
-    const text = await this.genTextByGemini(aiChat, base64Files);
+    const       text = await this.genTextByGemini(aiChat, base64Files, msg.userId, exist.postId);
 
     if (text) {
       this.ai.post({ text: text + ' #aichat' });
@@ -1187,7 +1225,7 @@ export default class extends Module {
       base64Files.push(...exist.quotedFiles);
     }
 
-    text = await this.genTextByGemini(aiChat, base64Files);
+    text = await this.genTextByGemini(aiChat, base64Files, msg.userId, exist.postId);
 
     if (this.isApiError(text)) {
       this.log('The result is invalid due to an HTTP error.');
@@ -1228,7 +1266,7 @@ export default class extends Module {
       );
     }
 
-    msg.reply(serifs.aichat.post(responseText)).then((reply) => {
+    msg.reply(serifs.aichat.post(responseText)).then(async (reply) => {
       if (!exist.history) {
         exist.history = [];
       }
@@ -1236,6 +1274,20 @@ export default class extends Module {
       exist.history.push({ role: 'model', content: text as string });
       if (exist.history.length > DEFAULTS.MAX_HISTORY_LENGTH) {
         exist.history.shift();
+      }
+      
+      // パーソナライゼーションシステムに応答を保存
+      if (this.personalizationEngine && msg.userId) {
+        try {
+          await this.personalizationEngine.processResponse(
+            msg.userId,
+            exist.postId,
+            question,
+            text as string
+          );
+        } catch (error) {
+          this.log('パーソナライゼーション応答の保存エラー: ' + error);
+        }
       }
 
       const newRecord: AiChatHist = {
