@@ -118,19 +118,19 @@ describe('Personalization System Tests', () => {
   });
 
   describe('User Commands', () => {
-    test('should handle /プロフィール command', async () => {
+    test('should handle profile command', async () => {
       // Create some history
       await engine.processMessage(testUserId, 'My name is Charlie');
       await engine.processMessage(testUserId, 'I enjoy reading books');
       
-      const result = await engine.processMessage(testUserId, '/プロフィール');
+      const result = await engine.processMessage(testUserId, 'profile');
       
       expect(result.commandResult?.success).toBe(true);
       expect(result.commandResult?.message).toContain('あなたのプロフィール');
       expect(result.commandResult?.message).toContain('Charlie');
     });
 
-    test('should handle /記憶 command', async () => {
+    test('should handle memories command', async () => {
       sessionId = await engine.createSession(testUserId);
       
       // Create some memories
@@ -140,13 +140,13 @@ describe('Personalization System Tests', () => {
         sessionId
       );
       
-      const result = await engine.processMessage(testUserId, '/記憶');
+      const result = await engine.processMessage(testUserId, 'memories');
       
       expect(result.commandResult?.success).toBe(true);
       expect(result.commandResult?.message).toContain('あなたの記憶');
     });
 
-    test('should handle /忘れる command', async () => {
+    test('should handle forget command', async () => {
       sessionId = await engine.createSession(testUserId);
       
       // Store a memory
@@ -159,31 +159,31 @@ describe('Personalization System Tests', () => {
       // Forget it
       const result = await engine.processMessage(
         testUserId,
-        '/忘れる password'
+        'forget password'
       );
       
       expect(result.commandResult?.success).toBe(true);
       expect(result.commandResult?.message).toContain('記憶を忘れました');
     });
 
-    test('should handle /情報更新 command', async () => {
+    test('should handle update_info command', async () => {
       const result = await engine.processMessage(
         testUserId,
-        '/情報更新 名前=太郎 興味=音楽,アート 場所=東京'
+        'update_info name=太郎 interests=音楽,アート location=東京'
       );
       
       expect(result.commandResult?.success).toBe(true);
       expect(result.commandResult?.message).toContain('更新しました');
       
       // Verify update
-      const profileResult = await engine.processMessage(testUserId, '/プロフィール');
+      const profileResult = await engine.processMessage(testUserId, 'profile');
       expect(profileResult.commandResult?.message).toContain('太郎');
       expect(profileResult.commandResult?.message).toContain('音楽, アート');
       expect(profileResult.commandResult?.message).toContain('東京');
     });
 
-    test('should handle /ヘルプ command', async () => {
-      const result = await engine.processMessage(testUserId, '/ヘルプ');
+    test('should handle help command', async () => {
+      const result = await engine.processMessage(testUserId, 'help');
       
       expect(result.commandResult?.success).toBe(true);
       expect(result.commandResult?.message).toContain('記憶管理コマンド');

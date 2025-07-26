@@ -15,15 +15,15 @@ import UserProfileManager from './UserProfileManager.js';
  * ユーザーが個人データと記憶を制御できる機能を提供
  */
 export default class UserMemoryInterface {
-  // コマンドパターン
+  // コマンドパターン（複数言語対応）
   private readonly COMMANDS = {
-    SHOW_MEMORIES: /^\/記憶?\s*(.*)$/i,
-    FORGET: /^\/忘れる\s+(.+)$/i,
-    UPDATE_INFO: /^\/情報更新\s+(.+)$/i,
-    SHOW_PROFILE: /^\/プロフィール$/i,
-    EXPORT_DATA: /^\/データエクスポート$/i,
-    DELETE_ALL: /^\/全データ削除$/i,
-    HELP: /^\/ヘルプ$/i
+    SHOW_MEMORIES: /^(memories?|記憶|思い出)\s*(.*)$/i,
+    FORGET: /^(forget|忘れる|忘却)\s+(.+)$/i,
+    UPDATE_INFO: /^(update_info|情報更新|update)\s+(.+)$/i,
+    SHOW_PROFILE: /^(profile|プロフィール|prof)$/i,
+    EXPORT_DATA: /^(export_data|データエクスポート|export)$/i,
+    DELETE_ALL: /^(delete_all_data|全データ削除|delete_all)$/i,
+    HELP: /^(help|ヘルプ|h|\?)$/i
   };
 
   constructor(
@@ -45,13 +45,13 @@ export default class UserMemoryInterface {
       if (match) {
         switch (cmdName) {
           case 'SHOW_MEMORIES':
-            return await this.showMemories(userId, match[1]);
+            return await this.showMemories(userId, match[2] || '');
           
           case 'FORGET':
-            return await this.forgetMemory(userId, match[1]);
+            return await this.forgetMemory(userId, match[2] || '');
           
           case 'UPDATE_INFO':
-            return await this.updateInfo(userId, match[1]);
+            return await this.updateInfo(userId, match[2] || '');
           
           case 'SHOW_PROFILE':
             return await this.showProfile(userId);
@@ -71,10 +71,10 @@ export default class UserMemoryInterface {
       }
     }
     
-    return {
-      success: false,
-      message: 'コマンドが認識されませんでした。/ヘルプ で利用可能なコマンドを確認してください。'
-    };
+          return {
+        success: false,
+        message: 'コマンドが認識されませんでした。help または ヘルプ で利用可能なコマンドを確認してください。'
+      };
   }
 
   /**
@@ -196,7 +196,7 @@ export default class UserMemoryInterface {
       if (Object.keys(updates).length === 0) {
         return {
           success: false,
-          message: '無効な更新形式です。使用例: /情報更新 名前=太郎 興味=プログラミング,音楽'
+          message: '無効な更新形式です。使用例: update_info name=太郎 interests=プログラミング,音楽'
         };
       }
       
@@ -304,23 +304,23 @@ export default class UserMemoryInterface {
 📖 **記憶管理コマンド**
 
 **データの確認:**
-• \`/記憶 [フィルター]\` - 保存された記憶を表示
-  - 例: \`/記憶\`, \`/記憶 最近\`, \`/記憶 重要\`
-• \`/プロフィール\` - ユーザープロフィールを表示
-• \`/データエクスポート\` - すべてのデータをJSON形式でエクスポート
+• \`memories\` / \`記憶\` / \`思い出\` [フィルター] - 保存された記憶を表示
+  - 例: \`memories\`, \`記憶 最近\`, \`memories recent\`
+• \`profile\` / \`プロフィール\` / \`prof\` - ユーザープロフィールを表示
+• \`export_data\` / \`データエクスポート\` / \`export\` - すべてのデータをJSON形式でエクスポート
 
 **データの管理:**
-• \`/忘れる <検索語>\` - 特定の記憶を削除
-  - 例: \`/忘れる プロジェクトの締切\`
-• \`/情報更新 <フィールド=値>\` - 情報を更新
-  - 例: \`/情報更新 名前=太郎 興味=音楽,アート\`
-• \`/全データ削除\` - すべてのデータを完全に削除
+• \`forget\` / \`忘れる\` / \`忘却\` <検索語> - 特定の記憶を削除
+  - 例: \`forget password\`, \`忘れる プロジェクトの締切\`
+• \`update_info\` / \`情報更新\` / \`update\` <フィールド=値> - 情報を更新
+  - 例: \`update_info name=太郎 interests=音楽,アート\`
+• \`delete_all_data\` / \`全データ削除\` / \`delete_all\` - すべてのデータを完全に削除
 
 **情報更新で使用可能なフィールド:**
-• 名前, 年齢, 場所, 職業
-• 興味 (カンマ区切り)
-• 目標 (カンマ区切り)
-• 設定 (キー=値のペア)
+• name/名前, age/年齢, location/場所, occupation/職業
+• interests/興味 (カンマ区切り)
+• goals/目標 (カンマ区切り)
+• preferences/設定 (キー=値のペア)
 
 **プライバシーに関するお知らせ:**
 あなたのデータは安全に保存され、完全に管理できます。これらのコマンドを使用して、私が覚えている内容を管理してください。

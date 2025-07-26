@@ -55,8 +55,8 @@ export default class PersonalizationEngine {
     commandResult?: { success: boolean; message: string; data?: any };
   }> {
     // メッセージがコマンドかどうかをチェック
-    if (message.startsWith('/')) {
-      const commandResult = await this.userInterface.processCommand(userId, message);
+    const commandResult = await this.userInterface.processCommand(userId, message);
+    if (commandResult.success || message.match(/^(help|ヘルプ|h|\?|memories?|記憶|思い出|forget|忘れる|忘却|update_info|情報更新|update|profile|プロフィール|prof|export_data|データエクスポート|export|delete_all_data|全データ削除|delete_all)/i)) {
       return { commandResult };
     }
     
