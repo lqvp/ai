@@ -198,12 +198,6 @@ export default class extends Module {
       );
       if (firstImage?.inlineData) {
         this.log(`First image MIME type: ${firstImage.inlineData.mimeType}`);
-        this.log(
-          `First image base64 preview: ${firstImage.inlineData.data.substring(
-            0,
-            100
-          )}...`
-        );
       }
 
       const response = await got

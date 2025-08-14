@@ -578,7 +578,7 @@ export default class extends Module {
       },
       json: geminiOptions,
     };
-    this.log(JSON.stringify(options));
+    // this.log(JSON.stringify(options));
     let res_data: any = null;
     let responseText: string = '';
     try {

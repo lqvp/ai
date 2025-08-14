@@ -118,7 +118,9 @@ export default class WeatherModule extends Module {
     let body = `<center>
 ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
 ---
-${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}」みたいですよ！
+${info.dateLabel}の天気は「${mfm.bold(
+      mfm.color(info.telop, themeColor)
+    )}」みたいですよ！
 
 `;
 
@@ -132,10 +134,22 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
 
     if (info.rain) {
       body += `☔ ${mfm.bold('降水確率')}
-0-6時:  ${mfm.color(info.rain.T00_06, this.getRainProbabilityColor(info.rain.T00_06))}
-6-12時: ${mfm.color(info.rain.T06_12, this.getRainProbabilityColor(info.rain.T06_12))}
-12-18時:${mfm.color(info.rain.T12_18, this.getRainProbabilityColor(info.rain.T12_18))}
-18-24時:${mfm.color(info.rain.T18_24, this.getRainProbabilityColor(info.rain.T18_24))}
+0-6時:  ${mfm.color(
+        info.rain.T00_06,
+        this.getRainProbabilityColor(info.rain.T00_06)
+      )}
+6-12時: ${mfm.color(
+        info.rain.T06_12,
+        this.getRainProbabilityColor(info.rain.T06_12)
+      )}
+12-18時:${mfm.color(
+        info.rain.T12_18,
+        this.getRainProbabilityColor(info.rain.T12_18)
+      )}
+18-24時:${mfm.color(
+        info.rain.T18_24,
+        this.getRainProbabilityColor(info.rain.T18_24)
+      )}
 
 `;
     }
@@ -213,8 +227,8 @@ ${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}�
           }
         }
         // 県レベルのマッピングも追加（最初の都市を代表として）
-        if (cities.length > 0 && cities[0]?.['@_id']) {
-          map[prefName] = cities[0]['@_id'];
+        if (cityArray.length > 0 && cityArray[0]?.['@_id']) {
+          map[prefName] = cityArray[0]['@_id'];
         }
       }
 
