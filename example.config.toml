@@ -132,7 +132,7 @@ minPostLevel = 2
 # Imagen設定
 [imagen]
 enabled = true # Imagen機能を有効化
-apiKey = "token" # Imagen APIキー
+apiKey = "token" # Imagen APIキー（省略時はgemini.apiKeyを使用）
 model = "imagen-3.0-generate-002" # 使用するモデル imagen-4.0-ultra-generate-preview-06-06が一番強い
 
 # 情報モジュール設定

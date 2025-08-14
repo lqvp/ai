@@ -118,7 +118,7 @@ export default class WeatherModule extends Module {
     let body = `<center>
 ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
 ---
-今日の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}」みたいですよ！
+${info.dateLabel}の天気は「${mfm.bold(mfm.color(info.telop, themeColor))}」みたいですよ！
 
 `;
 
@@ -185,17 +185,23 @@ ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
 
       // XML構造が期待通りであることを確認
       const prefs = obj?.rss?.channel?.['ldWeather:source']?.pref;
-      if (!Array.isArray(prefs)) {
-        console.error('Unexpected XML structure in primary_area.xml:', obj);
+      if (!prefs) {
+        this.log('Unexpected XML structure in primary_area.xml');
         throw new Error('Failed to parse prefecture data from XML.');
       }
 
-      for (const pref of prefs) {
+      // prefが配列でない場合は配列に変換
+      const prefArray = Array.isArray(prefs) ? prefs : [prefs];
+
+      for (const pref of prefArray) {
         const prefName = pref?.['@_title'];
         const cities = pref?.city;
-        if (!prefName || !Array.isArray(cities)) continue;
+        if (!prefName || !cities) continue;
 
-        for (const city of cities) {
+        // cityも配列でない場合は配列に変換
+        const cityArray = Array.isArray(cities) ? cities : [cities];
+
+        for (const city of cityArray) {
           const cityTitle = city?.['@_title'];
           const cityId = city?.['@_id'];
           if (!cityTitle || !cityId) continue;
@@ -215,7 +221,7 @@ ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
       this.prefMapCache = { data: map, fetchedAt: Date.now() };
       return map;
     } catch (e) {
-      console.error('Error fetching prefecture ID map:', e);
+      this.log(`Error fetching prefecture ID map: ${e}`);
       if (this.prefMapCache) return this.prefMapCache.data; // Fallback to old cache
       throw e;
     }
@@ -245,18 +251,20 @@ ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
       );
       const weatherData = response.data;
       if (weatherData?.error) {
-        console.error(
+        this.log(
           `Weather API error for areaId ${areaId}: ${weatherData.error}`
         );
         return null;
       }
       if (!weatherData?.forecasts || !weatherData?.location) {
-        console.error('Invalid weather data received:', weatherData);
+        this.log(
+          `Invalid weather data received: ${JSON.stringify(weatherData)}`
+        );
         return null;
       }
       return weatherData;
     } catch (e) {
-      console.error(`Error fetching weather data for areaId ${areaId}:`, e);
+      this.log(`Error fetching weather data for areaId ${areaId}: ${e}`);
       return null;
     }
   }
@@ -299,7 +307,7 @@ ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
     try {
       const areaId = await this.getAreaId(place);
       if (!areaId) {
-        console.warn(`Area ID not found for auto-note: ${place}`);
+        this.log(`Area ID not found for auto-note: ${place}`);
         return;
       }
 
@@ -309,7 +317,7 @@ ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
         !weatherData.forecasts ||
         weatherData.forecasts.length === 0
       ) {
-        console.warn(`No forecast data for auto-note: ${place}`);
+        this.log(`No forecast data for auto-note: ${place}`);
         return;
       }
 
@@ -331,7 +339,7 @@ ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
       const text = this.formatWeatherToMfm(weatherInfo);
       this.ai.api('notes/create', { text: text });
     } catch (e) {
-      console.error('Error in postWeatherNoteForAuto:', e);
+      this.log(`Error in postWeatherNoteForAuto: ${e}`);
     }
   }
 
@@ -354,9 +362,8 @@ ${mfm.bold(mfm.color(title, themeColor))} ${emoji}
     try {
       areaId = await this.getAreaId(place);
     } catch (e) {
-      console.error(
-        `Error fetching prefIdMap for mentionHook (place: ${place}):`,
-        e
+      this.log(
+        `Error fetching prefIdMap for mentionHook (place: ${place}): ${e}`
       );
       msg.reply(serifs.weather.areaError);
       return { reaction: '❌' };
