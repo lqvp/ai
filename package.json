@@ -31,7 +31,7 @@
 		"days": "1.1.1",
 		"fast-xml-parser": "5.2.5",
 		"formdata-node": "6.0.3",
-		"got": "14.4.8",
+		"got": "14.4.9",
 		"lokijs": "1.5.12",
 		"memory-streams": "0.1.3",
 		"misskey-js": "2025.9.0",
