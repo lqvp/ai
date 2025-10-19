@@ -48,6 +48,7 @@ import VeoModule from './modules/veo/index.js';
 import InfoModule from './modules/info/index.js';
 import ReactionConfigModule from './modules/reaction-config/index.js';
 import UpdateCheckerModule from './modules/update-checker/index.js';
+import WikipediaRandomModule from './modules/wikipedia/index.js';
 
 console.log('   __    ____  _____  ___ ');
 console.log('  /__\\  (_  _)(  _  )/ __)');
@@ -132,6 +133,7 @@ promiseRetry(
       new VeoModule(),
       new InfoModule(),
       new UpdateCheckerModule(),
+      new WikipediaRandomModule(),
     ]);
   })
   .catch((e) => {
