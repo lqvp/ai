@@ -27,7 +27,7 @@
 		"@types/ws": "8.18.1",
 		"axios": "1.13.1",
 		"chalk": "5.6.2",
-		"dayjs": "1.11.18",
+		"dayjs": "1.11.19",
 		"days": "1.1.1",
 		"fast-xml-parser": "5.3.0",
 		"formdata-node": "6.0.3",
