@@ -29,7 +29,7 @@
 		"chalk": "5.6.2",
 		"dayjs": "1.11.19",
 		"days": "1.1.1",
-		"fast-xml-parser": "5.3.1",
+		"fast-xml-parser": "5.3.2",
 		"formdata-node": "6.0.3",
 		"got": "14.6.3",
 		"lokijs": "1.5.12",
