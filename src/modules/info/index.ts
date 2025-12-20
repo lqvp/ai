@@ -7,7 +7,7 @@ import type DatabaseManager from '@/database/DatabaseManager.js';
 import * as fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { resolveInfoFeatureFlags } from './feature-flags.js';
+import { resolveInfoFeatureFlags, type InfoFeatureFlags } from './feature-flags.js';
 
 // 型定義
 declare namespace NodeJS {
@@ -288,8 +288,7 @@ function formatBooleanSetting(value: boolean | undefined): string {
   return value ? DEFAULTS.enabled : DEFAULTS.disabled;
 }
 
-function formatBasicFeatures(): string {
-  const flags = resolveInfoFeatureFlags(config);
+function formatBasicFeatures(flags: InfoFeatureFlags): string {
   const lines: string[] = [
     CONFIG_LABELS.sections.basicFeatures,
     `- ${CONFIG_LABELS.basic.keywordEnabled}: ${formatBooleanSetting(
@@ -317,8 +316,7 @@ function formatBasicFeatures(): string {
   return lines.join('\n') + '\n';
 }
 
-function formatGameFeatures(): string {
-  const flags = resolveInfoFeatureFlags(config);
+function formatGameFeatures(flags: InfoFeatureFlags): string {
   const lines: string[] = [
     CONFIG_LABELS.sections.gameFeatures,
     `- ${CONFIG_LABELS.game.mazeEnable}: ${formatBooleanSetting(
@@ -510,10 +508,11 @@ function formatOtherSettings(): string {
 }
 
 function formatSafeConfigInfo(): string {
+  const flags = resolveInfoFeatureFlags(config);
   let configInfo = `\n⚙️ **設定情報**\n`;
 
-  configInfo += formatBasicFeatures();
-  configInfo += formatGameFeatures();
+  configInfo += formatBasicFeatures(flags);
+  configInfo += formatGameFeatures(flags);
   configInfo += formatPostSettings();
   configInfo += formatAIFeatures();
   configInfo += formatEarthquakeSettings();

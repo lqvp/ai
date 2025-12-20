@@ -10,11 +10,7 @@ export type InfoFeatureFlags = {
   poll: boolean;
 };
 
-function isEnabledByDefaultUnlessFalse(value: boolean | undefined): boolean {
-  return value !== false;
-}
-
-export function resolveInfoFeatureFlags(cfg: {
+export type FeatureFlagsConfig = {
   keywordEnabled?: boolean;
   reversiEnabled?: boolean;
   notingEnabled?: boolean;
@@ -24,7 +20,13 @@ export function resolveInfoFeatureFlags(cfg: {
   checkEmojisEnabled?: boolean;
   mazeEnable?: boolean;
   pollEnable?: boolean;
-}): InfoFeatureFlags {
+};
+
+function isEnabledByDefaultUnlessFalse(value: boolean | undefined): boolean {
+  return value !== false;
+}
+
+export function resolveInfoFeatureFlags(cfg: FeatureFlagsConfig): InfoFeatureFlags {
   return {
     keywordSearch: cfg.keywordEnabled === true,
     reversi: cfg.reversiEnabled === true,
@@ -37,4 +39,3 @@ export function resolveInfoFeatureFlags(cfg: {
     poll: cfg.pollEnable === true,
   };
 }
-
