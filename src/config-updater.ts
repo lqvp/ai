@@ -7,8 +7,27 @@ type Config = {
   [key: string]: any; // その他の設定項目
 };
 
-function loadConfigTemplate(): Config {
-  const templatePath = resolve('./example.config.toml');
+export type ConfigCheckLogger = Pick<typeof console, 'log' | 'error'>;
+
+export type StartupConfigCheckOptions = {
+  cwd?: string;
+  configPath?: string;
+  templatePath?: string;
+  logger?: ConfigCheckLogger;
+  exit?: (code: number) => never;
+};
+
+function resolvePathFromOptions(
+  opts: StartupConfigCheckOptions | undefined,
+  kind: 'config' | 'template'
+): string {
+  const cwd = opts?.cwd ?? process.cwd();
+  if (kind === 'config') return opts?.configPath ?? resolve(cwd, 'config.toml');
+  return opts?.templatePath ?? resolve(cwd, 'example.config.toml');
+}
+
+function loadConfigTemplate(options?: StartupConfigCheckOptions): Config {
+  const templatePath = resolvePathFromOptions(options, 'template');
 
   if (!existsSync(templatePath)) {
     throw new Error(
@@ -99,42 +118,46 @@ function formatValuePreview(value: any): string {
 /**
  * 設定ファイルの差分チェックと通知
  */
-export function checkMissingConfigKeys(userConfig: Config): Config {
-  console.log('🔍 設定ファイルチェックを開始します');
+export function checkMissingConfigKeys(
+  userConfig: Config,
+  options?: StartupConfigCheckOptions
+): Config {
+  const logger = options?.logger ?? console;
+  logger.log('🔍 設定ファイルチェックを開始します');
 
   try {
     // テンプレートを読み込み
-    const template = loadConfigTemplate();
+    const template = loadConfigTemplate(options);
 
     // 不足しているキーを検出
     const missingKeys = findMissingKeys(userConfig, template);
 
     if (missingKeys.length === 0) {
-      console.log('✅ 設定ファイルは完全です');
+      logger.log('✅ 設定ファイルは完全です');
       return userConfig;
     }
 
     if (missingKeys.length > 0) {
-      console.log(
+      logger.log(
         `\n📋 以下の設定項目が不足しています (${missingKeys.length}個):`
       );
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
       missingKeys.forEach((key) => {
         const defaultValue = getNestedValue(template, key);
         const valuePreview = formatValuePreview(defaultValue);
-        console.log(`   📝 ${key} = ${valuePreview}`);
+        logger.log(`   📝 ${key} = ${valuePreview}`);
       });
 
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('💡 これらの設定を config.toml に追加することをお勧めします');
-      console.log('📖 詳細は example.config.toml を参照してください');
+      logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      logger.log('💡 これらの設定を config.toml に追加することをお勧めします');
+      logger.log('📖 詳細は example.config.toml を参照してください');
     }
 
     return userConfig;
   } catch (error) {
-    console.error('❌ 設定差分チェック中にエラーが発生しました:', error);
-    console.log('⚠️  設定チェックをスキップして起動を続行します');
+    logger.error('❌ 設定差分チェック中にエラーが発生しました:', error);
+    logger.log('⚠️  設定チェックをスキップして起動を続行します');
     return userConfig;
   }
 }
@@ -142,18 +165,23 @@ export function checkMissingConfigKeys(userConfig: Config): Config {
 /**
  * 起動時の設定チェック（メイン関数）
  */
-export function performStartupConfigCheck(): Config {
-  console.log('🚀 藍 (Ai) 起動中...');
-  console.log('📋 設定ファイルチェックを開始します');
+export function performStartupConfigCheck(
+  options?: StartupConfigCheckOptions
+): Config {
+  const logger = options?.logger ?? console;
+  const exit = options?.exit ?? ((code: number) => process.exit(code) as never);
 
-  const configPath = resolve('./config.toml');
+  logger.log('🚀 藍 (Ai) 起動中...');
+  logger.log('📋 設定ファイルチェックを開始します');
+
+  const configPath = resolvePathFromOptions(options, 'config');
 
   if (!existsSync(configPath)) {
-    console.error('❌ config.toml が見つかりません');
-    console.log(
+    logger.error('❌ config.toml が見つかりません');
+    logger.log(
       '💡 example.config.toml をコピーして config.toml を作成してください'
     );
-    process.exit(1);
+    return exit(1);
   }
 
   try {
@@ -162,14 +190,14 @@ export function performStartupConfigCheck(): Config {
     const userConfig = TOML.parse(configData) as Config;
 
     // 設定差分チェックと通知
-    const checkedConfig = checkMissingConfigKeys(userConfig);
+    const checkedConfig = checkMissingConfigKeys(userConfig, options);
 
-    console.log('✅ 設定ファイルチェック完了');
-    console.log('🎉 Bot起動準備完了！');
+    logger.log('✅ 設定ファイルチェック完了');
+    logger.log('🎉 Bot起動準備完了！');
 
     return checkedConfig;
   } catch (error) {
-    console.error('❌ 設定ファイルの読み込みに失敗しました:', error);
-    process.exit(1);
+    logger.error('❌ 設定ファイルの読み込みに失敗しました:', error);
+    return exit(1);
   }
 }
