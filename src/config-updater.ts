@@ -31,7 +31,7 @@ function loadConfigTemplate(options?: StartupConfigCheckOptions): Config {
 
   if (!existsSync(templatePath)) {
     throw new Error(
-      'example.config.toml が見つかりません。テンプレートファイルが必要です。'
+      `${templatePath} が見つかりません。テンプレートファイルが必要です。`
     );
   }
 
@@ -39,7 +39,7 @@ function loadConfigTemplate(options?: StartupConfigCheckOptions): Config {
     const templateData = readFileSync(templatePath, 'utf8');
     return TOML.parse(templateData) as Config;
   } catch (error) {
-    throw new Error(`example.config.toml の読み込みに失敗しました: ${error}`);
+    throw new Error(`${templatePath} の読み込みに失敗しました: ${error}`);
   }
 }
 
@@ -137,22 +137,20 @@ export function checkMissingConfigKeys(
       return userConfig;
     }
 
-    if (missingKeys.length > 0) {
-      logger.log(
-        `\n📋 以下の設定項目が不足しています (${missingKeys.length}個):`
-      );
-      logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    logger.log(
+      `\n📋 以下の設定項目が不足しています (${missingKeys.length}個):`
+    );
+    logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-      missingKeys.forEach((key) => {
-        const defaultValue = getNestedValue(template, key);
-        const valuePreview = formatValuePreview(defaultValue);
-        logger.log(`   📝 ${key} = ${valuePreview}`);
-      });
+    missingKeys.forEach((key) => {
+      const defaultValue = getNestedValue(template, key);
+      const valuePreview = formatValuePreview(defaultValue);
+      logger.log(`   📝 ${key} = ${valuePreview}`);
+    });
 
-      logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      logger.log('💡 これらの設定を config.toml に追加することをお勧めします');
-      logger.log('📖 詳細は example.config.toml を参照してください');
-    }
+    logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    logger.log('💡 これらの設定を config.toml に追加することをお勧めします');
+    logger.log('📖 詳細は example.config.toml を参照してください');
 
     return userConfig;
   } catch (error) {

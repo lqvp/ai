@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -30,8 +30,9 @@ function exitThatThrows() {
   };
 }
 
-test('checkMissingConfigKeys: reports missing keys (top-level + nested)', async () => {
+test('checkMissingConfigKeys: reports missing keys (top-level + nested)', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-config-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
   const templatePath = path.join(dir, 'example.config.toml');
 
   await writeFile(
@@ -72,8 +73,9 @@ b = 2
   assert.match(all, /📝 parent\.b = 2/);
 });
 
-test('checkMissingConfigKeys: prints complete when no missing keys', async () => {
+test('checkMissingConfigKeys: prints complete when no missing keys', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-config-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
   const templatePath = path.join(dir, 'example.config.toml');
 
   await writeFile(
@@ -130,8 +132,9 @@ test('performStartupConfigCheck: exits when config.toml is missing', () => {
   );
 });
 
-test('performStartupConfigCheck: exits when config.toml is invalid TOML', async () => {
+test('performStartupConfigCheck: exits when config.toml is invalid TOML', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-config-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
   const configPath = path.join(dir, 'config.toml');
 
   await writeFile(configPath, 'host = "https://x"\ninvalid = [\n', 'utf8');
@@ -150,8 +153,9 @@ test('performStartupConfigCheck: exits when config.toml is invalid TOML', async 
   );
 });
 
-test('performStartupConfigCheck: returns parsed config on success', async () => {
+test('performStartupConfigCheck: returns parsed config on success', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-config-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
   const configPath = path.join(dir, 'config.toml');
   const templatePath = path.join(dir, 'example.config.toml');
 
@@ -170,4 +174,3 @@ test('performStartupConfigCheck: returns parsed config on success', async () => 
   assert.equal(cfg.host, 'https://example.test');
   assert.equal(cfg.i, 'token');
 });
-
