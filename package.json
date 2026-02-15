@@ -50,7 +50,7 @@
 		"ws": "8.19.0"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.3.15",
+		"@biomejs/biome": "2.4.0",
 		"@types/iarna__toml": "2.0.5",
 		"chokidar-cli": "3.0.0",
 		"concurrently": "9.2.1"
