@@ -37,7 +37,7 @@
 		"misskey-js": "2025.12.2",
 		"misskey-reversi": "0.0.5",
 		"node-cron": "4.2.1",
-		"nodemon": "3.1.13",
+		"nodemon": "3.1.14",
 		"promise-retry": "2.0.1",
 		"random-seed": "0.3.0",
 		"reconnecting-websocket": "4.4.0",
