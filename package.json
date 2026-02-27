@@ -25,7 +25,7 @@
 		"@types/twemoji-parser": "13.1.4",
 		"@types/uuid": "11.0.0",
 		"@types/ws": "8.18.1",
-		"axios": "1.13.5",
+		"axios": "1.13.6",
 		"chalk": "5.6.2",
 		"dayjs": "1.11.19",
 		"days": "1.1.1",
