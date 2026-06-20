@@ -9,7 +9,7 @@
 		"dev:tsc": "chokidar \"src/**/*.ts\" -c \"pnpm build\"",
 		"dev:nodemon": "nodemon --watch built --ext js --delay 1500ms built/index.js",
 		"build": "tspc",
-		"test": "jest",
+		"test": "pnpm -s build && node --test test/*.test.mjs",
 		"lint": "biome lint src --write",
 		"format": "biome format src --write",
 		"preinstall": "npx only-allow pnpm"

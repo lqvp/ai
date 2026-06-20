@@ -7,6 +7,7 @@ import type DatabaseManager from '@/database/DatabaseManager.js';
 import * as fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { resolveInfoFeatureFlags, type InfoFeatureFlags } from './feature-flags.js';
 
 // 型定義
 declare namespace NodeJS {
@@ -287,42 +288,42 @@ function formatBooleanSetting(value: boolean | undefined): string {
   return value ? DEFAULTS.enabled : DEFAULTS.disabled;
 }
 
-function formatBasicFeatures(): string {
+function formatBasicFeatures(flags: InfoFeatureFlags): string {
   const lines: string[] = [
     CONFIG_LABELS.sections.basicFeatures,
     `- ${CONFIG_LABELS.basic.keywordEnabled}: ${formatBooleanSetting(
-      config.keywordEnabled
+      flags.keywordSearch
     )}`,
     `- ${CONFIG_LABELS.basic.reversiEnabled}: ${formatBooleanSetting(
-      config.reversiEnabled
+      flags.reversi
     )}`,
     `- ${CONFIG_LABELS.basic.notingEnabled}: ${formatBooleanSetting(
-      config.notingEnabled
+      flags.autoWord
     )}`,
     `- ${CONFIG_LABELS.basic.chartEnabled}: ${formatBooleanSetting(
-      config.chartEnabled
+      flags.chart
     )}`,
     `- ${CONFIG_LABELS.basic.timeSignalEnabled}: ${formatBooleanSetting(
-      config.timeSignalEnabled
+      flags.timeSignal
     )}`,
     `- ${CONFIG_LABELS.basic.serverMonitoring}: ${formatBooleanSetting(
-      config.serverMonitoring
+      flags.serverMonitoring
     )}`,
     `- ${CONFIG_LABELS.basic.checkEmojisEnabled}: ${formatBooleanSetting(
-      config.checkEmojisEnabled
+      flags.emojiCheck
     )}`,
   ];
   return lines.join('\n') + '\n';
 }
 
-function formatGameFeatures(): string {
+function formatGameFeatures(flags: InfoFeatureFlags): string {
   const lines: string[] = [
     CONFIG_LABELS.sections.gameFeatures,
     `- ${CONFIG_LABELS.game.mazeEnable}: ${formatBooleanSetting(
-      config.mazeEnable
+      flags.maze
     )}`,
     `- ${CONFIG_LABELS.game.pollEnable}: ${formatBooleanSetting(
-      config.pollEnable
+      flags.poll
     )}`,
   ];
   return lines.join('\n') + '\n';
@@ -505,10 +506,11 @@ function formatOtherSettings(): string {
 }
 
 function formatSafeConfigInfo(): string {
+  const flags = resolveInfoFeatureFlags(config);
   let configInfo = `\n⚙️ **設定情報**\n`;
 
-  configInfo += formatBasicFeatures();
-  configInfo += formatGameFeatures();
+  configInfo += formatBasicFeatures(flags);
+  configInfo += formatGameFeatures(flags);
   configInfo += formatPostSettings();
   configInfo += formatAIFeatures();
   configInfo += formatEarthquakeSettings();
