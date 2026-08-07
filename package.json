@@ -46,7 +46,7 @@
 		"typescript": "5.9.3",
 		"typescript-transform-paths": "3.5.6",
 		"uuid": "13.0.2",
-		"ws": "8.21.2"
+		"ws": "8.21.3"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.7",
