@@ -52,7 +52,7 @@
 		"@biomejs/biome": "2.5.13",
 		"@types/iarna__toml": "2.0.5",
 		"chokidar-cli": "3.0.0",
-		"concurrently": "9.2.4"
+		"concurrently": "10.0.5"
 	},
 	"nodemonConfig": {
 		"ignore": [
