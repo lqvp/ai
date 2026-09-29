@@ -23,7 +23,7 @@
 		"@types/random-seed": "0.3.5",
 		"@types/seedrandom": "3.0.8",
 		"@types/twemoji-parser": "13.1.4",
-		"@types/ws": "8.18.1",
+		"@types/ws": "8.18.2",
 		"axios": "1.20.0",
 		"chalk": "5.6.2",
 		"dayjs": "1.11.23",
