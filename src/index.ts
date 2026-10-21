@@ -110,6 +110,10 @@ promiseRetry(
     // 藍起動
     ai = new 藍(account, createModules());
   })
-  .catch(() => {
+  .catch((err) => {
     log(chalk.red('Failed to fetch the account'));
+    console.error(err instanceof Error ? err.message : err);
+    // アカウントが取れないまま起動し続けても何もできないため、
+    // 非ゼロで終了してコンテナの再起動ポリシーに委ねる。
+    process.exit(1);
   });

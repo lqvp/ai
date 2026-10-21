@@ -17,7 +17,7 @@
 |---|---|
 | `pnpm typecheck`（src + tests、`noUnusedLocals` / `noUnusedParameters` 有効） | ✅ 0 エラー |
 | `pnpm build`（`tspc`） | ✅ 成功 |
-| `pnpm test`（vitest） | ✅ 20 ファイル / 92 テスト |
+| `pnpm test`（vitest） | ✅ 21 ファイル / 95 テスト |
 | `pnpm lint:ci`（biome） | ✅ 132 ファイル clean |
 | CI / Docker | ✅ GitHub Actions + frozen lockfile |
 
@@ -40,7 +40,7 @@
 | R8 画像・描画 | ✅ | `utils/font` / `utils/canvas` / `services/upload`。imagen 507→164 行（+`api.ts`）、veo 248→124 行（+`client.ts`、50MB 上限） |
 | R9 weather/info | ✅ | weather を `index/format/api/types` に、info を `index/format/gc` に分割 |
 | R10 データ層 | ✅ | `ChatHistoryRepository` 追加、インデックス整理、autosave 5 秒、`logWaking` 5 分、`stop()` で保存 + close、`meta.schemaVersion` マイグレーション |
-| R11 テスト | ✅ | 20 ファイル / 92 テスト（純関数・リポジトリ・設定・整形・パース・HTTP multipart） |
+| R11 テスト | ✅ | 21 ファイル / 95 テスト（純関数・リポジトリ・設定・整形・パース・HTTP multipart・依存整合性） |
 | R12 依存整理 | ✅ | axios / node-cron / dayjs / uuid / memory-streams / formdata-node を除去。`Clock` と `later()` に置換 |
 | R13 その他 | ✅ | `modules/registry.ts`、README 更新、docs 移動、reversi の子プロセス kill、stream のバッファ上限 + JSON ガード、`APIClient.post` の非破壊化、serifs の `deepMerge` テスト |
 
