@@ -1,10 +1,10 @@
-import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
-import Message from '@/message.js';
 import config from '@/config.js';
+import { bindThis } from '@/decorators.js';
+import Message from '@/message.js';
 import { User, UserDetailed } from '@/misskey/user.js';
-import { UserFormatter } from '@/utils/user-formatter.js';
+import Module from '@/module.js';
 import serifs from '@/serifs.js';
+import { UserFormatter } from '@/utils/user-formatter.js';
 
 // 定数定義
 const ACTIONS = {
@@ -30,8 +30,10 @@ export default class extends Module {
 
   @bindThis
   public install() {
-    this.unfollowNonFollowers();
-    setInterval(this.unfollowNonFollowers, 1000 * 60 * 60 * 3); // 3時間に1回
+    // 3時間に1回
+    this.every(1000 * 60 * 60 * 3, this.unfollowNonFollowers, {
+      immediate: true,
+    });
 
     return {
       mentionHook: this.mentionHook,
@@ -40,7 +42,7 @@ export default class extends Module {
 
   @bindThis
   private isMasterUser(msg: Message): boolean {
-    return msg.user.username === config.master && msg.user.host === null;
+    return this.ai.relationship.isMaster(msg.user);
   }
 
   @bindThis

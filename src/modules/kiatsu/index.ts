@@ -1,8 +1,9 @@
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
+import { getJson } from '@/http/client.js';
 import Message from '@/message.js';
 import Module from '@/module.js';
-import axios from 'axios';
-import config from '@/config.js';
+import { nowHour } from '@/services/clock.js';
 import { renderKiatsuImage, type WeatherData } from './render-kiatsu.js';
 
 export default class extends Module {
@@ -41,6 +42,17 @@ export default class extends Module {
     };
   }
 
+  protected onDispose(): void {
+    if (this.updateIntervalId) {
+      clearInterval(this.updateIntervalId);
+      this.updateIntervalId = null;
+    }
+    if (this.postIntervalId) {
+      clearInterval(this.postIntervalId);
+      this.postIntervalId = null;
+    }
+  }
+
   @bindThis
   private startMonitoring(): void {
     // 設定された間隔で気圧データを更新
@@ -64,11 +76,10 @@ export default class extends Module {
 
       this.log(`気圧データ取得中... URL: ${url}`);
 
-      const response = await axios.get<WeatherData>(url, {
-        timeout: config.kiatsu?.requestTimeoutMs ?? 10000,
+      const data = await getJson<WeatherData>(url, {
+        timeoutMs: config.kiatsu?.requestTimeoutMs ?? 10_000,
+        retryLimit: 1,
       });
-
-      const data = response.data;
 
       // 基本チェック
       if (!data || !data.today || !Array.isArray(data.today)) {
@@ -77,8 +88,7 @@ export default class extends Module {
         return;
       }
 
-      const date = new Date();
-      const hour = date.getHours().toString();
+      const hour = nowHour().toString();
       const hourData = data.today.find((item) => item.time === hour);
 
       if (!hourData) {
@@ -132,14 +142,14 @@ export default class extends Module {
       // 設定された時間後に再開
       const cooldownMs = config.kiatsu?.errorCooldownMs ?? 60 * 60 * 1000;
 
-      setTimeout(() => {
+      this.later(cooldownMs, () => {
         this.log('監視を再開します。');
         this.ai.post({
           text: '気圧監視を再開しました。',
         });
         this.startMonitoring();
         this.update();
-      }, cooldownMs);
+      });
     }
   }
 

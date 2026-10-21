@@ -1,4 +1,5 @@
-import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
+import { createCanvasWithBackground } from '@/utils/canvas.js';
+import { ensureFont } from '@/utils/font.js';
 
 const width = 1024 + 256;
 const height = 512 + 256;
@@ -26,15 +27,9 @@ type Chart = {
 };
 
 export function renderChart(chart: Chart) {
-  GlobalFonts.registerFromPath('./font.ttf', 'CustomFont');
+  const fontFamily = ensureFont();
 
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-  // ctx.antialias = 'default';
-
-  ctx.fillStyle = colors.bg;
-  ctx.beginPath();
-  ctx.fillRect(0, 0, width, height);
+  const { canvas, ctx } = createCanvasWithBackground(width, height, colors.bg);
 
   let chartAreaX = margin;
   let chartAreaY = margin;
@@ -43,7 +38,7 @@ export function renderChart(chart: Chart) {
 
   // Draw title
   if (chart.title) {
-    ctx.font = `${titleTextSize}px CustomFont`;
+    ctx.font = `${titleTextSize}px ${fontFamily}`;
     const t = ctx.measureText(chart.title);
     ctx.fillStyle = colors.text;
     ctx.fillText(chart.title, width / 2 - t.width / 2, 128);
@@ -85,7 +80,7 @@ export function renderChart(chart: Chart) {
     ctx.lineTo(chartAreaX + chartAreaWidth, chartAreaY + y);
     ctx.stroke();
 
-    ctx.font = '20px CustomFont';
+    ctx.font = `20px ${fontFamily}`;
     ctx.fillStyle = colors.text;
     ctx.fillText(step.toString(), chartAreaX, chartAreaY + y - 8);
   }

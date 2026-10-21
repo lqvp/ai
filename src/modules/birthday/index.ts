@@ -1,19 +1,15 @@
 import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
 import Friend from '@/friend.js';
+import Module from '@/module.js';
 import serifs from '@/serifs.js';
-
-function zeroPadding(num: number, length: number): string {
-  return ('0000000000' + num).slice(-length);
-}
+import { monthDayKey } from '@/services/clock.js';
 
 export default class extends Module {
   public readonly name = 'birthday';
 
   @bindThis
   public install() {
-    this.crawleBirthday();
-    setInterval(this.crawleBirthday, 1000 * 60 * 3);
+    this.every(1000 * 60 * 3, this.crawleBirthday, { immediate: true });
 
     return {};
   }
@@ -23,15 +19,10 @@ export default class extends Module {
    */
   @bindThis
   private crawleBirthday() {
-    const now = new Date();
-    const m = now.getMonth();
-    const d = now.getDate();
     // Misskeyの誕生日は 2018-06-16 のような形式
-    const today = `${zeroPadding(m + 1, 2)}-${zeroPadding(d, 2)}`;
+    const today = monthDayKey();
 
-    const birthFriends = this.ai.friends.find({
-      'user.birthday': { $regex: new RegExp('-' + today + '$') },
-    } as any);
+    const birthFriends = this.ai.repos.friends.findBornOn(today);
 
     birthFriends.forEach((f) => {
       const friend = new Friend(this.ai, { doc: f });

@@ -1,35 +1,29 @@
-import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import * as TOML from '@iarna/toml';
-type Config = {
-  host: string;
-  i: string;
-  [key: string]: any; // その他の設定項目
+
+/**
+ * `example.config.toml` とユーザー設定の差分を調べる。
+ *
+ * 起動時に `process.exit` したりファイルを書き換えたりはしない。
+ * 呼び出し側（composition root）が結果をログに出す。
+ */
+
+export type MissingKey = {
+  key: string;
+  defaultValue: unknown;
 };
 
-function loadConfigTemplate(): Config {
-  const templatePath = resolve('./example.config.toml');
-
-  if (!existsSync(templatePath)) {
-    throw new Error(
-      'example.config.toml が見つかりません。テンプレートファイルが必要です。'
-    );
-  }
-
-  try {
-    const templateData = readFileSync(templatePath, 'utf8');
-    return TOML.parse(templateData) as Config;
-  } catch (error) {
-    throw new Error(`example.config.toml の読み込みに失敗しました: ${error}`);
-  }
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
  * オブジェクトの深い比較で不足しているキーを検出
  */
-function findMissingKeys(
-  userObj: any,
-  templateObj: any,
+export function findMissingKeys(
+  userObj: Record<string, unknown>,
+  templateObj: Record<string, unknown>,
   prefix = ''
 ): string[] {
   const missingKeys: string[] = [];
@@ -39,14 +33,7 @@ function findMissingKeys(
 
     if (!(key in userObj)) {
       missingKeys.push(fullKey);
-    } else if (
-      typeof templateObj[key] === 'object' &&
-      templateObj[key] !== null &&
-      !Array.isArray(templateObj[key]) &&
-      typeof userObj[key] === 'object' &&
-      userObj[key] !== null
-    ) {
-      // ネストしたオブジェクトを再帰的にチェック
+    } else if (isObject(templateObj[key]) && isObject(userObj[key])) {
       missingKeys.push(
         ...findMissingKeys(userObj[key], templateObj[key], fullKey)
       );
@@ -59,14 +46,11 @@ function findMissingKeys(
 /**
  * ネストしたキーの値を取得
  */
-function getNestedValue(obj: any, keyPath: string): any {
-  const keys = keyPath.split('.');
-  let current = obj;
+export function getNestedValue(obj: unknown, keyPath: string): unknown {
+  let current: unknown = obj;
 
-  for (const key of keys) {
-    if (current === null || current === undefined) {
-      return undefined;
-    }
+  for (const key of keyPath.split('.')) {
+    if (!isObject(current)) return undefined;
     current = current[key];
   }
 
@@ -76,7 +60,7 @@ function getNestedValue(obj: any, keyPath: string): any {
 /**
  * 値のプレビュー表示用フォーマット
  */
-function formatValuePreview(value: any): string {
+export function formatValuePreview(value: unknown): string {
   if (typeof value === 'string') {
     if (value.length > 50) {
       return `"${value.substring(0, 47)}..."`;
@@ -88,7 +72,7 @@ function formatValuePreview(value: any): string {
     if (value.length === 1) return `["${value[0]}"]`;
     return `["${value[0]}", ...] (${value.length}個)`;
   }
-  if (typeof value === 'object' && value !== null) {
+  if (isObject(value)) {
     const keys = Object.keys(value);
     if (keys.length === 0) return '{}';
     return `{ ${keys.slice(0, 2).join(', ')}${keys.length > 2 ? ', ...' : ''} }`;
@@ -97,79 +81,32 @@ function formatValuePreview(value: any): string {
 }
 
 /**
- * 設定ファイルの差分チェックと通知
+ * 設定テンプレートを読み込む。存在しなければ null。
  */
-export function checkMissingConfigKeys(userConfig: Config): Config {
-  console.log('🔍 設定ファイルチェックを開始します');
+export function loadConfigTemplate(
+  path: string = resolve('./example.config.toml')
+): Record<string, unknown> | null {
+  if (!existsSync(path)) return null;
 
   try {
-    // テンプレートを読み込み
-    const template = loadConfigTemplate();
-
-    // 不足しているキーを検出
-    const missingKeys = findMissingKeys(userConfig, template);
-
-    if (missingKeys.length === 0) {
-      console.log('✅ 設定ファイルは完全です');
-      return userConfig;
-    }
-
-    if (missingKeys.length > 0) {
-      console.log(
-        `\n📋 以下の設定項目が不足しています (${missingKeys.length}個):`
-      );
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-      missingKeys.forEach((key) => {
-        const defaultValue = getNestedValue(template, key);
-        const valuePreview = formatValuePreview(defaultValue);
-        console.log(`   📝 ${key} = ${valuePreview}`);
-      });
-
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('💡 これらの設定を config.toml に追加することをお勧めします');
-      console.log('📖 詳細は example.config.toml を参照してください');
-    }
-
-    return userConfig;
-  } catch (error) {
-    console.error('❌ 設定差分チェック中にエラーが発生しました:', error);
-    console.log('⚠️  設定チェックをスキップして起動を続行します');
-    return userConfig;
+    const parsed = TOML.parse(readFileSync(path, 'utf8'));
+    return isObject(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
 /**
- * 起動時の設定チェック（メイン関数）
+ * ユーザー設定に不足しているキーを返す。
  */
-export function performStartupConfigCheck(): Config {
-  console.log('🚀 藍 (Ai) 起動中...');
-  console.log('📋 設定ファイルチェックを開始します');
+export function checkMissingConfigKeys(
+  userConfig: Record<string, unknown>,
+  template: Record<string, unknown> | null = loadConfigTemplate()
+): MissingKey[] {
+  if (template == null) return [];
 
-  const configPath = resolve('./config.toml');
-
-  if (!existsSync(configPath)) {
-    console.error('❌ config.toml が見つかりません');
-    console.log(
-      '💡 example.config.toml をコピーして config.toml を作成してください'
-    );
-    process.exit(1);
-  }
-
-  try {
-    // 現在の設定を読み込み
-    const configData = readFileSync(configPath, 'utf8');
-    const userConfig = TOML.parse(configData) as Config;
-
-    // 設定差分チェックと通知
-    const checkedConfig = checkMissingConfigKeys(userConfig);
-
-    console.log('✅ 設定ファイルチェック完了');
-    console.log('🎉 Bot起動準備完了！');
-
-    return checkedConfig;
-  } catch (error) {
-    console.error('❌ 設定ファイルの読み込みに失敗しました:', error);
-    process.exit(1);
-  }
+  return findMissingKeys(userConfig, template).map((key) => ({
+    key,
+    defaultValue: getNestedValue(template, key),
+  }));
 }

@@ -1,18 +1,20 @@
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as childProcess from 'child_process';
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
+import Friend from '@/friend.js';
+import Message from '@/message.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
-import config from '@/config.js';
-import Message from '@/message.js';
-import Friend from '@/friend.js';
 import getDate from '@/utils/get-date.js';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
 
 const _filename = fileURLToPath(import.meta.url);
 const _dirname = dirname(_filename);
 
 export default class extends Module {
+  /** 対局ごとに fork したバックエンド。停止時に確実に kill する。 */
+  private backends = new Set<childProcess.ChildProcess>();
   public readonly name = 'reversi';
 
   /**
@@ -22,7 +24,7 @@ export default class extends Module {
 
   @bindThis
   public install() {
-    if (!config.reversiEnabled) return {};
+    if (!config.reversiEnabled) return false;
 
     this.reversiConnection = this.ai.connection.useSharedConnection('reversi');
 
@@ -149,6 +151,8 @@ export default class extends Module {
 
     //#region バックエンドプロセス開始
     const ai = childProcess.fork(_dirname + '/back.js');
+    this.backends.add(ai);
+    ai.once('exit', () => this.backends.delete(ai));
 
     // バックエンドプロセスに情報を渡す
     ai.send({
@@ -193,6 +197,17 @@ export default class extends Module {
     setTimeout(() => {
       gw.send('ready', true);
     }, 1000);
+  }
+
+  protected onDispose(): void {
+    for (const backend of this.backends) {
+      try {
+        backend.kill();
+      } catch {
+        // 既に終了している場合は無視
+      }
+    }
+    this.backends.clear();
   }
 
   @bindThis

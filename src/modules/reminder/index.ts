@@ -1,10 +1,11 @@
-import { bindThis } from '@/decorators.js';
 import loki from 'lokijs';
-import Module from '@/module.js';
-import Message from '@/message.js';
-import serifs, { getSerif } from '@/serifs.js';
-import { acct } from '@/utils/acct.js';
 import config from '@/config.js';
+import { bindThis } from '@/decorators.js';
+import Message from '@/message.js';
+import Module from '@/module.js';
+import serifs, { getSerif } from '@/serifs.js';
+import { isHttpStatus } from '@/services/errors.js';
+import { acct } from '@/utils/acct.js';
 
 const NOTIFY_INTERVAL = 1000 * 60 * 60 * 12;
 
@@ -192,9 +193,9 @@ export default class extends Module {
           text:
             acct(friend.doc.user) + ' ' + serifs.reminder.notify(friend.name),
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         // renote対象が消されていたらリマインダー解除
-        if (err.statusCode === 400) {
+        if (isHttpStatus(err, 400)) {
           this.unsubscribeReply(
             remind.thing == null && remind.quoteId ? remind.quoteId : remind.id
           );

@@ -46,7 +46,10 @@ function clampMaxResults(value: number | undefined): number {
 
 function formatJinaError(err: unknown, source: string): string {
   if (err && typeof err === 'object' && 'response' in err) {
-    const httpError = err as { response?: { statusCode?: number; statusMessage?: string }; message?: string };
+    const httpError = err as {
+      response?: { statusCode?: number; statusMessage?: string };
+      message?: string;
+    };
     const code = httpError.response?.statusCode;
     const statusMessage = httpError.response?.statusMessage;
     if (typeof code === 'number') {
@@ -77,14 +80,17 @@ export async function jinaSearch(
   const maxResults = clampMaxResults(options.maxResults);
 
   try {
-    const data = await got(`${JINA_SEARCH_ENDPOINT}${encodeURIComponent(trimmed)}`, {
-      headers: {
-        Authorization: `Bearer ${options.apiKey}`,
-        Accept: 'application/json',
-      },
-      timeout: { request: JINA_TIMEOUT_MS },
-      responseType: 'json',
-    }).json<JinaSearchResultItem[]>();
+    const data = await got(
+      `${JINA_SEARCH_ENDPOINT}${encodeURIComponent(trimmed)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+          Accept: 'application/json',
+        },
+        timeout: { request: JINA_TIMEOUT_MS },
+        responseType: 'json',
+      }
+    ).json<JinaSearchResultItem[]>();
 
     const items = Array.isArray(data) ? data.slice(0, maxResults) : [];
     if (items.length === 0) {
@@ -95,7 +101,8 @@ export async function jinaSearch(
       const title = item.title || '(no title)';
       const url = item.url || '(no url)';
       const body = item.content || item.description || '';
-      const trimmedBody = body.length > 2000 ? `${body.slice(0, 2000)}...` : body;
+      const trimmedBody =
+        body.length > 2000 ? `${body.slice(0, 2000)}...` : body;
       return `[${index + 1}] ${title}\nURL: ${url}${trimmedBody ? `\n${trimmedBody}` : ''}`;
     });
 
@@ -143,7 +150,8 @@ export async function jinaRead(
       })
       .json<JinaReadResponse>();
 
-    const body = data.content || data.description || data.title || '(no content)';
+    const body =
+      data.content || data.description || data.title || '(no content)';
     return body;
   } catch (err: unknown) {
     log('Error in jinaRead');

@@ -1,7 +1,7 @@
-import { bindThis } from '@/decorators.js';
 import { HandlerResult } from '@/ai.js';
-import Module from '@/module.js';
+import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
+import Module from '@/module.js';
 import serifs, { getSerif } from '@/serifs.js';
 import getDate from '@/utils/get-date.js';
 

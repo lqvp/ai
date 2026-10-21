@@ -1,10 +1,9 @@
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import Module from '@/module.js';
-import serifs from '@/serifs.js';
-import { genItem } from '@/vocabulary.js';
-import config from '@/config.js';
 import type { Note } from '@/misskey/note.js';
+import Module from '@/module.js';
+import { genItem } from '@/vocabulary.js';
 
 export default class extends Module {
   public readonly name = 'poll';
@@ -12,16 +11,13 @@ export default class extends Module {
   @bindThis
   public install() {
     if (!config.pollEnable) {
-      return {};
+      return false;
     }
-    setInterval(
-      () => {
-        if (Math.random() < 0.1) {
-          this.post();
-        }
-      },
-      1000 * 60 * 60
-    );
+    this.every(1000 * 60 * 60, () => {
+      if (Math.random() < 0.1) {
+        this.post();
+      }
+    });
 
     return {
       mentionHook: this.mentionHook,

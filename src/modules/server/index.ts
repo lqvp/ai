@@ -1,7 +1,7 @@
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
-import config from '@/config.js';
 
 export default class extends Module {
   public readonly name = 'server';
@@ -18,21 +18,26 @@ export default class extends Module {
 
   @bindThis
   public install() {
-    if (!config.serverMonitoring) return {};
+    if (!config.serverMonitoring) return false;
 
     this.connection = this.ai.connection.useSharedConnection('serverStats');
     this.connection.on('stats', this.onStats);
 
-    setInterval(() => {
+    this.every(1000, () => {
       this.statsLogs.unshift(this.recentStat);
       if (this.statsLogs.length > 60) this.statsLogs.pop();
-    }, 1000);
+    });
 
-    setInterval(() => {
+    this.every(3000, () => {
       this.check();
-    }, 3000);
+    });
 
     return {};
+  }
+
+  protected onDispose(): void {
+    this.connection?.dispose?.();
+    this.connection = undefined;
   }
 
   @bindThis

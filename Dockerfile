@@ -33,7 +33,9 @@ COPY . /ai
 
 WORKDIR /ai
 
-RUN pnpm install && pnpm run build || test -f ./built/index.js
+RUN pnpm install --frozen-lockfile --prod=false \
+  && pnpm run build \
+  && pnpm prune --prod
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["pnpm", "start"]

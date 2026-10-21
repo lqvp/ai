@@ -7,10 +7,13 @@
  */
 
 import got from 'got';
-import * as Reversi from './engine.js';
-import config from '@/config.js';
-import serifs from '@/serifs.js';
+import config, { initConfig, loadConfig } from '@/config.js';
 import type { User } from '@/misskey/user.js';
+import serifs from '@/serifs.js';
+import * as Reversi from './engine.js';
+
+// 子プロセスとして起動されるため、ここで設定を読み込む
+initConfig(loadConfig());
 
 function getUserName(user) {
   return user.name || user.username;

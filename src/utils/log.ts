@@ -1,11 +1,11 @@
-import chalk from 'chalk';
+import { Logger } from '@/services/logger.js';
 
-export default function (msg: string) {
-  const now = new Date();
-  const date = `${zeroPad(now.getHours())}:${zeroPad(now.getMinutes())}:${zeroPad(now.getSeconds())}`;
-  console.log(`${chalk.gray(date)} ${msg}`);
-}
+const logger = new Logger('');
 
-function zeroPad(num: number, length: number = 2): string {
-  return ('0000000000' + num).slice(-length);
+/**
+ * 既存の `log(msg)` 互換 API。
+ * レベル・スコープ付きのロガーに委譲する。
+ */
+export default function (msg: string): void {
+  logger.info(msg);
 }

@@ -1,150 +1,18 @@
-export type Config = {
-  configVersion?: number; // 設定ファイルバージョン
-  host: string;
-  serverName?: string;
-  i: string;
-  aiName?: string[];
-  master?: string;
-  wsUrl: string;
-  apiUrl: string;
-  userAgent?: {
-    http?: string;
-    websocket?: string;
-  };
-  keywordEnabled: boolean;
-  reversiEnabled: boolean;
-  notingEnabled: boolean;
-  chartEnabled: boolean;
-  timeSignalEnabled: boolean;
-  serverMonitoring: boolean;
-  checkEmojisEnabled?: boolean;
-  checkEmojisAtOnce?: boolean;
-  aiProvider?: {
-    provider?: 'gemini' | 'openai'; // デフォルト: 'gemini'
-    openai?: {
-      apiKey?: string;
-      baseUrl?: string; // OpenAI互換APIのURL（デフォルト: https://api.openai.com）
-      model?: string;
-    };
-  };
-  gemini?: {
-    enabled?: boolean;
-    apiKey?: string;
-    model?: string;
-    thinkingBudget?: number; // -1: dynamic, 0: disabled, 128-32768: fixed budget
-    autoNote?: {
-      enabled?: boolean;
-      prompt?: string;
-      probability?: number;
-      intervalMinutes?: number;
-      disableNightPosting?: boolean;
-      nightHours?: {
-        start?: number;
-        end?: number;
-      };
-    };
-    randomTalk?: {
-      enabled?: boolean;
-      probability?: number;
-      intervalMinutes?: number;
-      followingOnly?: boolean;
-      contextRange?: number;
-      contextUsageCount?: number;
-      enableContext?: boolean;
-    };
-    chat?: {
-      enabled?: boolean;
-      prompt?: string;
-      groundingWithGoogleSearch?: boolean;
-    };
-  };
-  jina?: {
-    enabled?: boolean;
-    apiKey?: string;
-    search?: {
-      enabled?: boolean;
-      maxResults?: number; // 1-5
-    };
-    read?: {
-      enabled?: boolean;
-      tokenBudget?: number;
-    };
-    tool?: {
-      maxRounds?: number; // default 3
-    };
-  };
-  exa?: {
-    enabled?: boolean;
-    apiKey?: string;
-    search?: {
-      enabled?: boolean;
-      maxResults?: number; // 1-5
-    };
-    tool?: {
-      maxRounds?: number; // default 3
-    };
-  };
-  mecab?: string;
-  mecabDic?: string;
-  memoryDir?: string;
-  followAllowedHosts?: string[];
-  followExcludeInstances?: string[];
-  mazeEnable?: boolean;
-  pollEnable?: boolean;
-  postNotPublic?: boolean;
-  defaultVisibility?: string;
-  earthquakeWarning?: {
-    enabled?: boolean;
-    minIntensityThreshold?: number;
-    minMagunitudeForWeak?: number;
-    websocketReconnectMaxAttempts?: number;
-    websocketReconnectDelay?: number;
-    maxReconnectDelay?: number;
-    heartbeatTimeoutMs?: number;
-    heartbeatIntervalMs?: number;
-    p2pWebSocketUrl?: string;
-  };
-  kiatsu?: {
-    locationCode?: string;
-    requestTimeoutMs?: number;
-    maxErrorRetries?: number;
-    updateIntervalMs?: number;
-    postIntervalMs?: number;
-    errorCooldownMs?: number;
-    minPostLevel?: number;
-  };
-  weatherAutoNotePref?: string;
-  weatherAutoNoteHour?: number;
-  imagen?: {
-    enabled?: boolean;
-    apiKey?: string;
-    model?: string;
-  };
-  veo?: {
-    enabled?: boolean;
-    apiKey?: string;
-    model?: string;
-    pollIntervalMs?: number;
-    maxWaitMs?: number;
-  };
-  updateChecker?: {
-    enabled?: boolean;
-    repository?: string;
-    intervalMinutes?: number;
-  };
-  info?: {
-    eventLoopMonitoringInterval?: number;
-    enableGCMonitoring?: boolean;
-    precision?: number;
-  };
-};
+/**
+ * 設定の公開ファサード。
+ *
+ * 実装は `src/config/` に分割している:
+ * - `schema.ts`  … 型・既定値・バリデーション（純粋関数のみ）
+ * - `index.ts`   … TOML の読み込み、起動時のシングルトンと互換プロキシ
+ */
 
-import { performStartupConfigCheck } from './config-updater.js';
-
-// 起動時設定チェックと自動更新を実行
-export const config = performStartupConfigCheck();
-
-config.wsUrl = config.host.replace('http', 'ws');
-config.apiUrl = config.host + '/api';
-
-export default config as Config;
+export type { Config, RawConfig } from './config/index.js';
+export {
+  ConfigError,
+  default,
+  getConfig,
+  hasConfig,
+  initConfig,
+  loadConfig,
+  resolveConfig,
+} from './config/index.js';

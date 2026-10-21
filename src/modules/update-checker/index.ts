@@ -1,9 +1,10 @@
-import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
+import got from 'got';
+import { createRequire } from 'module';
 import { InstallerResult } from '@/ai.js';
 import config from '@/config.js';
-import { createRequire } from 'module';
-import got from 'got';
+import { bindThis } from '@/decorators.js';
+import Module from '@/module.js';
+import { isNewerVersion } from '@/utils/version.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../../../package.json');
@@ -17,9 +18,9 @@ export default class UpdateCheckerModule extends Module {
   public readonly name = 'update-checker';
 
   @bindThis
-  public install(): InstallerResult {
+  public install(): InstallerResult | false {
     if (!config.updateChecker?.enabled) {
-      return {};
+      return false;
     }
 
     this.log('Update checker is enabled.');
@@ -27,7 +28,7 @@ export default class UpdateCheckerModule extends Module {
     // 1分後に初回チェック、以降は設定された間隔で定期的にチェック
     this.setTimeoutWithPersistence(60 * 1000, { immediate: true });
 
-    return {};
+    return { timeoutCallback: this.timeoutCallback };
   }
 
   @bindThis
@@ -62,7 +63,7 @@ export default class UpdateCheckerModule extends Module {
         `Latest version: ${latestVersion}, Current version: ${currentVersion}`
       );
 
-      if (this.isNewer(latestVersion, currentVersion)) {
+      if (isNewerVersion(latestVersion, currentVersion)) {
         this.log(`New version found: ${latestVersion}`);
         const master = config.master;
         if (master) {
@@ -76,19 +77,5 @@ export default class UpdateCheckerModule extends Module {
       this.log('Failed to fetch release info.');
       console.error(error);
     }
-  }
-
-  /**
-   * Compare two version strings.
-   * Handles simple semver-like strings (e.g., '3.2.3-lqvp').
-   * @param v1 New version
-   * @param v2 Current version
-   * @returns True if v1 is newer than v2
-   */
-  @bindThis
-  private isNewer(v1: string, v2: string): boolean {
-    // This is a simple string comparison, which works for the current versioning scheme.
-    // For more complex semver, a dedicated library would be better.
-    return v1 > v2;
   }
 }

@@ -1,9 +1,10 @@
-import { bindThis } from '@/decorators.js';
 import loki from 'lokijs';
+import config from '@/config.js';
+import { bindThis } from '@/decorators.js';
+import Message from '@/message.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
-import config from '@/config.js';
-import Message from '@/message.js';
+import { nowHour, todayKey } from '@/services/clock.js';
 
 export default class extends Module {
   public readonly name = 'checkCustomEmojis';
@@ -15,13 +16,12 @@ export default class extends Module {
 
   @bindThis
   public install() {
-    if (!config.checkEmojisEnabled) return {};
+    if (!config.checkEmojisEnabled) return false;
     this.lastEmoji = this.ai.getCollection('lastEmoji', {
       indices: ['id'],
     });
 
-    this.timeCheck();
-    setInterval(this.timeCheck, 1000 * 60 * 3);
+    this.every(1000 * 60 * 3, this.timeCheck, { immediate: true });
 
     return {
       mentionHook: this.mentionHook,
@@ -30,9 +30,8 @@ export default class extends Module {
 
   @bindThis
   private timeCheck() {
-    const now = new Date();
-    if (now.getHours() !== 23) return;
-    const date = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    if (nowHour() !== 23) return;
+    const date = todayKey();
     const data = this.getData();
     if (data.lastPosted == date) return;
     data.lastPosted = date;

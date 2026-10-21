@@ -1,20 +1,20 @@
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
+import Message from '@/message.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
-import Message from '@/message.js';
-import { renderChart } from './render-chart.js';
+import { nowHour, todayKey } from '@/services/clock.js';
 import { items } from '@/vocabulary.js';
-import config from '@/config.js';
+import { renderChart } from './render-chart.js';
 
 export default class extends Module {
   public readonly name = 'chart';
 
   @bindThis
   public install() {
-    if (config.chartEnabled === false) return {};
+    if (config.chartEnabled === false) return false;
 
-    this.post();
-    setInterval(this.post, 1000 * 60 * 3);
+    this.every(1000 * 60 * 3, this.post, { immediate: true });
 
     return {
       mentionHook: this.mentionHook,
@@ -23,9 +23,8 @@ export default class extends Module {
 
   @bindThis
   private async post() {
-    const now = new Date();
-    if (now.getHours() !== 23) return;
-    const date = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    if (nowHour() !== 23) return;
+    const date = todayKey();
     const data = this.getData();
     if ((data as any).lastPosted == date) return;
     (data as any).lastPosted = date;

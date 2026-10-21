@@ -1,7 +1,7 @@
-import { bindThis } from '@/decorators.js';
 import loki from 'lokijs';
-import Module from '@/module.js';
 import config from '@/config.js';
+import { bindThis } from '@/decorators.js';
+import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { mecab } from './mecab.js';
 
@@ -22,13 +22,13 @@ export default class extends Module {
 
   @bindThis
   public install() {
-    if (!config.keywordEnabled) return {};
+    if (!config.keywordEnabled) return false;
 
     this.learnedKeywords = this.ai.getCollection('_keyword_learnedKeywords', {
       indices: ['userId'],
     });
 
-    setInterval(this.learn, 1000 * 60 * 30);
+    this.every(1000 * 60 * 30, this.learn);
 
     return {};
   }

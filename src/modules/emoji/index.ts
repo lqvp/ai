@@ -1,6 +1,6 @@
 import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
 import Message from '@/message.js';
+import Module from '@/module.js';
 import serifs from '@/serifs.js';
 
 const hands = [

@@ -1,4 +1,6 @@
-import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
+import { nowHour } from '@/services/clock.js';
+import { createCanvasWithBackground } from '@/utils/canvas.js';
+import { ensureFont } from '@/utils/font.js';
 
 export interface WeatherItem {
   time: string;
@@ -34,26 +36,8 @@ type LevelStyle = {
 };
 
 const DISPLAY_HOURS = 12;
-const FONT_FAMILY = 'KiatsuFont';
-
-let fontInitialized = false;
-let fontFamilyForRender = 'sans-serif';
-
-function ensureFontReady() {
-  if (fontInitialized) return;
-
-  try {
-    GlobalFonts.registerFromPath('./font.ttf', FONT_FAMILY);
-    fontFamilyForRender = FONT_FAMILY;
-  } catch {
-    fontFamilyForRender = 'sans-serif';
-  }
-
-  fontInitialized = true;
-}
-
 function font(size: number, weight: 'normal' | 'bold' = 'normal'): string {
-  return `${weight} ${size}px ${fontFamilyForRender}`;
+  return `${weight} ${size}px ${ensureFont()}`;
 }
 
 function normalizeHour(raw: string): number | null {
@@ -64,10 +48,10 @@ function normalizeHour(raw: string): number | null {
 
 function parseApiHour(dateTime: string): number {
   const match = dateTime.match(/(\d{1,2})$/);
-  if (!match) return new Date().getHours();
+  if (!match) return nowHour();
 
   const hour = Number.parseInt(match[1], 10);
-  if (Number.isNaN(hour) || hour < 0 || hour > 23) return new Date().getHours();
+  if (Number.isNaN(hour) || hour < 0 || hour > 23) return nowHour();
 
   return hour;
 }
@@ -132,7 +116,7 @@ function buildForecastColumns(
   }
 
   if (columns.length === 0) {
-    const fallbackHour = new Date().getHours();
+    const fallbackHour = nowHour();
     columns.push({
       dayLabel: '今日',
       hour: fallbackHour,
@@ -226,7 +210,7 @@ function drawCenteredText(
 }
 
 export function renderKiatsuImage(data: WeatherData): Buffer {
-  ensureFontReady();
+  ensureFont();
 
   const columns = buildForecastColumns(data, DISPLAY_HOURS);
 
@@ -255,11 +239,7 @@ export function renderKiatsuImage(data: WeatherData): Buffer {
     tableHeight +
     footerAreaHeight;
 
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-
-  ctx.fillStyle = '#f3f7fb';
-  ctx.fillRect(0, 0, width, height);
+  const { canvas, ctx } = createCanvasWithBackground(width, height, '#f3f7fb');
 
   const panelX = padding;
   const panelY = padding;
