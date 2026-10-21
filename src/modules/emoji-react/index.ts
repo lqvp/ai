@@ -1,11 +1,10 @@
-import { bindThis } from '@/decorators.js';
 import { parse } from 'twemoji-parser';
-
+import config from '@/config.js';
+import { bindThis } from '@/decorators.js';
 import type { Note } from '@/misskey/note.js';
 import Module from '@/module.js';
 import Stream from '@/stream.js';
 import includes from '@/utils/includes.js';
-import config from '@/config.js';
 import { sleep } from '@/utils/sleep.js';
 
 export default class extends Module {
@@ -19,6 +18,10 @@ export default class extends Module {
     this.htl.on('note', this.onNote);
 
     return {};
+  }
+
+  protected onDispose(): void {
+    this.htl?.dispose();
   }
 
   @bindThis
@@ -36,10 +39,7 @@ export default class extends Module {
       if (!immediate) {
         await sleep(1500);
       }
-      this.ai.api('notes/reactions/create', {
-        noteId: note.id,
-        reaction: reaction,
-      });
+      await this.ai.reactions.reactForce(note.id, reaction);
     };
 
     // カスタム絵文字の厳密な検出: :emoji_name: のみ許可（英数字・_・+・-）
@@ -48,7 +48,7 @@ export default class extends Module {
     );
     if (customEmojis) {
       // カスタム絵文字が複数種類ある場合はキャンセル
-      if (!customEmojis.every((val, i, arr) => val === arr[0])) return;
+      if (!customEmojis.every((val, _, arr) => val === arr[0])) return;
 
       this.log(`Custom emoji detected - ${customEmojis[0]}`);
 
@@ -58,7 +58,7 @@ export default class extends Module {
     const emojis = parse(note.text).map((x) => x.text);
     if (emojis.length > 0) {
       // 絵文字が複数種類ある場合はキャンセル
-      if (!emojis.every((val, i, arr) => val === arr[0])) return;
+      if (!emojis.every((val, _, arr) => val === arr[0])) return;
 
       this.log(`Emoji detected - ${emojis[0]}`);
 

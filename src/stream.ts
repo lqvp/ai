@@ -1,11 +1,13 @@
-import { bindThis } from '@/decorators.js';
 import { EventEmitter } from 'events';
-import WebSocket from 'ws';
 import _ReconnectingWebsocket from 'reconnecting-websocket';
+import WebSocket from 'ws';
+import { bindThis } from '@/decorators.js';
 import config from './config.js';
 
 const ReconnectingWebsocket =
   _ReconnectingWebsocket as unknown as (typeof _ReconnectingWebsocket)['default'];
+
+const MAX_BUFFERED_MESSAGES = 1000;
 
 /**
  * Misskey stream connection
@@ -138,7 +140,15 @@ export default class Stream extends EventEmitter {
    */
   @bindThis
   private onMessage(message) {
-    const { type, body } = JSON.parse(message.data);
+    let parsed: { type: string; body: any };
+    try {
+      parsed = JSON.parse(message.data);
+    } catch {
+      // 壊れたフレームでストリーム全体を止めない
+      return;
+    }
+
+    const { type, body } = parsed;
 
     if (type == 'channel') {
       const id = body.id;
@@ -176,6 +186,9 @@ export default class Stream extends EventEmitter {
 
     // まだ接続が確立されていなかったらバッファリングして次に接続した時に送信する
     if (this.state != 'connected') {
+      if (this.buffer.length >= MAX_BUFFERED_MESSAGES) {
+        this.buffer.shift();
+      }
       this.buffer.push(data);
       return;
     }
@@ -195,6 +208,24 @@ export default class Stream extends EventEmitter {
   public close() {
     this.stream.removeEventListener('open', this.onOpen);
     this.stream.removeEventListener('message', this.onMessage);
+    this.stream.removeEventListener('close', this.onClose);
+
+    this.buffer = [];
+
+    for (const connection of this.sharedConnections) {
+      try {
+        connection.dispose();
+      } catch {
+        // 切断済みでも停止処理は続行する
+      }
+    }
+    this.sharedConnections = [];
+
+    try {
+      this.stream.close();
+    } catch {
+      // 未接続時の close は無視する
+    }
   }
 }
 

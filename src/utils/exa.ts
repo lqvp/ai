@@ -36,7 +36,10 @@ function clampMaxResults(value: number | undefined): number {
 
 function formatExaError(err: unknown, source: string): string {
   if (err && typeof err === 'object' && 'response' in err) {
-    const httpError = err as { response?: { statusCode?: number; statusMessage?: string }; message?: string };
+    const httpError = err as {
+      response?: { statusCode?: number; statusMessage?: string };
+      message?: string;
+    };
     const code = httpError.response?.statusCode;
     const statusMessage = httpError.response?.statusMessage;
     if (typeof code === 'number') {

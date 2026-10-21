@@ -1,15 +1,15 @@
 import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
 import Friend from '@/friend.js';
+import Module from '@/module.js';
 import serifs from '@/serifs.js';
+import { getZonedParts, todayKey } from '@/services/clock.js';
 
 export default class extends Module {
   public readonly name = 'valentine';
 
   @bindThis
   public install() {
-    this.crawleValentine();
-    setInterval(this.crawleValentine, 1000 * 60 * 3);
+    this.every(1000 * 60 * 3, this.crawleValentine, { immediate: true });
 
     return {};
   }
@@ -19,14 +19,14 @@ export default class extends Module {
    */
   @bindThis
   private crawleValentine() {
-    const now = new Date();
+    const now = getZonedParts();
 
-    const isValentine = now.getMonth() == 1 && now.getDate() == 14;
+    const isValentine = now.month === 2 && now.day === 14;
     if (!isValentine) return;
 
-    const date = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    const date = todayKey();
 
-    const friends = this.ai.friends.find({} as any);
+    const friends = this.ai.repos.friends.all();
 
     friends.forEach((f) => {
       const friend = new Friend(this.ai, { doc: f });

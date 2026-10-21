@@ -1,8 +1,9 @@
-import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
-import Message from '@/message.js';
-import serifs from '@/serifs.js';
 import seedrandom from 'seedrandom';
+import { bindThis } from '@/decorators.js';
+import Message from '@/message.js';
+import Module from '@/module.js';
+import serifs from '@/serifs.js';
+import { todayKey } from '@/services/clock.js';
 import { genItem } from '@/vocabulary.js';
 
 export const blessing = [
@@ -50,8 +51,7 @@ export default class extends Module {
   @bindThis
   private async mentionHook(msg: Message) {
     if (msg.includes(['占', 'うらな', '運勢', 'おみくじ'])) {
-      const date = new Date();
-      const seed = `${date.getFullYear()}/${date.getMonth()}/${date.getDate()}@${msg.userId}`;
+      const seed = `${todayKey()}@${msg.userId}`;
       const rng = seedrandom(seed);
       const omikuji = blessing[Math.floor(rng() * blessing.length)];
       const item = genItem(rng);

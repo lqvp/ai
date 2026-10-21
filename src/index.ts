@@ -3,51 +3,19 @@
 import process from 'node:process';
 import chalk from 'chalk';
 import got from 'got';
-import promiseRetry from 'promise-retry';
-
-import 藍 from './ai.js';
-import config from './config.js';
-import _log from './utils/log.js';
-import type { User } from '@/misskey/user.js';
 // import pkg from '../package.json' assert { type: 'json' };
 import { createRequire } from 'module';
+import promiseRetry from 'promise-retry';
+import type { User } from '@/misskey/user.js';
+import 藍 from './ai.js';
+import config, { type Config, initConfig, loadConfig } from './config.js';
+import { checkMissingConfigKeys } from './config-updater.js';
+import _log from './utils/log.js';
+
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
-import CoreModule from './modules/core/index.js';
-import TalkModule from './modules/talk/index.js';
-import BirthdayModule from './modules/birthday/index.js';
-import ReversiModule from './modules/reversi/index.js';
-import PingModule from './modules/ping/index.js';
-import EmojiModule from './modules/emoji/index.js';
-import EmojiReactModule from './modules/emoji-react/index.js';
-import FortuneModule from './modules/fortune/index.js';
-import GuessingGameModule from './modules/guessing-game/index.js';
-import KazutoriModule from './modules/kazutori/index.js';
-import KeywordModule from './modules/keyword/index.js';
-import WelcomeModule from './modules/welcome/index.js';
-import TimerModule from './modules/timer/index.js';
-import DiceModule from './modules/dice/index.js';
-import ServerModule from './modules/server/index.js';
-import FollowModule from './modules/follow/index.js';
-import ValentineModule from './modules/valentine/index.js';
-import MazeModule from './modules/maze/index.js';
-import ChartModule from './modules/chart/index.js';
-import SleepReportModule from './modules/sleep-report/index.js';
-import NotingModule from './modules/noting/index.js';
-import PollModule from './modules/poll/index.js';
-import ReminderModule from './modules/reminder/index.js';
-import CheckCustomEmojisModule from './modules/check-custom-emojis/index.js';
-import EarthQuakeWarningModule from './modules/earthquake_warning/index.js';
-import AiChatModule from './modules/aichat/index.js';
-import KiatsuModule from './modules/kiatsu/index.js';
-import WeatherModule from './modules/weather/index.js';
-import TimeSignalModule from './modules/time-signal/index.js';
-import ImagenModule from './modules/imagen/index.js';
-import VeoModule from './modules/veo/index.js';
-import InfoModule from './modules/info/index.js';
-import ReactionConfigModule from './modules/reaction-config/index.js';
-import UpdateCheckerModule from './modules/update-checker/index.js';
+import { createModules } from './modules/registry.js';
 
 console.log('   __    ____  _____  ___ ');
 console.log('  /__\\  (_  _)(  _  )/ __)');
@@ -60,12 +28,55 @@ function log(msg: string): void {
 
 log(chalk.bold(`Ai v${pkg._v}`));
 
+// 設定はここ（composition root）で一度だけ読み込む。
+// モジュールの import 時に config.toml を要求しない。
+let appConfig: Config;
+try {
+  appConfig = initConfig(loadConfig());
+} catch (err) {
+  log(chalk.red('Failed to load config.toml'));
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+}
+
+const missingKeys = checkMissingConfigKeys(
+  appConfig as unknown as Record<string, unknown>
+);
+if (missingKeys.length > 0) {
+  log(
+    chalk.yellow(
+      `config.toml に ${missingKeys.length} 個の不足キーがあります（example.config.toml を参照）`
+    )
+  );
+  for (const { key, defaultValue } of missingKeys.slice(0, 20)) {
+    log(chalk.gray(`  - ${key} = ${String(defaultValue)}`));
+  }
+}
+
 process.on('uncaughtException', (err) => {
   try {
     console.error(`Uncaught exception: ${err.message}`);
     console.dir(err, { colors: true, depth: 2 });
   } catch {}
 });
+
+process.on('unhandledRejection', (reason) => {
+  try {
+    console.error('Unhandled rejection:', reason);
+  } catch {}
+});
+
+let ai: 藍 | undefined;
+
+const shutdown = (signal: string): void => {
+  log(`Received ${signal}, shutting down...`);
+  void (ai?.stop() ?? Promise.resolve()).finally(() => {
+    process.exit(0);
+  });
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 promiseRetry(
   (retry) => {
@@ -97,43 +108,12 @@ promiseRetry(
     log('Starting AiOS...');
 
     // 藍起動
-    new 藍(account, [
-      new CoreModule(),
-      new AiChatModule(),
-      new ReminderModule(),
-      new ReactionConfigModule(),
-      new TalkModule(),
-      new CheckCustomEmojisModule(),
-      new EmojiModule(),
-      new EmojiReactModule(),
-      new FortuneModule(),
-      new GuessingGameModule(),
-      new KazutoriModule(),
-      new ReversiModule(),
-      new TimerModule(),
-      new DiceModule(),
-      new PingModule(),
-      new WelcomeModule(),
-      new ServerModule(),
-      new FollowModule(),
-      new BirthdayModule(),
-      new ValentineModule(),
-      new KeywordModule(),
-      new MazeModule(),
-      new ChartModule(),
-      new SleepReportModule(),
-      new NotingModule(),
-      new PollModule(),
-      new EarthQuakeWarningModule(),
-      new KiatsuModule(),
-      new WeatherModule(),
-      new TimeSignalModule(),
-      new ImagenModule(),
-      new VeoModule(),
-      new InfoModule(),
-      new UpdateCheckerModule(),
-    ]);
+    ai = new 藍(account, createModules());
   })
-  .catch((e) => {
+  .catch((err) => {
     log(chalk.red('Failed to fetch the account'));
+    console.error(err instanceof Error ? err.message : err);
+    // アカウントが取れないまま起動し続けても何もできないため、
+    // 非ゼロで終了してコンテナの再起動ポリシーに委ねる。
+    process.exit(1);
   });

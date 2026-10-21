@@ -1,9 +1,9 @@
-import { bindThis } from '@/decorators.js';
 import loki from 'lokijs';
-import Module from '@/module.js';
+import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import serifs from '@/serifs.js';
 import type { User } from '@/misskey/user.js';
+import Module from '@/module.js';
+import serifs from '@/serifs.js';
 import { acct } from '@/utils/acct.js';
 
 type Game = {
@@ -31,8 +31,7 @@ export default class extends Module {
   public install() {
     this.games = this.ai.getCollection('kazutori');
 
-    this.crawleGameEnd();
-    setInterval(this.crawleGameEnd, 1000);
+    this.every(1000, this.crawleGameEnd, { immediate: true });
 
     return {
       mentionHook: this.mentionHook,
@@ -83,7 +82,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async contextHook(key: any, msg: Message) {
+  private async contextHook(_key: any, msg: Message) {
     if (msg.text == null)
       return {
         reaction: 'hmm',

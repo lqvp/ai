@@ -27,13 +27,16 @@ RUN apt-get update && apt-get install -y \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g pnpm
+# package.json の packageManager と同じバージョンに固定する
+RUN npm install -g pnpm@10.18.0
 
 COPY . /ai
 
 WORKDIR /ai
 
-RUN pnpm install && pnpm run build || test -f ./built/index.js
+RUN pnpm install --frozen-lockfile --prod=false \
+  && pnpm run build \
+  && pnpm prune --prod
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["pnpm", "start"]

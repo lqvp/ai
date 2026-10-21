@@ -1,33 +1,35 @@
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
+import type Stream from '@/stream.js';
 
 export default class extends Module {
   public readonly name = 'welcome';
 
+  private tl?: ReturnType<Stream['useSharedConnection']>;
+
   @bindThis
   public install() {
-    const tl = this.ai.connection.useSharedConnection('localTimeline');
+    this.tl = this.ai.connection.useSharedConnection('localTimeline');
 
-    tl.on('note', this.onLocalNote);
+    this.tl.on('note', this.onLocalNote);
 
     return {};
+  }
+
+  protected onDispose(): void {
+    this.tl?.dispose();
   }
 
   @bindThis
   private onLocalNote(note: any) {
     if (note.isFirstNote) {
-      setTimeout(() => {
+      this.later(3000, () => {
         this.ai.api('notes/create', {
           renoteId: note.id,
         });
-      }, 3000);
+      });
 
-      setTimeout(() => {
-        this.ai.api('notes/reactions/create', {
-          noteId: note.id,
-          reaction: 'congrats',
-        });
-      }, 5000);
+      this.later(5000, () => this.ai.reactions.reactForce(note.id, 'congrats'));
     }
   }
 }

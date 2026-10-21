@@ -1,7 +1,7 @@
 // せりふ
 
-import { readFile } from 'fs/promises';
 import * as TOML from '@iarna/toml';
+import { readFile } from 'fs/promises';
 
 const defaultSerifs = {
   core: {
@@ -591,7 +591,11 @@ function getParamNames(func: Function): string[] {
     .filter((p) => p);
 }
 
-function deepMerge(target: any, source: any, parentKey: string = ''): any {
+export function deepMerge(
+  target: any,
+  source: any,
+  parentKey: string = ''
+): any {
   for (const key in source) {
     if (parentKey === 'noting' && key === 'notes') {
       target[key] = source[key];
@@ -654,10 +658,9 @@ try {
 
 export default computedSerifs;
 
-export function getSerif(variant: string | string[]): string {
-  if (Array.isArray(variant)) {
-    return variant[Math.floor(Math.random() * variant.length)];
-  } else {
-    return variant;
-  }
+export type SerifVariant = string | readonly string[];
+
+export function getSerif(variant: SerifVariant): string {
+  if (typeof variant === 'string') return variant;
+  return variant[Math.floor(Math.random() * variant.length)] ?? '';
 }

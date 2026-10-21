@@ -1,35 +1,33 @@
 // AI CORE
 
-import * as fs from 'fs';
-import { bindThis } from '@/decorators.js';
-import loki from 'lokijs';
-import got from 'got';
-import { FormData, File } from 'formdata-node';
 import chalk from 'chalk';
-
+import loki from 'lokijs';
+import { createRequire } from 'module';
+import APIClient from '@/api/APIClient.js';
 import config from '@/config.js';
-import Module from '@/module.js';
+import DatabaseManager from '@/database/DatabaseManager.js';
+import { bindThis } from '@/decorators.js';
+import Friend from '@/friend.js';
 import Message from '@/message.js';
-import Friend, { FriendDoc } from '@/friend.js';
 import type { User } from '@/misskey/user.js';
+import Module from '@/module.js';
+import { ReactionService } from '@/services/reaction.js';
+import { RelationshipService } from '@/services/relationship.js';
 import Stream from '@/stream.js';
+import TimerManager from '@/timer/TimerManager.js';
 import log from '@/utils/log.js';
 import { sleep } from './utils/sleep.js';
-import DatabaseManager from '@/database/DatabaseManager.js';
-import APIClient from '@/api/APIClient.js';
-import TimerManager from '@/timer/TimerManager.js';
-// import pkg from '../package.json' assert { type: 'json' };
-import { createRequire } from 'module';
+
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
-type MentionHook = (msg: Message) => Promise<boolean | HandlerResult>;
-type ContextHook = (
+export type MentionHook = (msg: Message) => Promise<boolean | HandlerResult>;
+export type ContextHook = (
   key: any,
   msg: Message,
   data?: any
 ) => Promise<void | boolean | HandlerResult>;
-type TimeoutCallback = (data?: any) => void;
+export type TimeoutCallback = (data?: any) => void | Promise<void>;
 
 export type HandlerResult = {
   reaction?: string | null;
@@ -44,6 +42,13 @@ export type InstallerResult = {
 
 export type Meta = {
   lastWakingAt: number;
+  /** memory.json のスキーマ版。起動時のマイグレーション判定に使う。 */
+  schemaVersion?: number;
+};
+
+type RegisteredMentionHook = {
+  module: string;
+  handler: MentionHook;
 };
 
 /**
@@ -54,26 +59,24 @@ export default class 藍 {
   public account: User;
   public connection!: Stream;
   public modules: Module[] = [];
-  private mentionHooks: MentionHook[] = [];
+  private mentionHooks: RegisteredMentionHook[] = [];
   private contextHooks: { [moduleName: string]: ContextHook } = {};
   private timeoutCallbacks: { [moduleName: string]: TimeoutCallback } = {};
   private dbManager!: DatabaseManager;
   private apiClient!: APIClient;
   private timerManager!: TimerManager;
+  private intervals: NodeJS.Timeout[] = [];
+  private stopping = false;
   public lastSleepedAt!: number;
 
-  // DatabaseManagerからのアクセサー
-  public get db() {
-    return this.dbManager.db;
-  }
-  public get friends() {
-    return this.dbManager.friends;
-  }
-  public get moduleData() {
-    return this.dbManager.moduleData;
-  }
-  private get contexts() {
-    return this.dbManager.contexts;
+  /** フォロー関係・マスター判定 */
+  public readonly relationship: RelationshipService;
+  /** リアクション作成 */
+  public readonly reactions: ReactionService;
+
+  /** データベースのリポジトリ */
+  public get repos() {
+    return this.dbManager.repositories;
   }
 
   /**
@@ -108,11 +111,18 @@ export default class 藍 {
 
     this.log('Initializing DatabaseManager...');
     this.apiClient = new APIClient();
+    this.relationship = new RelationshipService(
+      this.apiClient,
+      account.id,
+      config.master
+    );
+    this.reactions = new ReactionService(this.apiClient, (friend) =>
+      this.shouldReaction(friend)
+    );
 
     this.dbManager = new DatabaseManager(
       () => {
         this.log(chalk.green('The memory loaded successfully'));
-        // TimerManagerを初期化
         this.timerManager = new TimerManager(
           this.dbManager,
           this.timeoutCallbacks
@@ -132,6 +142,8 @@ export default class 藍 {
 
   @bindThis
   private run() {
+    if (this.stopping) return;
+
     // データベース初期化はDatabaseManagerで自動実行
     const meta = this.dbManager.getMeta();
     this.lastSleepedAt = meta.lastWakingAt;
@@ -140,47 +152,30 @@ export default class 藍 {
     this.connection = new Stream();
 
     // start heartbeat
-    setInterval(this.connection.heartbeat, 1000 * 60);
+    this.intervals.push(setInterval(this.connection.heartbeat, 1000 * 60));
 
     //#region Main stream
     const mainStream = this.connection.useSharedConnection('main');
 
     // メンションされたとき
-    mainStream.on('mention', async (data) => {
-      if (data.userId == this.account.id) return; // 自分は弾く
-      if (data.text && data.text.startsWith('@' + this.account.username)) {
-        // Misskeyのバグで投稿が非公開扱いになる
-        if (data.text == null)
-          data = await this.api('notes/show', { noteId: data.id });
-        this.onReceiveMessage(new Message(this, data, false));
-      }
+    mainStream.on('mention', (data) => {
+      void this.handleIncomingNote(data, { requireMention: true }).catch(
+        (err) => this.log(`mention handler failed: ${String(err)}`)
+      );
     });
 
     // 返信されたとき
-    mainStream.on('reply', async (data) => {
-      if (data.userId == this.account.id) return; // 自分は弾く
-      if (data.text && data.text.startsWith('@' + this.account.username))
-        return;
-      // Misskeyのバグで投稿が非公開扱いになる
-      if (data.text == null)
-        data = await this.api('notes/show', { noteId: data.id });
-      this.onReceiveMessage(new Message(this, data, false));
+    mainStream.on('reply', (data) => {
+      void this.handleIncomingNote(data, { requireMention: false }).catch(
+        (err) => this.log(`reply handler failed: ${String(err)}`)
+      );
     });
 
     // Renoteされたとき
-    mainStream.on('renote', async (data) => {
-      if (data.userId == this.account.id) return; // 自分は弾く
-      if (data.text == null && (data.files || []).length == 0) return;
-
-      // リアクション設定チェック
-      const friend = this.lookupFriend(data.userId);
-      if (!this.shouldReaction(friend)) return;
-
-      // リアクションする
-      this.api('notes/reactions/create', {
-        noteId: data.id,
-        reaction: 'love',
-      });
+    mainStream.on('renote', (data) => {
+      void this.handleRenote(data).catch((err) =>
+        this.log(`renote handler failed: ${String(err)}`)
+      );
     });
 
     // 通知
@@ -190,64 +185,35 @@ export default class 藍 {
 
     // チャット
     mainStream.on('newChatMessage', (data) => {
-      const fromUser = data.fromUser;
-      if (data.fromUserId == this.account.id) return; // 自分は弾く
-      this.onReceiveMessage(new Message(this, data, true));
-
-      // 一定期間 chatUser / chatRoom のストリームに接続して今後のやり取りに備える
-      if (data.fromUserId) {
-        const chatStream = this.connection.connectToChannel('chatUser', {
-          otherId: data.fromUserId,
-        });
-
-        let timer;
-        function setTimer() {
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(
-            () => {
-              chatStream.dispose();
-            },
-            1000 * 60 * 2
-          );
-        }
-        setTimer();
-
-        chatStream.on('message', (data) => {
-          if (data.fromUserId == this.account.id) return; // 自分は弾く
-          chatStream.send('read', {
-            id: data.id,
-          });
-          this.onReceiveMessage(
-            new Message(
-              this,
-              {
-                ...data,
-                // fromUserは省略されてくるため
-                fromUser: fromUser,
-              },
-              true
-            )
-          );
-          setTimer();
-        });
-      } else {
-        // TODO: room
-      }
+      void this.handleChatMessage(data).catch((err) =>
+        this.log(`chat handler failed: ${String(err)}`)
+      );
     });
     //#endregion
 
     // Install modules
-    this.modules.forEach((m) => {
+    for (const m of this.modules) {
       this.log(`Installing ${chalk.cyan.italic(m.name)}\tmodule...`);
       m.init(this);
-      const res = m.install();
-      if (res != null) {
-        if (res.mentionHook) this.mentionHooks.push(res.mentionHook);
+
+      try {
+        const res = m.getHooks();
+        if (res.mentionHook) {
+          this.mentionHooks.push({
+            module: m.name,
+            handler: res.mentionHook,
+          });
+        }
         if (res.contextHook) this.contextHooks[m.name] = res.contextHook;
-        if (res.timeoutCallback)
+        if (res.timeoutCallback) {
           this.timeoutCallbacks[m.name] = res.timeoutCallback;
+        }
+      } catch (err) {
+        this.log(
+          chalk.red(`Failed to install module "${m.name}": ${String(err)}`)
+        );
       }
-    });
+    }
 
     // TimerManagerにコールバックを更新
     this.timerManager.updateTimeoutCallbacks(this.timeoutCallbacks);
@@ -255,9 +221,89 @@ export default class 藍 {
     // タイマー監視開始
     this.timerManager.startMonitoring();
 
-    setInterval(this.logWaking, 10000);
+    // 稼働記録。以前は10秒ごとだったが、Lokiのautosaveで
+    // memory.json 全体を書き出す頻度が高すぎるため5分に延ばす。
+    this.intervals.push(setInterval(this.logWaking, 5 * 60_000));
 
     this.log(chalk.green.bold('Ai am now running!'));
+  }
+
+  /**
+   * メンション/リプライのストリームイベントを処理する。
+   */
+  private async handleIncomingNote(
+    raw: any,
+    options: { requireMention: boolean }
+  ): Promise<void> {
+    if (raw.userId == this.account.id) return; // 自分は弾く
+
+    let data = raw;
+    // Misskeyのバグで投稿が非公開扱いになることがあるため、textが無ければ取得する
+    if (data.text == null) {
+      data = await this.api('notes/show', { noteId: data.id });
+    }
+
+    const text: string | null = data.text ?? null;
+
+    if (options.requireMention) {
+      if (text == null) return;
+      if (!text.startsWith(`@${this.account.username}`)) return;
+    } else {
+      // メンションは mention イベントで処理するので、reply では二重処理しない
+      if (text != null && text.startsWith(`@${this.account.username}`)) return;
+    }
+
+    await this.onReceiveMessage(new Message(this, data, false));
+  }
+
+  private async handleRenote(data: any): Promise<void> {
+    if (data.userId == this.account.id) return; // 自分は弾く
+    if (data.text == null && (data.files || []).length == 0) return;
+
+    const friend = this.lookupFriend(data.userId);
+    await this.reactions.react(data.id, 'love', friend);
+  }
+
+  private async handleChatMessage(data: any): Promise<void> {
+    const fromUser = data.fromUser;
+    if (data.fromUserId == this.account.id) return; // 自分は弾く
+    await this.onReceiveMessage(new Message(this, data, true));
+
+    // 一定期間 chatUser のストリームに接続して今後のやり取りに備える
+    if (!data.fromUserId) return;
+
+    const chatStream = this.connection.connectToChannel('chatUser', {
+      otherId: data.fromUserId,
+    });
+
+    let timer: NodeJS.Timeout | undefined;
+    const setTimer = (): void => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(
+        () => {
+          chatStream.dispose();
+        },
+        1000 * 60 * 2
+      );
+    };
+    setTimer();
+
+    chatStream.on('message', (message: any) => {
+      if (message.fromUserId == this.account.id) return; // 自分は弾く
+      chatStream.send('read', { id: message.id });
+      void this.onReceiveMessage(
+        new Message(
+          this,
+          {
+            ...message,
+            // fromUserは省略されてくるため
+            fromUser,
+          },
+          true
+        )
+      ).catch((err) => this.log(`chat message failed: ${String(err)}`));
+      setTimer();
+    });
   }
 
   /**
@@ -279,70 +325,78 @@ export default class 藍 {
     // Look up the context
     const context = isNoContext
       ? null
-      : this.contexts.findOne(
-          msg.isChat
-            ? {
-                isChat: true,
-                userId: msg.userId,
-              }
-            : {
-                isChat: false,
-                noteId: msg.replyId === null ? undefined : msg.replyId, // Handle null replyId
-              }
-        );
+      : msg.isChat
+        ? this.repos.contexts.findForChat(msg.userId)
+        : this.repos.contexts.findForNote(msg.replyId);
 
     let reaction: string | null = 'love';
-    let immediate: boolean = false;
+    let immediate = false;
 
-    //#region
-    const invokeMentionHooks = async () => {
-      let res: boolean | HandlerResult | null = null;
-
-      for (const handler of this.mentionHooks) {
-        res = await handler(msg);
-        if (res === true || typeof res === 'object') break;
-      }
-
+    const applyResult = (res: void | boolean | HandlerResult): void => {
       if (res != null && typeof res === 'object') {
-        if (res.reaction != null) reaction = res.reaction;
+        if (res.reaction !== undefined) reaction = res.reaction;
         if (res.immediate != null) immediate = res.immediate;
       }
     };
 
     // コンテキストがあればコンテキストフック呼び出し
     // なければそれぞれのモジュールについてフックが引っかかるまで呼び出し
+    let handled = false;
+
     if (context != null) {
       const handler = this.contextHooks[context.module];
-      const res = await handler(context.key, msg, context.data);
 
-      if (res != null && typeof res === 'object') {
-        if (res.reaction != null) reaction = res.reaction;
-        if (res.immediate != null) immediate = res.immediate;
+      if (handler == null) {
+        this.log(
+          chalk.yellow(
+            `Context module "${context.module}" is not installed; falling back to mention hooks`
+          )
+        );
+        // 無効化されたモジュールのコンテキストが残っている場合は掃除する
+        this.repos.contexts.remove(context);
+      } else {
+        try {
+          const res = await handler(context.key, msg, context.data);
+          applyResult(res);
+          handled = res !== false;
+        } catch (err) {
+          this.log(
+            chalk.red(
+              `Context hook of "${context.module}" failed: ${String(err)}`
+            )
+          );
+          handled = false;
+        }
       }
-
-      if (res === false) {
-        await invokeMentionHooks();
-      }
-    } else {
-      await invokeMentionHooks();
     }
-    //#endregion
+
+    if (!handled) {
+      let res: boolean | HandlerResult | null = null;
+
+      for (const { module, handler } of this.mentionHooks) {
+        try {
+          res = await handler(msg);
+        } catch (err) {
+          this.log(
+            chalk.red(`Mention hook of "${module}" failed: ${String(err)}`)
+          );
+          res = false;
+          continue;
+        }
+
+        if (res === true || typeof res === 'object') break;
+      }
+
+      if (res != null) applyResult(res);
+    }
 
     if (!immediate) {
       await sleep(1000);
     }
 
-    // リアクションする
-    if (msg.isChat) {
-      // TODO: リアクション？
-    } else {
-      // リアクションする
-      if (reaction && this.shouldReaction(msg.friend)) {
-        this.api('notes/reactions/create', {
-          noteId: msg.id,
-          reaction: reaction,
-        });
-      }
+    // リアクションする（チャットは対象外）
+    if (!msg.isChat) {
+      await this.reactions.react(msg.id, reaction, msg.friend);
     }
   }
 
@@ -364,6 +418,7 @@ export default class 藍 {
 
   @bindThis
   private logWaking() {
+    if (this.stopping) return;
     this.setMeta({
       lastWakingAt: Date.now(),
     });
@@ -379,15 +434,11 @@ export default class 藍 {
 
   @bindThis
   public lookupFriend(userId: User['id']): Friend | null {
-    const doc = this.friends.findOne({
-      userId: userId,
-    });
+    const doc = this.repos.friends.findById(userId);
 
     if (doc == null) return null;
 
-    const friend = new Friend(this, { doc: doc });
-
-    return friend;
+    return new Friend(this, { doc: doc });
   }
 
   /**
@@ -409,7 +460,7 @@ export default class 藍 {
    */
   @bindThis
   public async upload(
-    file: Buffer | fs.ReadStream,
+    file: Buffer,
     meta: { filename: string; contentType: string }
   ) {
     return this.apiClient.upload(file, meta);
@@ -455,7 +506,7 @@ export default class 藍 {
     id: string,
     data?: any
   ) {
-    this.contexts.insertOne(
+    this.repos.contexts.subscribe(
       isChat
         ? {
             isChat: true,
@@ -481,18 +532,12 @@ export default class 藍 {
    */
   @bindThis
   public unsubscribeReply(module: Module, key: string | null) {
-    this.contexts.findAndRemove({
-      key: key,
-      module: module.name,
-    });
+    this.repos.contexts.removeByKey(module.name, key);
   }
 
   /**
    * 指定したミリ秒経過後に、そのモジュールのタイムアウトコールバックを呼び出します。
    * このタイマーは記憶に永続化されるので、途中でプロセスを再起動しても有効です。
-   * @param module モジュール名
-   * @param delay ミリ秒
-   * @param data オプションのデータ
    */
   @bindThis
   public setTimeoutWithPersistence(module: Module, delay: number, data?: any) {
@@ -507,5 +552,37 @@ export default class 藍 {
   @bindThis
   public setMeta(meta: Partial<Meta>) {
     return this.dbManager.setMeta(meta);
+  }
+
+  /**
+   * 実行中の処理を止め、DBを保存して終了する。
+   */
+  @bindThis
+  public async stop(): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
+    this.log('Stopping AiOS...');
+
+    for (const id of this.intervals) clearInterval(id);
+    this.intervals = [];
+
+    for (const module of this.modules) {
+      try {
+        module.dispose();
+      } catch (err) {
+        this.log(`Failed to dispose module "${module.name}": ${String(err)}`);
+      }
+    }
+
+    this.timerManager?.stopMonitoring();
+
+    try {
+      this.connection?.close();
+    } catch (err) {
+      this.log(`Failed to close stream: ${String(err)}`);
+    }
+
+    this.dbManager.close();
+    this.log(chalk.green('AiOS stopped'));
   }
 }

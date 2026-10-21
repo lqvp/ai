@@ -1,8 +1,8 @@
+import { HandlerResult } from '@/ai.js';
 import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
 import Message from '@/message.js';
 import { Note } from '@/misskey/note.js';
-import { HandlerResult } from '@/ai.js';
+import Module from '@/module.js';
 
 export default class extends Module {
   public readonly name = 'ping';
@@ -32,19 +32,14 @@ export default class extends Module {
     const serverDiff = createdAt - Date.now(); // サーバー時刻との差
 
     setTimeout(async () => {
-      const detailPosted = await msg.reply(
+      await msg.reply(
         `⏱️ **詳細レイテンシ**\n` +
           `総時間: ${totalMs.toFixed(2)} ms\n` +
           `サーバー時刻差: ${serverDiff.toFixed(0)} ms`
       );
 
       // 詳細レイテンシ情報にもリアクションを付ける
-      if (this.ai.shouldReaction(msg.friend)) {
-        this.ai.api('notes/reactions/create', {
-          noteId: msg.id,
-          reaction: '⏱️',
-        });
-      }
+      await this.ai.reactions.react(msg.id, '⏱️', msg.friend);
     }, 200);
 
     // pingコマンド成功時のリアクション

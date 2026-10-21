@@ -1,7 +1,7 @@
-import { bindThis } from '@/decorators.js';
 import loki from 'lokijs';
-import Module from '@/module.js';
+import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
+import Module from '@/module.js';
 import serifs from '@/serifs.js';
 
 export default class extends Module {
@@ -36,6 +36,12 @@ export default class extends Module {
       userId: msg.userId,
       isEnded: false,
     });
+
+    // 進行中のゲームがある場合は新規作成しない（同時プレイの重複防止）
+    if (exist != null) {
+      msg.reply(serifs.guessingGame.started);
+      return true;
+    }
 
     const secret = Math.floor(Math.random() * 100);
 

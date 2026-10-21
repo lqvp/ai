@@ -1,7 +1,7 @@
 import { bindThis } from '@/decorators.js';
-import Module from '@/module.js';
-import Message from '@/message.js';
 import Friend from '@/friend.js';
+import Message from '@/message.js';
+import Module from '@/module.js';
 
 export default class extends Module {
   public readonly name = 'reaction-config';

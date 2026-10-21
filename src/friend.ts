@@ -1,8 +1,8 @@
-import { bindThis } from '@/decorators.js';
 import 藍 from '@/ai.js';
+import { bindThis } from '@/decorators.js';
+import type { User } from '@/misskey/user.js';
 import IModule from '@/module.js';
 import getDate from '@/utils/get-date.js';
-import type { User } from '@/misskey/user.js';
 import { genItem } from '@/vocabulary.js';
 
 export type FriendDoc = {
@@ -43,26 +43,7 @@ export default class Friend {
     this.ai = ai;
 
     if (opts.user) {
-      const exist = this.ai.friends.findOne({
-        userId: opts.user.id,
-      });
-
-      if (exist == null) {
-        const inserted = this.ai.friends.insertOne({
-          userId: opts.user.id,
-          user: opts.user,
-        });
-
-        if (inserted == null) {
-          throw new Error('Failed to insert friend doc');
-        }
-
-        this.doc = inserted;
-      } else {
-        this.doc = exist;
-        this.doc.user = { ...this.doc.user, ...opts.user };
-        this.save();
-      }
+      this.doc = this.ai.repos.friends.upsert(opts.user);
     } else if (opts.doc) {
       this.doc = opts.doc;
     } else {
@@ -190,7 +171,7 @@ export default class Friend {
 
   @bindThis
   public save() {
-    this.ai.friends.update(this.doc);
+    this.ai.repos.friends.save(this.doc);
   }
 
   @bindThis
@@ -205,9 +186,7 @@ export default class Friend {
 
   @bindThis
   public transferMemory(code: string): boolean {
-    const src = this.ai.friends.findOne({
-      transferCode: code,
-    });
+    const src = this.ai.repos.friends.findByTransferCode(code);
 
     if (src == null) return false;
 

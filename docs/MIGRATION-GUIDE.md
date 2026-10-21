@@ -17,7 +17,7 @@ https://lqvp.github.io/ai/ を開いて、古い設定ファイルの内容を�
 
 ### 3. 設定を確認
 
-[`example.config.toml`](./example.config.toml) を参考に、必要に応じてAPIキーやホスト情報を調整してください。
+[`example.config.toml`](../example.config.toml) を参考に、必要に応じてAPIキーやホスト情報を調整してください。
 
 ## ⚠️ 主な変更点
 

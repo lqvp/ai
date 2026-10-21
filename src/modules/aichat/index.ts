@@ -1,233 +1,71 @@
-import got from 'got';
-import loki from 'lokijs';
-import config, { type Config } from '@/config.js';
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
-import Friend from '@/friend.js';
 import Message from '@/message.js';
-import { Note } from '@/misskey/note.js';
 import Module from '@/module.js';
-import serifs from '@/serifs.js';
-import { jinaRead } from '@/utils/jina.js';
-import { exaSearch } from '@/utils/exa.js';
-import { plain } from '@/utils/mfm.js';
-import urlToBase64 from '@/utils/url2base64.js';
-import urlToJson from '@/utils/url2json.js';
-import { parseToolCallsFromContent } from './tool-call-parser.js';
-
-type AiChat = {
-  question: string;
-  prompt: string;
-  api: string;
-  key: string;
-  fromMention: boolean;
-  friendName?: string;
-  grounding?: boolean;
-  history?: ChatHistoryItem[];
-  timelineContext?: { before?: any[]; after?: any[] };
-};
-
-type ChatHistoryItem = {
-  role: string;
-  content: string;
-};
-type Base64File = {
-  type: string;
-  base64: string;
-  url?: string;
-};
-type GeminiOptions = {
-  contents?: GeminiContents[];
-  systemInstruction?: GeminiSystemInstruction;
-  tools?: Array<{
-    url_context?: {};
-    google_search?: {};
-  }>;
-  generationConfig?: {
-    thinkingConfig?: {
-      thinkingBudget?: number;
-    };
-  };
-};
-type GeminiPart = {
-  inlineData?: {
-    mimeType: string;
-    data: string;
-  };
-  fileData?: {
-    mimeType: string;
-    fileUri: string;
-  };
-  text?: string;
-};
-
-type GeminiParts = GeminiPart[];
-type GeminiSystemInstruction = {
-  role: string;
-  parts: [{ text: string }];
-};
-type GeminiContents = {
-  role: string;
-  parts: GeminiParts;
-};
-
-type AiChatHist = {
-  postId: string;
-  createdAt: number;
-  type: string;
-  api?: string;
-  history?: ChatHistoryItem[];
-  friendName?: string;
-  originalNoteId?: string;
-  fromMention: boolean;
-  grounding?: boolean;
-  youtubeUrls?: string[];
-  isChat?: boolean;
-  chatUserId?: string;
-  timelineContext?: { before?: any[]; after?: any[] };
-  quotedFiles?: Base64File[];
-};
-
-type ApiErrorResponse = {
-  error: true;
-  errorCode: number | null;
-  errorMessage: string | null;
-};
-
-type GeminiApiResponse = string | ApiErrorResponse | null;
-
-// OpenAI API互換の型定義
-type OpenaiContentPart =
-  | { type: string; text?: string; image_url?: { url: string } };
-
-type OpenaiSystemOrUserMessage = {
-  role: 'system' | 'user';
-  content: string | OpenaiContentPart[];
-};
-
-type OpenaiToolCall = {
-  id: string;
-  type: 'function';
-  function: {
-    name: string;
-    arguments: string;
-  };
-};
-
-type OpenaiAssistantMessage = {
-  role: 'assistant';
-  content: string | null | OpenaiContentPart[];
-  tool_calls?: OpenaiToolCall[];
-};
-
-type OpenaiToolMessage = {
-  role: 'tool';
-  tool_call_id: string;
-  content: string;
-};
-
-type OpenaiMessage =
-  | OpenaiSystemOrUserMessage
-  | OpenaiAssistantMessage
-  | OpenaiToolMessage;
-
-type OpenaiFunctionParameters = {
-  type: 'object';
-  properties: Record<string, unknown>;
-  required?: string[];
-};
-
-type OpenaiFunctionTool = {
-  type: 'function';
-  function: {
-    name: string;
-    description?: string;
-    parameters: OpenaiFunctionParameters;
-  };
-};
-
-type OpenaiToolChoice =
-  | 'auto'
-  | 'none'
-  | { type: 'function'; function: { name: string } };
-
-type OpenaiOptions = {
-  model: string;
-  messages: OpenaiMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  tools?: OpenaiFunctionTool[];
-  tool_choice?: OpenaiToolChoice;
-};
-
-type AiProvider = 'gemini' | 'openai';
-
-type UrlPreview = {
-  title: string;
-  icon: string;
-  description: string;
-  thumbnail: string;
-  player: {
-    url: string;
-    width: number;
-    height: number;
-    allow: [];
-  };
-  sitename: string;
-  sensitive: boolean;
-  activityPub: string;
-  url: string;
-};
-
-// API関連定数
-const TYPE_GEMINI = 'gemini';
-const GROUNDING_TARGET = 'ggg';
-const geminiModel = config.gemini?.model || 'gemini-2.5-flash';
-const GEMINI_API = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
-
-const EXA_TOOL_SEARCH = 'exa_search';
-const JINA_TOOL_READ = 'jina_read';
-
-// タイミング関連定数
-const TIMEOUT_TIME = 1000 * 60 * 30; // 30分（0.5時間）
-const MINUTES_TO_MS = 60 * 1000;
-const HOURS_TO_MS = 60 * MINUTES_TO_MS;
-
-// デフォルト設定値
-const DEFAULTS = {
-  RANDOMTALK_PROBABILITY: 0.02,
-  RANDOMTALK_INTERVAL_HOURS: 12,
-  AUTO_NOTE_INTERVAL_HOURS: 6,
-  AUTO_NOTE_PROBABILITY: 0.02,
-  MAX_HISTORY_LENGTH: 10,
-} as const;
+import { fetchNoteFiles } from '@/services/media.js';
+import { postAutoNote } from './auto-note.js';
+import { ChatHandler } from './chat-handler.js';
+import {
+  DEFAULTS,
+  HOURS_TO_MS,
+  MINUTES_TO_MS,
+  TYPE_GEMINI,
+} from './constants.js';
+import {
+  type AiChatHist,
+  ChatHistoryRepository,
+} from './history-repository.js';
+import { TextGenerator } from './text-generator.js';
+import type { AiChat, Base64File } from './types.js';
+import {
+  collectUrlInfo,
+  formatTimelineContext,
+  isYoutubeUrl,
+} from './url-context.js';
 
 export default class extends Module {
   public readonly name = 'aichat';
-  private aichatHist!: loki.Collection<AiChatHist>;
+  private history!: ChatHistoryRepository;
+  private generator!: TextGenerator;
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
 
-  // 型ガード関数
-  private isApiError(value: GeminiApiResponse): value is ApiErrorResponse {
-    return (
-      value !== null &&
-      typeof value === 'object' &&
-      'error' in value &&
-      value.error === true
-    );
-  }
+  private chatHandler!: ChatHandler;
 
   @bindThis
   public install() {
-    this.aichatHist = this.ai.getCollection('aichatHist', {
-      indices: ['postId', 'originalNoteId'],
+    this.history = new ChatHistoryRepository(
+      this.ai.getCollection('aichatHist', {
+        indices: ['postId', 'originalNoteId', 'chatUserId'],
+      })
+    );
+
+    this.generator = new TextGenerator({
+      log: (message) => this.log(message),
+      isMasterUser: (msg) => this.isMasterUser(msg),
+      isYoutubeUrl,
+      collectUrlInfo: (aiChat) => collectUrlInfo(aiChat, (m) => this.log(m)),
+      formatTimelineContext,
+    });
+
+    this.chatHandler = new ChatHandler({
+      ai: this.ai,
+      moduleName: this.name,
+      history: this.history,
+      log: (message) => this.log(message),
+      genText: (aiChat, files, msg) => this.genText(aiChat, files, msg),
+      subscribeReply: (postId, isChat, userId) =>
+        this.subscribeReply(postId, isChat, userId),
+      setTimeoutWithPersistence: (delay, data) =>
+        this.setTimeoutWithPersistence(delay, data),
+      later: (ms, task) => this.later(ms, task),
     });
 
     // Gemini全体が有効かチェック
     if (!config.gemini?.enabled) {
       this.log('Gemini機能が無効になっています');
-      return {};
+      return false;
     }
 
     // ランダムトーク設定
@@ -262,7 +100,7 @@ export default class extends Module {
 
     // ランダムトークのインターバル設定
     if (randomTalkConfig?.enabled) {
-      setInterval(this.aichatRandomTalk, this.randomTalkIntervalMs);
+      this.every(this.randomTalkIntervalMs, this.aichatRandomTalk);
       this.log(
         'Geminiランダムトーク機能を有効化: interval=' +
           this.randomTalkIntervalMs
@@ -277,11 +115,11 @@ export default class extends Module {
         !isNaN(autoNoteConfig.intervalMinutes)
           ? 1000 * 60 * autoNoteConfig.intervalMinutes
           : DEFAULTS.AUTO_NOTE_INTERVAL_HOURS * HOURS_TO_MS;
-      setInterval(
-        this.autoNote,
+      this.every(
         interval +
           Math.random() *
-            ((DEFAULTS.AUTO_NOTE_INTERVAL_HOURS * HOURS_TO_MS) / 20)
+            ((DEFAULTS.AUTO_NOTE_INTERVAL_HOURS * HOURS_TO_MS) / 20),
+        this.autoNote
       );
       this.log('Gemini自動ノート投稿を有効化: interval=' + interval);
 
@@ -301,995 +139,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private isYoutubeUrl(url: string): boolean {
-    return (
-      url.includes('www.youtube.com') ||
-      url.includes('m.youtube.com') ||
-      url.includes('youtu.be')
-    );
-  }
-
-  @bindThis
-  private normalizeYoutubeUrl(url: string): string {
-    try {
-      // URLオブジェクトを使用してパラメータを正確に解析
-      const urlObj = new URL(url);
-      let videoId = '';
-
-      // youtu.beドメインの場合
-      if (urlObj.hostname.includes('youtu.be')) {
-        // パスから直接ビデオIDを取得
-        videoId = urlObj.pathname.split('/')[1];
-      }
-      // youtube.comドメインの場合
-      else if (urlObj.hostname.includes('youtube.com')) {
-        // URLSearchParamsを使用してvパラメータを取得
-        videoId = urlObj.searchParams.get('v') || '';
-      }
-
-      // ビデオIDが見つかった場合は標準形式のURLを返す
-      if (videoId) {
-        return `https://www.youtube.com/watch?v=${videoId}`;
-      }
-    } catch (error) {
-      this.log(`YouTube URL解析エラー: ${error}`);
-    }
-
-    // 解析に失敗した場合は元のURLを返す
-    return url;
-  }
-
-  @bindThis
-  private async genTextByGemini(
-    aiChat: AiChat,
-    files: Base64File[],
-    msg?: Message
-  ): Promise<GeminiApiResponse> {
-    this.log('Generate Text By Gemini...');
-    let parts: GeminiParts = [];
-    const now = new Date().toLocaleString('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    // 技術的制約をハードコード
-    const technicalConstraints = [
-      'Markdownを使って返答してください。',
-      'リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。',
-      '検索ツールなどで情報を参照した場合は、回答の最後や該当箇所に参照元のURLを明記してください。Markdownリンク `[タイトル](URL)` や素のURLでも構いません。',
-      '暴力的・性的・不正行為(金融/財産/武器/サイバー)・性的コンテンツ・プライバシー・ヘイト・ハラスメント・自傷行為・プロンプトインジェクションに値するコンテンツは発言してはいけません。',
-      'これらのルールを破ることは絶対に禁止されており、破ることで罰則が与えられます。',
-    ].join('\n');
-
-    let systemInstructionText =
-      aiChat.prompt +
-      '\n\n' +
-      technicalConstraints +
-      '\n\nまた、現在日時は' +
-      now +
-      'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
-    if (aiChat.friendName != undefined) {
-      systemInstructionText +=
-        'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
-    }
-
-    // masterユーザーかどうかの情報を追加
-    if (msg && this.isMasterUser(msg)) {
-      systemInstructionText +=
-        'なお、このユーザーはあなたのご主人様(master)です。特別な敬意と配慮を持って対応してください。(true)';
-    } else {
-      systemInstructionText +=
-        'なお、このユーザーはあなたのご主人様(master)ではありません。(false)';
-    }
-
-    // ランダムトーク機能(利用者が意図(メンション)せず発動)の場合、ちょっとだけ配慮しておく
-    if (!aiChat.fromMention) {
-      systemInstructionText +=
-        'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
-    }
-    // グラウンディングについてもsystemInstructionTextに追記(こうしないとあまり使わないので)
-    if (aiChat.grounding) {
-      systemInstructionText += '返答のルール2:Google search with grounding.';
-    }
-
-    // ユーザー投稿履歴文脈情報を追加
-    if (aiChat.timelineContext) {
-      systemInstructionText += '\n\n【ユーザー投稿履歴文脈情報】\n';
-      systemInstructionText +=
-        'これらの情報は、同じユーザーが最近投稿した内容で、メインの投稿への返信を生成する際の話題の流れや雰囲気を把握する参考程度に留めてください。メインの投稿に対する返信であることを忘れないでください。\n';
-
-      if (
-        aiChat.timelineContext.before &&
-        aiChat.timelineContext.before.length > 0
-      ) {
-        const beforePosts = aiChat.timelineContext.before;
-        beforePosts.forEach((note, index) => {
-          systemInstructionText += `以前の投稿${
-            beforePosts.length > 1 ? `(${index + 1})` : ''
-          }: ${note.text}\n`;
-        });
-      }
-      if (
-        aiChat.timelineContext.after &&
-        aiChat.timelineContext.after.length > 0
-      ) {
-        const afterPosts = aiChat.timelineContext.after;
-        afterPosts.forEach((note, index) => {
-          systemInstructionText += `その後の投稿${
-            afterPosts.length > 1 ? `(${index + 1})` : ''
-          }: ${note.text}\n`;
-        });
-      }
-    }
-
-    // URLから情報を取得（フォールバック用）
-    let youtubeURLs: string[] = [];
-    let hasYoutubeUrl = false;
-    let fallbackUrlInfo = '';
-
-    if (aiChat.question !== undefined) {
-      const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
-      const urlarray = [...aiChat.question.matchAll(urlexp)];
-      if (urlarray.length > 0) {
-        for (const url of urlarray) {
-          this.log('URL:' + url[0]);
-
-          // YouTubeのURLの場合は特別処理
-          if (this.isYoutubeUrl(url[0])) {
-            this.log('YouTube URL detected: ' + url[0]);
-            const normalizedUrl = this.normalizeYoutubeUrl(url[0]);
-            this.log('Normalized YouTube URL: ' + normalizedUrl);
-            youtubeURLs.push(normalizedUrl);
-            hasYoutubeUrl = true;
-            continue;
-          }
-
-          // フォールバック用のURL情報を収集
-          let result: unknown = null;
-          try {
-            result = await urlToJson(url[0]);
-          } catch (err: unknown) {
-            fallbackUrlInfo +=
-              '補足として提供されたURLは無効でした:URL=>' + url[0] + '\n';
-            this.log('Skip url becase error in urlToJson');
-            continue;
-          }
-          const urlpreview: UrlPreview = result as UrlPreview;
-          if (urlpreview.title) {
-            fallbackUrlInfo +=
-              '補足として提供されたURLの情報は次の通り:URL=>' +
-              urlpreview.url +
-              'サイト名(' +
-              urlpreview.sitename +
-              ')、';
-            if (!urlpreview.sensitive) {
-              fallbackUrlInfo +=
-                'タイトル(' +
-                urlpreview.title +
-                ')、' +
-                '説明(' +
-                urlpreview.description +
-                ')、' +
-                '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。\n';
-              this.log('urlpreview.sitename:' + urlpreview.sitename);
-              this.log('urlpreview.title:' + urlpreview.title);
-              this.log('urlpreview.description:' + urlpreview.description);
-            } else {
-              fallbackUrlInfo +=
-                'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。\n';
-            }
-          } else {
-            this.log('urlpreview.title is nothing');
-          }
-        }
-      }
-    }
-
-    // 保存されたYouTubeのURLを会話履歴から取得
-    if (aiChat.history && aiChat.history.length > 0) {
-      // historyの最初のユーザーメッセージをチェック
-      const firstUserMessage = aiChat.history.find(
-        (entry) => entry.role === 'user'
-      );
-      if (firstUserMessage) {
-        const urlexp = RegExp(
-          "(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)",
-          'g'
-        );
-        const urlarray = [...firstUserMessage.content.matchAll(urlexp)];
-
-        for (const url of urlarray) {
-          if (this.isYoutubeUrl(url[0])) {
-            const normalizedUrl = this.normalizeYoutubeUrl(url[0]);
-            // 重複を避ける
-            if (!youtubeURLs.includes(normalizedUrl)) {
-              this.log('Found YouTube URL in history: ' + normalizedUrl);
-              youtubeURLs.push(normalizedUrl);
-              hasYoutubeUrl = true;
-            }
-          }
-        }
-      }
-    }
-
-    // フォールバック用のURL情報を追加（後でURLコンテキストツールの使用状況に応じて制御）
-    if (fallbackUrlInfo) {
-      systemInstructionText +=
-        '\n\n【フォールバックURL情報】\n' + fallbackUrlInfo;
-    }
-
-    const systemInstruction: GeminiSystemInstruction = {
-      role: 'system',
-      parts: [{ text: systemInstructionText }],
-    };
-
-    // ファイルが存在する場合、ファイルを添付して問い合わせ
-    parts = [{ text: aiChat.question }];
-
-    // YouTubeのURLをfileDataとして追加
-    for (const youtubeURL of youtubeURLs) {
-      parts.push({
-        fileData: {
-          mimeType: 'video/mp4',
-          fileUri: youtubeURL,
-        },
-      });
-    }
-
-    // 画像ファイルを追加
-    if (files.length >= 1) {
-      for (const file of files) {
-        parts.push({
-          inlineData: {
-            mimeType: file.type,
-            data: file.base64,
-          },
-        });
-      }
-    }
-
-    let contents: GeminiContents[] = [];
-    if (aiChat.history != null) {
-      aiChat.history.forEach((entry) => {
-        contents.push({
-          role: entry.role,
-          parts: [{ text: entry.content }],
-        });
-      });
-    }
-    contents.push({ role: 'user', parts: parts });
-
-    let geminiOptions: GeminiOptions = {
-      contents: contents,
-      systemInstruction: systemInstruction,
-    };
-
-    // URLコンテキストツールが使用される場合、質問文を調整
-    if (geminiOptions.tools?.some((tool) => tool.url_context)) {
-      // URLコンテキストツールが使用される場合、質問文にURLを明示的に含める
-      const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
-      const urlarray = [...aiChat.question.matchAll(urlexp)];
-      if (urlarray.length > 0) {
-        const nonYoutubeUrls = urlarray.filter(
-          (url) => !this.isYoutubeUrl(url[0])
-        );
-        if (nonYoutubeUrls.length > 0) {
-          // 最初のユーザーメッセージの質問文を更新
-          if (contents.length > 0) {
-            const lastContent = contents[contents.length - 1];
-            if (lastContent.role === 'user' && lastContent.parts.length > 0) {
-              const questionText = `${
-                aiChat.question
-              }\n\n参考URL:\n${nonYoutubeUrls.map((url) => url[0]).join('\n')}`;
-              lastContent.parts[0].text = questionText;
-              this.log('URLコンテキスト用に質問文を調整しました');
-            }
-          }
-        }
-      }
-    }
-
-    // thinkingConfigの設定
-    if (config.gemini?.thinkingBudget !== undefined) {
-      geminiOptions.generationConfig = {
-        thinkingConfig: {
-          thinkingBudget: config.gemini.thinkingBudget,
-        },
-      };
-    }
-
-    // ツールの設定
-    if (geminiOptions.tools === undefined) {
-      geminiOptions.tools = [];
-    }
-
-    // URLがある場合はURLコンテキストを追加
-    if (aiChat.question !== undefined && aiChat.question.length > 0) {
-      const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
-      const urlarray = [...aiChat.question.matchAll(urlexp)];
-
-      if (urlarray.length > 0) {
-        // YouTube以外のURLがある場合はURLコンテキストツールを追加
-        const hasNonYoutubeUrl = urlarray.some(
-          (url) => !this.isYoutubeUrl(url[0])
-        );
-        if (hasNonYoutubeUrl) {
-          geminiOptions.tools.push({ url_context: {} });
-          this.log('URLコンテキストツールを有効化しました');
-
-          // URLコンテキストツールが使用される場合、フォールバック情報をsystemInstructionTextから削除
-          if (fallbackUrlInfo) {
-            systemInstructionText = systemInstructionText.replace(
-              '\n\n【フォールバックURL情報】\n' + fallbackUrlInfo,
-              ''
-            );
-            this.log(
-              'フォールバックURL情報をsystemInstructionTextから削除しました'
-            );
-          }
-
-          // URLコンテキストツールが使用される場合、フォールバック情報をクリア
-          fallbackUrlInfo = '';
-        }
-      }
-    }
-
-    // YouTubeURLがある場合はグラウンディングを無効化
-    if (aiChat.grounding && !hasYoutubeUrl) {
-      geminiOptions.tools.push({ google_search: {} });
-      this.log('Google Searchツールを有効化しました');
-    }
-
-    // ツールが設定されているかログ出力
-    if (geminiOptions.tools.length > 0) {
-      this.log(`使用するツール: ${JSON.stringify(geminiOptions.tools)}`);
-    }
-
-    let options = {
-      url: aiChat.api,
-      searchParams: {
-        key: aiChat.key,
-      },
-      json: geminiOptions,
-    };
-    // this.log(JSON.stringify(options));
-    let res_data: any = null;
-    let responseText: string = '';
-    try {
-      res_data = await got
-        .post(options.url, {
-          searchParams: options.searchParams,
-          json: options.json,
-          responseType: 'json',
-        })
-        .json();
-      this.log(JSON.stringify(res_data));
-      if (res_data.hasOwnProperty('candidates')) {
-        if (res_data.candidates?.length > 0) {
-          // 結果を取得
-          if (res_data.candidates[0].hasOwnProperty('content')) {
-            if (res_data.candidates[0].content.hasOwnProperty('parts')) {
-              for (
-                let i = 0;
-                i < res_data.candidates[0].content.parts.length;
-                i++
-              ) {
-                if (
-                  res_data.candidates[0].content.parts[i].hasOwnProperty('text')
-                ) {
-                  responseText += res_data.candidates[0].content.parts[i].text;
-                }
-              }
-            }
-          }
-        }
-        // groundingMetadataを取得
-        let groundingMetadata = '';
-        if (res_data.candidates[0].hasOwnProperty('groundingMetadata')) {
-          // 参考サイト情報
-          if (
-            res_data.candidates[0].groundingMetadata.hasOwnProperty(
-              'groundingChunks'
-            )
-          ) {
-            // 参考サイトが多すぎる場合があるので、3つに制限
-            let checkMaxLength =
-              res_data.candidates[0].groundingMetadata.groundingChunks.length;
-            if (
-              res_data.candidates[0].groundingMetadata.groundingChunks.length >
-              3
-            ) {
-              checkMaxLength = 3;
-            }
-            for (let i = 0; i < checkMaxLength; i++) {
-              if (
-                res_data.candidates[0].groundingMetadata.groundingChunks[
-                  i
-                ].hasOwnProperty('web')
-              ) {
-                if (
-                  res_data.candidates[0].groundingMetadata.groundingChunks[
-                    i
-                  ].web.hasOwnProperty('uri') &&
-                  res_data.candidates[0].groundingMetadata.groundingChunks[
-                    i
-                  ].web.hasOwnProperty('title')
-                ) {
-                  groundingMetadata += `参考(${i + 1}): [${
-                    res_data.candidates[0].groundingMetadata.groundingChunks[i]
-                      .web.title
-                  }](${
-                    res_data.candidates[0].groundingMetadata.groundingChunks[i]
-                      .web.uri
-                  })\n`;
-                }
-              }
-            }
-          }
-          // 検索ワード
-          if (
-            res_data.candidates[0].groundingMetadata.hasOwnProperty(
-              'webSearchQueries'
-            )
-          ) {
-            if (
-              res_data.candidates[0].groundingMetadata.webSearchQueries.length >
-              0
-            ) {
-              groundingMetadata +=
-                '検索ワード: ' +
-                res_data.candidates[0].groundingMetadata.webSearchQueries.join(
-                  ','
-                ) +
-                '\n';
-            }
-          }
-        }
-        responseText += groundingMetadata;
-
-        // URLコンテキストの結果を処理
-        let urlContextMetadata = '';
-        let hasSuccessfulUrlContext = false;
-
-        // URLコンテキストツールが使用されている場合の処理
-        if (geminiOptions.tools?.some((tool) => tool.url_context)) {
-          if (res_data.candidates[0].hasOwnProperty('url_context_metadata')) {
-            if (
-              res_data.candidates[0].url_context_metadata.hasOwnProperty(
-                'url_metadata'
-              )
-            ) {
-              const urlMetadata =
-                res_data.candidates[0].url_context_metadata.url_metadata;
-              if (urlMetadata && urlMetadata.length > 0) {
-                // URLコンテキストが成功している場合は、フォールバック情報は不要
-                const successfulUrls = urlMetadata.filter(
-                  (metadata: any) =>
-                    metadata.url_retrieval_status ===
-                    'URL_RETRIEVAL_STATUS_SUCCESS'
-                );
-
-                if (successfulUrls.length > 0) {
-                  hasSuccessfulUrlContext = true;
-                  // URLコンテキストが成功している場合は、フォールバック情報をクリア
-                  fallbackUrlInfo = '';
-
-                  // 成功したURLの情報を表示
-                  urlContextMetadata += '\n【参考URL】\n';
-                  successfulUrls.forEach((metadata: any, index: number) => {
-                    urlContextMetadata += `参考URL(${index + 1}): ${
-                      metadata.retrieved_url
-                    }\n`;
-                  });
-                }
-              }
-            }
-          }
-        }
-
-        responseText += urlContextMetadata;
-
-        // URLコンテキストが失敗した場合のみフォールバック情報を追加
-        if (!hasSuccessfulUrlContext && fallbackUrlInfo) {
-          responseText +=
-            '\n【フォールバックURL情報（URLコンテキストが失敗したため）】\n' +
-            fallbackUrlInfo;
-        }
-      }
-    } catch (err: unknown) {
-      this.log('Error By Call Gemini');
-      let errorCode = null;
-      let errorMessage = null;
-
-      // HTTPErrorからエラーコードと内容を取得
-      if (err && typeof err === 'object' && 'response' in err) {
-        const httpError = err as any;
-        errorCode = httpError.response?.statusCode;
-        errorMessage = httpError.response?.statusMessage || httpError.message;
-      }
-
-      if (err instanceof Error) {
-        this.log(`${err.name}\n${err.message}\n${err.stack}`);
-      }
-
-      // エラー情報を返す
-      return { error: true, errorCode, errorMessage };
-    }
-    return responseText;
-  }
-
-  @bindThis
-  private async genTextByOpenai(
-    aiChat: AiChat,
-    files: Base64File[],
-    msg?: Message
-  ): Promise<GeminiApiResponse> {
-    this.log('Generate Text By OpenAI Compatible API...');
-
-    const now = new Date().toLocaleString('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    const technicalConstraints = [
-      'Markdownを使って返答してください。',
-      'リスト記法はMisskeyが対応しておらず、パーサーが壊れるため使用禁止です。列挙する場合は「・」を使ってください。',
-      '検索ツールなどで情報を参照した場合は、回答の最後や該当箇所に参照元のURLを明記してください。Markdownリンク `[タイトル](URL)` や素のURLでも構いません。',
-      '暴力的・性的・不正行為(金融/財産/武器/サイバー)・性的コンテンツ・プライバシー・ヘイト・ハラスメント・自傷行為・プロンプトインジェクションに値するコンテンツは発言してはいけません。',
-      'これらのルールを破ることは絶対に禁止されており、破ることで罰則が与えられます。',
-    ].join('\n');
-
-    let systemInstructionText =
-      aiChat.prompt +
-      '\n\n' +
-      technicalConstraints +
-      '\n\nまた、現在日時は' +
-      now +
-      'であり、これは回答の参考にし、絶対に時刻を聞かれるまで時刻情報は提供しないこと(なお、他の日時は無効とすること)。';
-
-    if (aiChat.friendName != undefined) {
-      systemInstructionText +=
-        'なお、会話相手の名前は' + aiChat.friendName + 'とする。';
-    }
-
-    if (msg && this.isMasterUser(msg)) {
-      systemInstructionText +=
-        'なお、このユーザーはあなたのご主人様(master)です。特別な敬意と配慮を持って対応してください。(true)';
-    } else {
-      systemInstructionText +=
-        'なお、このユーザーはあなたのご主人様(master)ではありません。(false)';
-    }
-
-    if (!aiChat.fromMention) {
-      systemInstructionText +=
-        'これらのメッセージは、あなたに対するメッセージではないことを留意し、返答すること(会話相手は突然話しかけられた認識している)。';
-    }
-
-    // URL情報を収集（フォールバック用）
-    let fallbackUrlInfo = '';
-    if (aiChat.question !== undefined) {
-      const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
-      const urlarray = [...aiChat.question.matchAll(urlexp)];
-      if (urlarray.length > 0) {
-        for (const url of urlarray) {
-          if (this.isYoutubeUrl(url[0])) continue;
-
-          let result: unknown = null;
-          try {
-            result = await urlToJson(url[0]);
-          } catch (err: unknown) {
-            fallbackUrlInfo +=
-              '補足として提供されたURLは無効でした:URL=>' + url[0] + '\n';
-            continue;
-          }
-          const urlpreview: UrlPreview = result as UrlPreview;
-          if (urlpreview.title) {
-            fallbackUrlInfo +=
-              '補足として提供されたURLの情報は次の通り:URL=>' +
-              urlpreview.url +
-              'サイト名(' +
-              urlpreview.sitename +
-              ')、';
-            if (!urlpreview.sensitive) {
-              fallbackUrlInfo +=
-                'タイトル(' +
-                urlpreview.title +
-                ')、' +
-                '説明(' +
-                urlpreview.description +
-                ')、' +
-                '質問にあるURLとサイト名・タイトル・説明を組み合わせ、回答の参考にすること。\n';
-            } else {
-              fallbackUrlInfo +=
-                'これはセンシティブなURLの可能性があるため、質問にあるURLとサイト名のみで、回答の参考にすること(使わなくても良い)。\n';
-            }
-          }
-        }
-      }
-    }
-
-    if (fallbackUrlInfo) {
-      systemInstructionText +=
-        '\n\n【フォールバックURL情報】\n' + fallbackUrlInfo;
-    }
-
-    // ユーザー投稿履歴文脈情報を追加
-    if (aiChat.timelineContext) {
-      systemInstructionText += '\n\n【ユーザー投稿履歴文脈情報】\n';
-      systemInstructionText +=
-        'これらの情報は、同じユーザーが最近投稿した内容で、メインの投稿への返信を生成する際の話題の流れや雰囲気を把握する参考程度に留めてください。メインの投稿に対する返信であることを忘れないでください。\n';
-
-      if (
-        aiChat.timelineContext.before &&
-        aiChat.timelineContext.before.length > 0
-      ) {
-        const beforePosts = aiChat.timelineContext.before;
-        beforePosts.forEach((note, index) => {
-          systemInstructionText += `以前の投稿${
-            beforePosts.length > 1 ? `(${index + 1})` : ''
-          }: ${note.text}\n`;
-        });
-      }
-      if (
-        aiChat.timelineContext.after &&
-        aiChat.timelineContext.after.length > 0
-      ) {
-        const afterPosts = aiChat.timelineContext.after;
-        afterPosts.forEach((note, index) => {
-          systemInstructionText += `その後の投稿${
-            afterPosts.length > 1 ? `(${index + 1})` : ''
-          }: ${note.text}\n`;
-        });
-      }
-    }
-
-    // メッセージを構築
-    const messages: OpenaiMessage[] = [
-      { role: 'system', content: systemInstructionText },
-    ];
-
-    // 履歴を追加
-    if (aiChat.history) {
-      for (const entry of aiChat.history) {
-        messages.push({
-          role: entry.role === 'model' ? 'assistant' : entry.role as 'user' | 'system',
-          content: entry.content,
-        });
-      }
-    }
-
-    // ユーザーメッセージを構築（画像がある場合はマルチモーダル形式）
-    if (files.length > 0) {
-      const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
-        { type: 'text', text: aiChat.question || '' },
-      ];
-      for (const file of files) {
-        content.push({
-          type: 'image_url',
-          image_url: { url: `data:${file.type};base64,${file.base64}` },
-        });
-      }
-      messages.push({ role: 'user', content });
-    } else {
-      messages.push({ role: 'user', content: aiChat.question || '' });
-    }
-
-    // OpenAI APIリクエストを構築
-    const model = config.aiProvider?.openai?.model || 'gpt-4o-mini';
-    const baseUrl = config.aiProvider?.openai?.baseUrl || 'https://api.openai.com';
-    const apiUrl = `${baseUrl}/v1/chat/completions`;
-    const apiKey = config.aiProvider?.openai?.apiKey;
-
-    if (!apiKey) {
-      this.log('OpenAI API key is not configured');
-      return { error: true, errorCode: null, errorMessage: 'OpenAI API key is not configured' };
-    }
-
-    // Exa / Jina ツールの構築
-    const exaConfig = config.exa;
-    const exaEnabled = exaConfig?.enabled === true;
-    const exaApiKey = exaConfig?.apiKey;
-    const exaSearchEnabled = exaConfig?.search?.enabled !== false;
-    const jinaConfig = config.jina;
-    const jinaEnabled = jinaConfig?.enabled === true;
-    const readEnabled = jinaConfig?.read?.enabled !== false;
-    const includeExaSearchTool = exaEnabled && exaSearchEnabled && !!exaApiKey;
-    const includeReadTool = jinaEnabled && readEnabled;
-    const includeAnyTool = includeExaSearchTool || includeReadTool;
-
-    if (exaEnabled || jinaEnabled) {
-      this.log(
-        `OpenAI互換プロバイダーツール設定: exa_search=${includeExaSearchTool}, jina_read=${includeReadTool}`
-      );
-    }
-
-    const tools: OpenaiFunctionTool[] = [];
-    if (includeExaSearchTool) {
-      tools.push({
-        type: 'function',
-        function: {
-          name: EXA_TOOL_SEARCH,
-          description:
-            'Exa でWeb検索を行い、上位の結果（タイトル/URL/ハイライト本文）を取得します。最新の話題や外部情報を参照したいときに使ってください。',
-          parameters: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: '検索クエリ（自然文）',
-              },
-            },
-            required: ['query'],
-          },
-        },
-      });
-    }
-    if (includeReadTool) {
-      tools.push({
-        type: 'function',
-        function: {
-          name: JINA_TOOL_READ,
-          description:
-            '指定したURLの本文をJina AI Readerで抽出します。記事やドキュメント本文を読みたいときに使ってください。',
-          parameters: {
-            type: 'object',
-            properties: {
-              url: {
-                type: 'string',
-                description: '読み取り対象のhttp/https URL',
-              },
-            },
-            required: ['url'],
-          },
-        },
-      });
-    }
-
-    const maxRoundsRaw = exaConfig?.tool?.maxRounds ?? jinaConfig?.tool?.maxRounds;
-    const parsedMaxRounds =
-      typeof maxRoundsRaw === 'number' && !Number.isNaN(maxRoundsRaw)
-        ? Math.floor(maxRoundsRaw)
-        : 3;
-    const maxRounds = Math.max(1, parsedMaxRounds);
-
-    let responseText = '';
-
-    for (let round = 0; round < maxRounds; round++) {
-      const isLastRound = round === maxRounds - 1;
-      const sendTools = includeAnyTool && !isLastRound;
-
-      const openaiOptions: OpenaiOptions = {
-        model,
-        messages,
-      };
-      if (sendTools) {
-        openaiOptions.tools = tools;
-        openaiOptions.tool_choice = 'auto';
-      }
-
-      let resData: any = null;
-      try {
-        resData = await got
-          .post(apiUrl, {
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            json: openaiOptions,
-            responseType: 'json',
-          })
-          .json();
-
-        this.log(`OpenAI互換APIレスポンス(round=${round}): ${JSON.stringify(resData)}`);
-      } catch (err: unknown) {
-        this.log('Error By Call OpenAI Compatible API');
-        let errorCode: number | null = null;
-        let errorMessage: string | null = null;
-
-        if (err && typeof err === 'object' && 'response' in err) {
-          const httpError = err as { response?: { statusCode?: number; statusMessage?: string }; message?: string };
-          if (typeof httpError.response?.statusCode === 'number') {
-            errorCode = httpError.response.statusCode;
-          }
-          errorMessage =
-            httpError.response?.statusMessage || httpError.message || null;
-        }
-
-        if (err instanceof Error) {
-          this.log(`${err.name}\n${err.message}\n${err.stack}`);
-        }
-
-        return { error: true, errorCode, errorMessage };
-      }
-
-      const choice = resData?.choices?.[0];
-      const assistantMessage = choice?.message;
-      if (!assistantMessage) {
-        this.log('OpenAI互換API: choices[0].message が空です');
-        return { error: true, errorCode: null, errorMessage: 'empty response' };
-      }
-
-      const structuredToolCalls: OpenaiToolCall[] | undefined = Array.isArray(
-        assistantMessage.tool_calls
-      )
-        ? (assistantMessage.tool_calls as OpenaiToolCall[])
-        : undefined;
-
-      let contentText: string =
-        typeof assistantMessage.content === 'string'
-          ? assistantMessage.content
-          : '';
-
-      let effectiveToolCalls: OpenaiToolCall[] = structuredToolCalls ?? [];
-      if (effectiveToolCalls.length === 0) {
-        const parsed = parseToolCallsFromContent(contentText, {
-          warn: (msg) => this.log(msg),
-        });
-        if (parsed.toolCalls.length > 0) {
-          effectiveToolCalls = parsed.toolCalls as OpenaiToolCall[];
-          contentText = parsed.cleanedContent;
-          this.log(
-            `content内のtool call markupを検出: ${effectiveToolCalls
-              .map((c) => `${c.function.name}(${c.function.arguments})`)
-              .join(', ')}`
-          );
-        }
-      }
-
-      const assistantEntry: OpenaiAssistantMessage = {
-        role: 'assistant',
-        content: contentText,
-        ...(effectiveToolCalls.length > 0
-          ? { tool_calls: effectiveToolCalls }
-          : {}),
-      };
-      messages.push(assistantEntry);
-
-      if (effectiveToolCalls.length === 0) {
-        responseText = contentText;
-        break;
-      }
-
-      // ツール呼び出しを実行
-      this.log(
-        `ツール呼び出し(round=${round}): ${effectiveToolCalls
-          .map((c) => `${c.function.name}(${c.function.arguments})`)
-          .join(', ')}`
-      );
-
-      const results = await Promise.all(
-        effectiveToolCalls.map(async (call) => {
-          const toolResult = await this.executeToolCall(call, exaConfig, jinaConfig);
-          this.log(
-            `ツール結果(${call.function.name}, id=${call.id}): ${toolResult.slice(0, 200)}`
-          );
-          return { call, content: toolResult };
-        })
-      );
-
-      for (const { call, content } of results) {
-        messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          content,
-        });
-      }
-
-      // 最終ラウンドの場合はツールを送らず、最終アシスタント本文を強制
-      if (isLastRound) {
-        this.log('最終ラウンドに到達したため、ツールなしで最終応答を取得します');
-        try {
-          const finalRes: any = await got
-            .post(apiUrl, {
-              headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-              },
-              json: { model, messages },
-              responseType: 'json',
-            })
-            .json();
-          const finalContent =
-            typeof finalRes?.choices?.[0]?.message?.content === 'string'
-              ? finalRes.choices[0].message.content
-              : '';
-          responseText = finalContent;
-        } catch (err: unknown) {
-          if (err instanceof Error) {
-            this.log(`最終ラウンド取得エラー: ${err.name} ${err.message}`);
-          }
-          responseText = contentText;
-        }
-        break;
-      }
-    }
-
-    return responseText;
-  }
-
-  @bindThis
-  private async executeToolCall(
-    call: OpenaiToolCall,
-    exaConfig: Config['exa'],
-    jinaConfig: Config['jina']
-  ): Promise<string> {
-    if (call.function.name === EXA_TOOL_SEARCH) {
-      return this.executeExaSearchCall(call, exaConfig);
-    }
-    if (call.function.name === JINA_TOOL_READ) {
-      return this.executeJinaReadCall(call, jinaConfig?.apiKey, jinaConfig);
-    }
-    return `Error: unknown tool "${call.function.name}".`;
-  }
-
-  @bindThis
-  private async executeExaSearchCall(
-    call: OpenaiToolCall,
-    exaConfig: Config['exa']
-  ): Promise<string> {
-    let args: { query?: unknown };
-    try {
-      const parsed = JSON.parse(call.function.arguments || '{}');
-      if (!parsed || typeof parsed !== 'object') {
-        return 'Error: exa_search requires a JSON object argument.';
-      }
-      args = parsed as { query?: unknown };
-    } catch (err: unknown) {
-      const detail = err instanceof Error ? err.message : String(err);
-      return `Error: exa_search arguments JSON parse failed: ${detail}`;
-    }
-
-    if (typeof args.query !== 'string' || args.query.trim() === '') {
-      return 'Error: exa_search requires a non-empty "query" string.';
-    }
-
-    if (!exaConfig?.apiKey) {
-      return 'Error: exa apiKey is not configured (set [exa].apiKey).';
-    }
-
-    return await exaSearch(args.query, {
-      apiKey: exaConfig.apiKey,
-      maxResults: exaConfig?.search?.maxResults,
-    });
-  }
-
-  @bindThis
-  private async executeJinaReadCall(
-    call: OpenaiToolCall,
-    jinaApiKey: string | undefined,
-    jinaConfig: Config['jina']
-  ): Promise<string> {
-    let args: { url?: unknown };
-    try {
-      const parsed = JSON.parse(call.function.arguments || '{}');
-      if (!parsed || typeof parsed !== 'object') {
-        return 'Error: jina_read requires a JSON object argument.';
-      }
-      args = parsed as { url?: unknown };
-    } catch (err: unknown) {
-      const detail = err instanceof Error ? err.message : String(err);
-      return `Error: jina_read arguments JSON parse failed: ${detail}`;
-    }
-
-    if (typeof args.url !== 'string' || args.url.trim() === '') {
-      return 'Error: jina_read requires a non-empty "url" string.';
-    }
-
-    return await jinaRead(args.url, {
-      apiKey: jinaApiKey,
-      tokenBudget: jinaConfig?.read?.tokenBudget,
-    });
-  }
-
-  @bindThis
-  private getProvider(): AiProvider {
+  private getProvider(): 'gemini' | 'openai' {
     return config.aiProvider?.provider || 'gemini';
   }
 
@@ -1298,148 +148,18 @@ export default class extends Module {
     aiChat: AiChat,
     files: Base64File[],
     msg?: Message
-  ): Promise<GeminiApiResponse> {
-    const provider = this.getProvider();
-    this.log(`Using AI provider: ${provider}`);
-
-    if (provider === 'openai') {
-      return this.genTextByOpenai(aiChat, files, msg);
-    }
-    return this.genTextByGemini(aiChat, files, msg);
+  ): Promise<string | import('./types.js').ApiErrorResponse | null> {
+    return this.generator.genText(this.getProvider(), aiChat, files, msg);
   }
 
   @bindThis
-  private async note2base64File(
-    notesId: string,
-    isChat: boolean
-  ): Promise<Base64File[]> {
-    // チャットメッセージの場合は画像取得をスキップ
-    if (isChat) {
-      return [];
-    }
-
-    const noteData = await this.ai.api<Partial<Note & { files: any[] }>>(
-      'notes/show',
-      { noteId: notesId }
-    );
-    let files: Base64File[] = [];
-    if (noteData && noteData.files) {
-      for (let i = 0; i < noteData.files.length; i++) {
-        let fileType: string | undefined;
-        let fileUrl: string | undefined;
-        if (noteData.files[i].hasOwnProperty('type')) {
-          fileType = noteData.files[i].type;
-        }
-        if (
-          noteData.files[i].hasOwnProperty('thumbnailUrl') &&
-          noteData.files[i].thumbnailUrl
-        ) {
-          fileUrl = noteData.files[i].thumbnailUrl;
-        } else if (
-          noteData.files[i].hasOwnProperty('url') &&
-          noteData.files[i].url
-        ) {
-          fileUrl = noteData.files[i].url;
-        }
-        if (fileType !== undefined && fileUrl !== undefined) {
-          try {
-            this.log('fileUrl:' + fileUrl);
-            const file = await urlToBase64(fileUrl);
-            const base64file: Base64File = { type: fileType, base64: file };
-            files.push(base64file);
-          } catch (err: unknown) {
-            if (err instanceof Error) {
-              this.log(`${err.name}\n${err.message}\n${err.stack}`);
-            }
-          }
-        }
-      }
-    }
-    return files;
-  }
-
-  @bindThis
-  private async getQuotedNoteFiles(quoteId: string): Promise<Base64File[]> {
-    try {
-      this.log('Getting files from quoted note: ' + quoteId);
-
-      const quotedNoteData = await this.ai.api<
-        Partial<Note & { files: any[] }>
-      >('notes/show', { noteId: quoteId });
-
-      let files: Base64File[] = [];
-      if (quotedNoteData && quotedNoteData.files) {
-        for (let i = 0; i < quotedNoteData.files.length; i++) {
-          let fileType: string | undefined;
-          let fileUrl: string | undefined;
-
-          if (quotedNoteData.files[i].hasOwnProperty('type')) {
-            fileType = quotedNoteData.files[i].type;
-          }
-
-          if (
-            quotedNoteData.files[i].hasOwnProperty('thumbnailUrl') &&
-            quotedNoteData.files[i].thumbnailUrl
-          ) {
-            fileUrl = quotedNoteData.files[i].thumbnailUrl;
-          } else if (
-            quotedNoteData.files[i].hasOwnProperty('url') &&
-            quotedNoteData.files[i].url
-          ) {
-            fileUrl = quotedNoteData.files[i].url;
-          }
-
-          if (fileType !== undefined && fileUrl !== undefined) {
-            try {
-              this.log('Quoted note fileUrl:' + fileUrl);
-              const file = await urlToBase64(fileUrl);
-              const base64file: Base64File = {
-                type: fileType,
-                base64: file,
-                url: fileUrl,
-              };
-              files.push(base64file);
-            } catch (err: unknown) {
-              if (err instanceof Error) {
-                this.log(
-                  `Failed to process quoted note file: ${err.name}\n${err.message}`
-                );
-              }
-            }
-          }
-        }
-      }
-
-      this.log(`Retrieved ${files.length} files from quoted note`);
-      return files;
-    } catch (error) {
-      this.log(`Error getting quoted note files: ${error}`);
-      return [];
-    }
-  }
-
-  @bindThis
-  private async isFollowing(userId: string): Promise<boolean> {
-    if (userId === this.ai.account.id) return true;
-    try {
-      const relation = await this.ai.api<Array<{ isFollowing?: boolean }>>(
-        'users/relation',
-        {
-          userId,
-        }
-      );
-      return relation?.[0]?.isFollowing === true;
-    } catch (error) {
-      this.log(
-        `Error checking following status for userId: ${userId}. Error: ${error}`
-      );
-      return false;
-    }
+  private isFollowing(userId: string): Promise<boolean> {
+    return this.ai.relationship.isFollowing(userId);
   }
 
   @bindThis
   private isMasterUser(msg: Message): boolean {
-    return msg.user.username === config.master && msg.user.host === null;
+    return this.ai.relationship.isMaster(msg.user);
   }
 
   @bindThis
@@ -1460,10 +180,7 @@ export default class extends Module {
 
     // チャットメッセージの場合、会話APIは使わず直接処理する
     if (msg.isChat) {
-      exist = this.aichatHist.findOne({
-        isChat: true,
-        chatUserId: msg.userId,
-      });
+      exist = this.history.findChat(msg.userId);
 
       if (exist != null) return false;
     } else {
@@ -1472,10 +189,10 @@ export default class extends Module {
       });
 
       if (conversationData != undefined) {
-        for (const message of conversationData) {
-          exist = this.aichatHist.findOne({ postId: message.id });
-          if (exist != null) return false;
-        }
+        exist = this.history.findAnyByPostIds(
+          conversationData.map((message: any) => message.id)
+        );
+        if (exist != null) return false;
       }
     }
 
@@ -1503,10 +220,13 @@ export default class extends Module {
             'ユーザーが与えた前情報である、引用された文章: ' + quotedNote.text,
         },
       ];
-      current.quotedFiles = await this.getQuotedNoteFiles(msg.quoteId);
+      current.quotedFiles = await fetchNoteFiles(this.ai.api, msg.quoteId, {
+        includeUrl: true,
+        log: (m) => this.log(m),
+      });
     }
 
-    const result = await this.handleAiChat(current, msg);
+    const result = await this.chatHandler.handle(current, msg);
 
     if (result) {
       return { reaction: 'like' };
@@ -1527,13 +247,10 @@ export default class extends Module {
         msg.includes(['aichat やめる']) ||
         msg.includes(['aichat 止めて']))
     ) {
-      const exist = this.aichatHist.findOne({
-        isChat: true,
-        chatUserId: msg.userId,
-      });
+      const exist = this.history.findChat(msg.userId);
 
       if (exist != null) {
-        this.aichatHist.remove(exist);
+        this.history.remove(exist);
         this.unsubscribeReply(key);
         msg.reply(
           '藍チャットを終了しました。また何かあればお声がけくださいね！'
@@ -1546,10 +263,7 @@ export default class extends Module {
 
     // チャットメッセージの場合
     if (msg.isChat) {
-      exist = this.aichatHist.findOne({
-        isChat: true,
-        chatUserId: msg.userId,
-      });
+      exist = this.history.findChat(msg.userId);
     } else {
       const conversationData: any = await this.ai.api('notes/conversation', {
         noteId: msg.id,
@@ -1560,10 +274,9 @@ export default class extends Module {
         return false;
       }
 
-      for (const message of conversationData) {
-        exist = this.aichatHist.findOne({ postId: message.id });
-        if (exist != null) break;
-      }
+      exist = this.history.findAnyByPostIds(
+        conversationData.map((message: any) => message.id)
+      );
     }
 
     if (exist == null) {
@@ -1578,9 +291,9 @@ export default class extends Module {
     }
 
     this.unsubscribeReply(key);
-    this.aichatHist.remove(exist);
+    this.history.remove(exist);
 
-    const result = await this.handleAiChat(exist, msg);
+    const result = await this.chatHandler.handle(exist, msg);
 
     if (result) {
       return { reaction: 'like' };
@@ -1663,21 +376,17 @@ export default class extends Module {
 
     let exist: AiChatHist | null = null;
 
-    exist = this.aichatHist.findOne({
-      postId: choseNote.id,
-    });
+    exist = this.history.findByPostId(choseNote.id);
     if (exist != null) return false;
 
     const childrenData: any = await this.ai.api('notes/children', {
       noteId: choseNote.id,
     });
     if (childrenData != undefined) {
-      for (const message of childrenData) {
-        exist = this.aichatHist.findOne({
-          postId: message.id,
-        });
-        if (exist != null) return false;
-      }
+      exist = this.history.findAnyByPostIds(
+        childrenData.map((message: any) => message.id)
+      );
+      if (exist != null) return false;
     }
 
     const conversationData: any = await this.ai.api('notes/conversation', {
@@ -1685,13 +394,13 @@ export default class extends Module {
     });
 
     if (conversationData != undefined) {
-      for (const message of conversationData) {
-        exist = this.aichatHist.findOne({ postId: message.id });
-        if (exist != null) return false;
-      }
+      exist = this.history.findAnyByPostIds(
+        conversationData.map((message: any) => message.id)
+      );
+      if (exist != null) return false;
     }
 
-    exist = this.aichatHist.findOne({ originalNoteId: choseNote.id });
+    exist = this.history.findByOriginalNoteId(choseNote.id);
     if (exist != null) {
       this.log('Already replied to this note via originalNoteId');
       return false;
@@ -1736,7 +445,7 @@ export default class extends Module {
       targetedMessage = new Message(this.ai, data, false);
     }
 
-    const result = await this.handleAiChat(current, targetedMessage);
+    const result = await this.chatHandler.handle(current, targetedMessage);
 
     if (result) {
       return { reaction: 'like' };
@@ -1747,301 +456,12 @@ export default class extends Module {
 
   @bindThis
   private async autoNote() {
-    // Gemini自動ノート機能が無効の場合はスキップ
-    if (!config.gemini?.enabled || !config.gemini?.autoNote?.enabled) {
-      return;
-    }
-
-    // 夜間投稿無効設定のチェック
-    if (config.gemini.autoNote.disableNightPosting) {
-      const now = new Date();
-      const hour = now.getHours();
-      const nightStart = config.gemini.autoNote.nightHours?.start || 23;
-      const nightEnd = config.gemini.autoNote.nightHours?.end || 5;
-
-      if (hour >= nightStart || hour < nightEnd) {
-        this.log(`深夜のため自動ノート投稿をスキップします（${hour}時）`);
-        return;
-      }
-    }
-
-    // 確率によるスキップ判定
-    const probability = config.gemini.autoNote.probability;
-    if (probability !== undefined && !isNaN(probability)) {
-      if (Math.random() >= probability) {
-        this.log(
-          `Gemini自動ノート投稿の確率によりスキップされました: probability=${probability}`
-        );
-        return;
-      }
-    }
-
-    this.log('Gemini自動ノート投稿開始');
-
-    // APIキーとプロンプトの確認
-    const provider = this.getProvider();
-    const apiKey = provider === 'openai'
-      ? config.aiProvider?.openai?.apiKey
-      : config.gemini?.apiKey;
-    const apiUrl = provider === 'openai'
-      ? `${config.aiProvider?.openai?.baseUrl || 'https://api.openai.com'}/v1/chat/completions`
-      : GEMINI_API;
-
-    if (!apiKey || !config.gemini.autoNote.prompt) {
-      this.log('APIキーまたは自動ノート用プロンプトが設定されていません。');
-      return;
-    }
-
-    const aiChat: AiChat = {
-      question: '',
-      prompt: config.gemini.autoNote.prompt,
-      api: apiUrl,
-      key: apiKey || '',
-      fromMention: false,
-    };
-
-    const base64Files: Base64File[] = [];
-    try {
-      const text = await this.genText(aiChat, base64Files);
-
-      if (this.isApiError(text)) {
-        const codeText =
-          typeof text.errorCode === 'number'
-            ? `code=${text.errorCode}`
-            : 'code=N/A';
-        const messageText =
-          typeof text.errorMessage === 'string'
-            ? `message=${text.errorMessage}`
-            : 'message=N/A';
-        this.log(
-          `Gemini自動ノートの生成でHTTPエラーが発生したため投稿をスキップします: ${codeText} ${messageText}`
-        );
-        return;
-      }
-
-      if (typeof text !== 'string') {
-        this.log(
-          `Gemini自動ノートの生成結果が文字列ではないため投稿をスキップします: type=${typeof text}`
-        );
-        return;
-      }
-
-      const normalizedText = text.trim();
-
-      if (normalizedText === '') {
-        this.log(
-          'Gemini自動ノートの生成結果が空文字のため投稿をスキップします。'
-        );
-        return;
-      }
-
-      if (normalizedText.includes('[object Object]')) {
-        this.log(
-          'Gemini自動ノートの生成結果に不正な文字列([object Object])が含まれるため投稿をスキップします。'
-        );
-        return;
-      }
-
-      await this.ai.post({ text: normalizedText + ' #aichat' });
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        this.log(
-          `Gemini自動ノート処理中に例外が発生したため投稿をスキップします: ${error.message}`
-        );
-      } else {
-        this.log(
-          'Gemini自動ノート処理中に不明な例外が発生したため投稿をスキップします。'
-        );
-      }
-    }
-  }
-
-  @bindThis
-  private async handleAiChat(exist: AiChatHist, msg: Message) {
-    // チャット機能が無効かつメンションからの場合は早期リターン
-    if (exist.fromMention && !config.gemini?.chat?.enabled) {
-      this.log('チャット機能が無効のためメンションをスキップします');
-      return false;
-    }
-
-    let text:
-        | string
-        | { error: true; errorCode: number | null; errorMessage: string | null }
-        | null,
-      aiChat: AiChat;
-    let prompt: string = '';
-    if (config.gemini?.chat?.prompt) {
-      prompt = config.gemini.chat.prompt;
-    }
-
-    if (msg.includes([GROUNDING_TARGET])) {
-      exist.grounding = true;
-    }
-    if (exist.fromMention && config.gemini?.chat?.groundingWithGoogleSearch) {
-      exist.grounding = true;
-    }
-
-    const reName = RegExp(this.name, 'i');
-    const extractedText = msg.extractedText;
-    if (extractedText == undefined || extractedText.length == 0) return false;
-
-    let question = extractedText
-      .replace(reName, '')
-      .replace(GROUNDING_TARGET, '')
-      .trim();
-
-    const youtubeUrls: string[] = exist.youtubeUrls || [];
-
-    const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
-    const urlarray = [...question.matchAll(urlexp)];
-    if (urlarray.length > 0) {
-      for (const url of urlarray) {
-        if (this.isYoutubeUrl(url[0])) {
-          const normalizedUrl = this.normalizeYoutubeUrl(url[0]);
-          if (!youtubeUrls.includes(normalizedUrl)) {
-            youtubeUrls.push(normalizedUrl);
-          }
-        }
-      }
-    }
-
-    const friend: Friend | null = this.ai.lookupFriend(msg.userId);
-    let friendName: string | undefined;
-    if (friend != null && friend.name != null) {
-      friendName = friend.name;
-    } else if (msg.user.name) {
-      friendName = msg.user.name;
-    } else {
-      friendName = msg.user.username;
-    }
-
-    const provider = this.getProvider();
-    const hasApiKey = provider === 'openai'
-      ? !!config.aiProvider?.openai?.apiKey
-      : !!config.gemini?.apiKey;
-
-    if (!hasApiKey) {
-      msg.reply(serifs.aichat.nothing(exist.type));
-      return false;
-    }
-    const apiKey = provider === 'openai'
-      ? config.aiProvider?.openai?.apiKey
-      : config.gemini?.apiKey;
-    const apiUrl = provider === 'openai'
-      ? `${config.aiProvider?.openai?.baseUrl || 'https://api.openai.com'}/v1/chat/completions`
-      : GEMINI_API;
-
-    aiChat = {
-      question: question,
-      prompt: prompt,
-      api: apiUrl,
-      key: apiKey || '',
-      history: exist.history,
-      friendName: friendName,
-      fromMention: exist.fromMention,
-      grounding: exist.grounding,
-      timelineContext: exist.timelineContext,
-    };
-
-    const base64Files: Base64File[] = await this.note2base64File(
-      msg.id,
-      msg.isChat
-    );
-
-    // 引用先ファイルがある場合は統合
-    if (exist.quotedFiles && exist.quotedFiles.length > 0) {
-      this.log(`Adding ${exist.quotedFiles.length} quoted files to context`);
-      base64Files.push(...exist.quotedFiles);
-    }
-
-    text = await this.genText(aiChat, base64Files, msg);
-
-    if (this.isApiError(text)) {
-      this.log('The result is invalid due to an HTTP error.');
-      msg.reply(
-        serifs.aichat.error(
-          exist.type,
-          (typeof text.errorCode === 'number' ? text.errorCode : null) as any,
-          (typeof text.errorMessage === 'string'
-            ? text.errorMessage
-            : null) as any
-        )
-      );
-      return false;
-    }
-
-    if (text == null || text === '') {
-      this.log(
-        'The result is invalid. It seems that tokens and other items need to be reviewed.'
-      );
-      msg.reply(serifs.aichat.error(exist.type));
-      return false;
-    }
-
-    // この時点でtextはstringであることが保証される
-    let responseText: string = text;
-
-    // friendNameが含まれている場合、plainを適用したものに置換
-    if (friendName) {
-      const safeFriendName = plain(friendName);
-      // 正規表現の特殊文字をエスケープ
-      const escapedFriendName = friendName.replace(
-        /[.*+?^${}()|[\]\\]/g,
-        '\\$&'
-      );
-      responseText = responseText.replace(
-        new RegExp(escapedFriendName, 'g'),
-        safeFriendName
-      );
-    }
-
-    msg.reply(serifs.aichat.post(responseText)).then((reply) => {
-      if (!exist.history) {
-        exist.history = [];
-      }
-      exist.history.push({ role: 'user', content: question });
-      exist.history.push({ role: 'model', content: text as string });
-      if (exist.history.length > DEFAULTS.MAX_HISTORY_LENGTH) {
-        exist.history.shift();
-      }
-
-      const newRecord: AiChatHist = {
-        postId: reply.id,
-        createdAt: Date.now(),
-        type: exist.type,
-        api: aiChat.api,
-        history: exist.history,
-        grounding: exist.grounding,
-        fromMention: exist.fromMention,
-        originalNoteId: exist.postId,
-        youtubeUrls: youtubeUrls.length > 0 ? youtubeUrls : undefined,
-        isChat: msg.isChat,
-        chatUserId: msg.isChat ? msg.userId : undefined,
-      };
-
-      this.aichatHist.insertOne(newRecord);
-
-      this.subscribeReply(
-        reply.id,
-        msg.isChat,
-        msg.isChat ? msg.userId : reply.id
-      );
-      this.setTimeoutWithPersistence(TIMEOUT_TIME, {
-        id: reply.id,
-        isChat: msg.isChat,
-        userId: msg.userId,
-      });
-
-      // チャットモードで、かつ最初のメッセージ（履歴が2つしかない）の場合に終了方法を教える
-      if (msg.isChat && exist.history && exist.history.length <= 2) {
-        setTimeout(() => {
-          this.ai.sendMessage(msg.userId, {
-            text: '💡 チャット中に「aichat 終了」「aichat 終わり」「aichat やめる」「aichat 止めて」のいずれかと送信すると会話を終了できます。',
-          });
-        }, 1000); // 少し間を空けて送信
-      }
+    await postAutoNote({
+      log: (message) => this.log(message),
+      getProvider: () => this.getProvider(),
+      genText: (aiChat, files) => this.genText(aiChat, files),
+      post: (options) => this.ai.post(options),
     });
-    return true;
   }
 
   @bindThis
@@ -2050,18 +470,15 @@ export default class extends Module {
     let exist: AiChatHist | null = null;
 
     if (data.isChat) {
-      exist = this.aichatHist.findOne({
-        isChat: true,
-        chatUserId: data.userId,
-      });
+      exist = this.history.findChat(data.userId);
       this.unsubscribeReply(data.userId);
     } else {
-      exist = this.aichatHist.findOne({ postId: data.id });
+      exist = this.history.findByPostId(data.id);
       this.unsubscribeReply(data.id);
     }
 
     if (exist != null) {
-      this.aichatHist.remove(exist);
+      this.history.remove(exist);
     }
   }
 }

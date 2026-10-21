@@ -1,8 +1,8 @@
-import { v4 as uuid } from 'uuid';
-import { bindThis } from '@/decorators.js';
-import type DatabaseManager from '@/database/DatabaseManager.js';
-import log from '@/utils/log.js';
+import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
+import type DatabaseManager from '@/database/DatabaseManager.js';
+import { bindThis } from '@/decorators.js';
+import log from '@/utils/log.js';
 
 type TimeoutCallback = (data?: any) => void;
 type Module = {
@@ -66,15 +66,14 @@ export default class TimerManager {
    */
   @bindThis
   public setTimeoutWithPersistence(module: Module, delay: number, data?: any) {
-    const id = uuid();
-    const timers = this.dbManager.getCollection('timers');
+    const id = randomUUID();
 
-    timers.insertOne({
-      id: id,
+    this.dbManager.repositories.timers.insert({
+      id,
       module: module.name,
       insertedAt: Date.now(),
-      delay: delay,
-      data: data,
+      delay,
+      data,
     });
 
     this.log(`Timer persisted: ${module.name} ${id} ${delay}ms`);
@@ -85,21 +84,29 @@ export default class TimerManager {
    */
   @bindThis
   private crawleTimer() {
-    const timers = this.dbManager.getCollection('timers');
-    const timerList = timers.find();
+    const timers = this.dbManager.repositories.timers;
 
-    for (const timer of timerList) {
-      // タイマーが時間切れかどうか
-      if (Date.now() - (timer.insertedAt + timer.delay) >= 0) {
-        this.log(`Timer expired: ${timer.module} ${timer.id}`);
-        timers.remove(timer);
+    for (const timer of timers.due()) {
+      this.log(`Timer expired: ${timer.module} ${timer.id}`);
+      timers.remove(timer);
 
-        // コールバックが存在する場合のみ実行
-        if (this.timeoutCallbacks[timer.module]) {
-          this.timeoutCallbacks[timer.module](timer.data);
-        } else {
-          this.log(`Warning: No timeout callback for module ${timer.module}`);
+      // コールバックが存在する場合のみ実行
+      const callback = this.timeoutCallbacks[timer.module];
+      if (callback) {
+        try {
+          // 非同期コールバックの rejection もここで捕捉する
+          Promise.resolve(callback(timer.data)).catch((err) => {
+            this.log(
+              `Timer callback failed for module ${timer.module}: ${String(err)}`
+            );
+          });
+        } catch (err) {
+          this.log(
+            `Timer callback threw for module ${timer.module}: ${String(err)}`
+          );
         }
+      } else {
+        this.log(`Warning: No timeout callback for module ${timer.module}`);
       }
     }
   }

@@ -1,10 +1,11 @@
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
+import Message from '@/message.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
+import { nowHour, todayKey } from '@/services/clock.js';
 import { genMaze } from './gen-maze.js';
 import { renderMaze } from './render-maze.js';
-import Message from '@/message.js';
-import config from '@/config.js';
 
 export default class extends Module {
   public readonly name = 'maze';
@@ -12,10 +13,9 @@ export default class extends Module {
   @bindThis
   public install() {
     if (!config.mazeEnable) {
-      return {};
+      return false;
     }
-    this.post();
-    setInterval(this.post, 1000 * 60 * 3);
+    this.every(1000 * 60 * 3, this.post, { immediate: true });
 
     return {
       mentionHook: this.mentionHook,
@@ -24,9 +24,8 @@ export default class extends Module {
 
   @bindThis
   private async post() {
-    const now = new Date();
-    if (now.getHours() !== 22) return;
-    const date = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    if (nowHour() !== 22) return;
+    const date = todayKey();
     const data = this.getData();
     if (data.lastPosted == date) return;
     data.lastPosted = date;

@@ -1,22 +1,22 @@
-import loki from 'lokijs';
-import { bindThis } from '@/decorators.js';
-import config from '@/config.js';
 import chalk from 'chalk';
-import type { Meta } from '@/ai.js';
-import type { FriendDoc } from '@/friend.js';
 import * as fs from 'fs';
+import loki from 'lokijs';
 import path from 'path';
-
-// LokiJSがドキュメントに付加するメタデータ
-interface LokiObj {
-  $loki: number;
-  meta: {
-    created: number;
-    revision: number;
-    updated: number;
-    version: number;
-  };
-}
+import type { Meta } from '@/ai.js';
+import config from '@/config.js';
+import { bindThis } from '@/decorators.js';
+import type { FriendDoc } from '@/friend.js';
+import { CURRENT_SCHEMA_VERSION, migrate } from './migrations.js';
+import {
+  type ContextDoc,
+  ContextRepository,
+  FriendRepository,
+  type ModuleDataDoc,
+  ModuleDataRepository,
+  type Repositories,
+  type TimerDoc,
+  TimerRepository,
+} from './repositories.js';
 
 /**
  * データベース管理クラス
@@ -25,23 +25,11 @@ interface LokiObj {
 export default class DatabaseManager {
   public db!: loki;
   public meta!: loki.Collection<Meta>;
-  public contexts!: loki.Collection<{
-    isChat: boolean;
-    noteId?: string;
-    userId?: string;
-    module: string;
-    key: string | null;
-    data?: any;
-  }>;
-  public timers!: loki.Collection<{
-    id: string;
-    module: string;
-    insertedAt: number;
-    delay: number;
-    data?: any;
-  }>;
+  public contexts!: loki.Collection<ContextDoc>;
+  public timers!: loki.Collection<TimerDoc>;
   public friends!: loki.Collection<FriendDoc>;
-  public moduleData!: loki.Collection<any>;
+  public moduleData!: loki.Collection<ModuleDataDoc>;
+  public repositories!: Repositories;
   private log: (message: string) => void;
 
   constructor(
@@ -80,7 +68,8 @@ export default class DatabaseManager {
     this.db = new loki(file, {
       autoload: true,
       autosave: true,
-      autosaveInterval: 1000,
+      // 1秒ごとだと memory.json 全体を頻繁に書き出すため 5 秒に延ばす
+      autosaveInterval: 5000,
       autoloadCallback: (err) => {
         if (err) {
           this.log(chalk.red(`Failed to load the memory: ${err}`));
@@ -116,7 +105,7 @@ export default class DatabaseManager {
       this.db = new loki(file, {
         autoload: false,
         autosave: true,
-        autosaveInterval: 1000,
+        autosaveInterval: 5000,
       });
 
       this.initializeCollections();
@@ -136,10 +125,10 @@ export default class DatabaseManager {
   private initializeCollections() {
     this.meta = this.getCollection('meta', {});
     this.contexts = this.getCollection('contexts', {
-      indices: ['key'],
+      indices: ['key', 'noteId', 'userId', 'module'],
     });
     this.timers = this.getCollection('timers', {
-      indices: ['module'],
+      indices: ['module', 'insertedAt'],
     });
     this.friends = this.getCollection('friends', {
       indices: ['userId'],
@@ -148,8 +137,36 @@ export default class DatabaseManager {
       indices: ['module'],
     });
 
+    this.repositories = {
+      friends: new FriendRepository(this.friends),
+      contexts: new ContextRepository(this.contexts),
+      timers: new TimerRepository(this.timers),
+      moduleData: new ModuleDataRepository(this.moduleData),
+    };
+
     // メタデータが存在することを保証する
-    this.getMeta();
+    const meta = this.getMeta();
+
+    // スキーマのマイグレーション（重複の掃除など）。必要なときだけ走る。
+    try {
+      const applied = migrate({
+        meta,
+        collections: {
+          contexts: this.contexts,
+          friends: this.friends,
+          moduleData: this.moduleData,
+        },
+        log: this.log,
+      });
+      if (applied) {
+        this.log(
+          chalk.blue(`Migrated the memory to schema v${CURRENT_SCHEMA_VERSION}`)
+        );
+        this.setMeta(meta);
+      }
+    } catch (err) {
+      this.log(chalk.red(`Failed to migrate the memory: ${String(err)}`));
+    }
   }
 
   /**
@@ -199,5 +216,23 @@ export default class DatabaseManager {
     }
 
     return collection;
+  }
+
+  /**
+   * データベースを保存して閉じる。
+   */
+  @bindThis
+  public close(): void {
+    try {
+      this.db.saveDatabase();
+    } catch (err) {
+      this.log(chalk.red(`Failed to save the memory: ${String(err)}`));
+    }
+
+    try {
+      this.db.close();
+    } catch (err) {
+      this.log(chalk.red(`Failed to close the memory: ${String(err)}`));
+    }
   }
 }

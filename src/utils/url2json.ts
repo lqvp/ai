@@ -1,6 +1,6 @@
-import log from '@/utils/log.js';
-import config from '@/config.js';
 import got from 'got';
+import config from '@/config.js';
+import log from '@/utils/log.js';
 
 export default async function (url: string): Promise<string> {
   try {

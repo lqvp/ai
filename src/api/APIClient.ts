@@ -1,10 +1,10 @@
-import * as fs from 'fs';
-import got from 'got';
-import { FormData, File } from 'formdata-node';
-import { bindThis } from '@/decorators.js';
-import config from '@/config.js';
-import log from '@/utils/log.js';
 import chalk from 'chalk';
+import got from 'got';
+import config from '@/config.js';
+import { bindThis } from '@/decorators.js';
+import log from '@/utils/log.js';
+
+const DEFAULT_API_TIMEOUT_MS = 60_000;
 
 /**
  * Misskey API クライアント
@@ -30,7 +30,7 @@ export default class APIClient {
    */
   @bindThis
   public async upload(
-    file: Buffer | fs.ReadStream,
+    file: Buffer,
     meta: { filename: string; contentType: string }
   ) {
     try {
@@ -38,21 +38,26 @@ export default class APIClient {
       form.set('i', config.i);
       form.set(
         'file',
-        new File([file], meta.filename, { type: meta.contentType })
+        new File([new Uint8Array(file)], meta.filename, {
+          type: meta.contentType,
+        })
       );
 
+      // got 15 では URL を options オブジェクトに入れられない。
+      // また、再試行すると同じファイルが二重に作られるため retry は無効化する。
       const res = await got
-        .post({
-          url: `${config.apiUrl}/drive/files/create`,
+        .post(`${config.apiUrl}/drive/files/create`, {
           body: form,
           headers: {
             'User-Agent': this.getDefaultUserAgent(),
           },
+          retry: { limit: 0 },
+          timeout: { request: DEFAULT_API_TIMEOUT_MS },
         })
         .json();
       return res;
     } catch (error) {
-      console.error(`File upload failed: ${error}`);
+      this.log(`File upload failed: ${String(error)}`);
       throw error;
     }
   }
@@ -62,16 +67,22 @@ export default class APIClient {
    */
   @bindThis
   public async post(param: any): Promise<any> {
+    // 呼び出し元のオブジェクトを破壊しない
+    const body = { ...param };
+
     // リプライの場合は元の投稿の公開範囲を継承するため、visibilityを上書きしない
     if (
-      !param.replyId &&
+      !body.replyId &&
       config.postNotPublic &&
-      (!param.visibility || param.visibility == 'public')
-    )
-      param.visibility = 'home';
-    if (!param.visibility && config.defaultVisibility)
-      param.visibility = config.defaultVisibility;
-    const res = await this.api<{ createdNote: any }>('notes/create', param);
+      (!body.visibility || body.visibility == 'public')
+    ) {
+      body.visibility = 'home';
+    }
+    if (!body.visibility && config.defaultVisibility) {
+      body.visibility = config.defaultVisibility;
+    }
+
+    const res = await this.api<{ createdNote: any }>('notes/create', body);
     return res.createdNote;
   }
 
@@ -98,6 +109,7 @@ export default class APIClient {
         headers: {
           'User-Agent': this.getDefaultUserAgent(),
         },
+        timeout: { request: DEFAULT_API_TIMEOUT_MS },
       })
       .json<T>();
   }

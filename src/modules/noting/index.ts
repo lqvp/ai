@@ -1,24 +1,21 @@
+import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { genItem } from '@/vocabulary.js';
-import config from '@/config.js';
 
 export default class extends Module {
   public readonly name = 'noting';
 
   @bindThis
   public install() {
-    if (config.notingEnabled === false) return {};
+    if (config.notingEnabled === false) return false;
 
-    setInterval(
-      () => {
-        if (Math.random() < 0.04) {
-          this.post();
-        }
-      },
-      1000 * 60 * 10
-    );
+    this.every(1000 * 60 * 10, () => {
+      if (Math.random() < 0.04) {
+        this.post();
+      }
+    });
 
     return {};
   }
