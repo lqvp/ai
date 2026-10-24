@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@iarna/toml": "2.2.5",
-    "@napi-rs/canvas": "0.1.100",
+    "@napi-rs/canvas": "1.0.13",
     "chalk": "6.0.1",
     "fast-xml-parser": "5.11.2",
     "got": "16.1.0",
