@@ -439,11 +439,15 @@ export default class extends Module {
       timelineContext: timelineContext, // 文脈情報を保存
     };
 
-    // choseNote はタイムライン由来の生のNoteなので、Messageとして包み直す
-    const shownNote = await this.ai.api<Note>('notes/show', {
-      noteId: choseNote.id,
-    });
-    const targetedMessage = new Message(this.ai, shownNote, false);
+    // choseNote はタイムライン由来の生のNote。
+    // extractedText が無い場合のみ取得し直してから Message として包み直す
+    let messageSource = choseNote as Note & { extractedText?: unknown };
+    if (messageSource.extractedText == undefined) {
+      messageSource = await this.ai.api<Note>('notes/show', {
+        noteId: choseNote.id,
+      });
+    }
+    const targetedMessage = new Message(this.ai, messageSource, false);
 
     const result = await this.chatHandler.handle(current, targetedMessage);
 

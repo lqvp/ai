@@ -22,12 +22,36 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # PR: push せずビルドだけ検証する (読み取り権限のみ)
+  build-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          build-args: |
+            enable_mecab=1
+
+  # 手動 dispatch: レジストリへ push する
   build-and-push:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -36,7 +60,6 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to the Container registry
-        if: github.event_name == 'workflow_dispatch'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -47,10 +70,9 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          # PRではビルドの検証のみ行い、レジストリへはpushしない
-          push: ${{ github.event_name == 'workflow_dispatch' }}
+          push: true
           build-args: |
             enable_mecab=1
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag || 'latest' }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
