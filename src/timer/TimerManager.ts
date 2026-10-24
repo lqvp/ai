@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
+import type { TimeoutCallback } from '@/ai.js';
 import type DatabaseManager from '@/database/DatabaseManager.js';
 import { bindThis } from '@/decorators.js';
 import log from '@/utils/log.js';
 
-type TimeoutCallback = (data?: any) => void;
-type Module = {
+/** タイマー登録に必要なモジュール情報 */
+type ModuleRef = {
   name: string;
-  [key: string]: any;
 };
 
 /**
@@ -65,7 +65,11 @@ export default class TimerManager {
    * @param data オプションのデータ
    */
   @bindThis
-  public setTimeoutWithPersistence(module: Module, delay: number, data?: any) {
+  public setTimeoutWithPersistence(
+    module: ModuleRef,
+    delay: number,
+    data?: unknown
+  ) {
     const id = randomUUID();
 
     this.dbManager.repositories.timers.insert({

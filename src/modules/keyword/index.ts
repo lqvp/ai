@@ -25,7 +25,7 @@ export default class extends Module {
     if (!config.keywordEnabled) return false;
 
     this.learnedKeywords = this.ai.getCollection('_keyword_learnedKeywords', {
-      indices: ['userId'],
+      indices: ['keyword'],
     });
 
     this.every(1000 * 60 * 30, this.learn);

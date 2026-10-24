@@ -8,14 +8,16 @@
 
 import got from 'got';
 import config, { initConfig, loadConfig } from '@/config.js';
+import type { Note } from '@/misskey/note.js';
 import type { User } from '@/misskey/user.js';
 import serifs from '@/serifs.js';
 import * as Reversi from './engine.js';
+import type { BackendMessage, ReversiFormItem, ReversiGame } from './types.js';
 
 // 子プロセスとして起動されるため、ここで設定を読み込む
 initConfig(loadConfig());
 
-function getUserName(user) {
+function getUserName(user: User) {
   return user.name || user.username;
 }
 
@@ -39,8 +41,8 @@ const titles = [
 
 class Session {
   private account!: User;
-  private game: any;
-  private form: any;
+  private game!: ReversiGame;
+  private form!: ReversiFormItem[];
   private engine!: Reversi.Game;
   private botColor!: Reversi.Color;
 
@@ -59,7 +61,7 @@ class Session {
   /**
    * 最大のターン数
    */
-  private maxTurn;
+  private maxTurn!: number;
 
   /**
    * 現在のターン数
@@ -69,7 +71,7 @@ class Session {
   /**
    * 対局が開始したことを知らせた投稿
    */
-  private startedNote: any = null;
+  private startedNote: Note | null = null;
 
   private get user(): User {
     return this.game.user1Id == this.account.id
@@ -85,7 +87,7 @@ class Session {
   }
 
   private get strength(): number {
-    return this.form.find((i) => i.id == 'strength').value;
+    return this.form.find((i) => i.id == 'strength')!.value as number;
   }
 
   private get isSettai(): boolean {
@@ -93,7 +95,7 @@ class Session {
   }
 
   private get allowPost(): boolean {
-    return this.form.find((i) => i.id == 'publish').value;
+    return this.form.find((i) => i.id == 'publish')!.value as boolean;
   }
 
   private get url(): string {
@@ -104,7 +106,7 @@ class Session {
     process.on('message', this.onMessage);
   }
 
-  private onMessage = async (msg: any) => {
+  private onMessage = async (msg: BackendMessage) => {
     switch (msg.type) {
       case '_init_':
         this.onInit(msg.body);
@@ -122,7 +124,11 @@ class Session {
   };
 
   // 親プロセスからデータをもらう
-  private onInit = (msg: any) => {
+  private onInit = (
+    msg: BackendMessage & { type: '_init_' } extends never
+      ? never
+      : { game: ReversiGame; form: ReversiFormItem[]; account: User }
+  ) => {
     this.game = msg.game;
     this.form = msg.form;
     this.account = msg.account;
@@ -131,7 +137,7 @@ class Session {
   /**
    * 対局が始まったとき
    */
-  private onStarted = (msg: any) => {
+  private onStarted = (msg: { game: ReversiGame }) => {
     this.game = msg.game;
     if (this.game.canPutEverywhere) {
       // 対応してない
@@ -148,9 +154,9 @@ class Session {
 
     // リバーシエンジン初期化
     this.engine = new Reversi.Game(this.game.map, {
-      isLlotheo: this.game.isLlotheo,
-      canPutEverywhere: this.game.canPutEverywhere,
-      loopedBoard: this.game.loopedBoard,
+      isLlotheo: this.game.isLlotheo ?? false,
+      canPutEverywhere: this.game.canPutEverywhere ?? false,
+      loopedBoard: this.game.loopedBoard ?? false,
     });
 
     this.maxTurn =
@@ -245,7 +251,7 @@ class Session {
   /**
    * 対局が終わったとき
    */
-  private onEnded = async (msg: any) => {
+  private onEnded = async (msg: { game: ReversiGame; winnerId?: string }) => {
     // ストリームから切断
     process.send!({
       type: 'ended',
@@ -289,7 +295,7 @@ class Session {
   /**
    * 打たれたとき
    */
-  private onLog = (log: any) => {
+  private onLog = (log: { id?: string; operation: string; pos: number }) => {
     if (log.id == null || !this.appliedOps.includes(log.id)) {
       switch (log.operation) {
         case 'put': {
@@ -492,13 +498,18 @@ class Session {
    * Misskeyに投稿します
    * @param text 投稿内容
    */
-  private post = async (text: string, renote?: any) => {
+  private post = async (text: string, renote?: Note | null) => {
     if (this.allowPost) {
-      const body = {
+      const body: {
+        i: string;
+        text: string;
+        visibility: 'home';
+        renoteId?: string;
+      } = {
         i: config.i,
         text: text,
         visibility: 'home',
-      } as any;
+      };
 
       if (renote) {
         body.renoteId = renote.id;
@@ -509,7 +520,7 @@ class Session {
           .post(`${config.host}/api/notes/create`, {
             json: body,
           })
-          .json<{ createdNote: any }>();
+          .json<{ createdNote: Note }>();
 
         return res.createdNote;
       } catch (e) {

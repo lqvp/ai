@@ -2,19 +2,26 @@ import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
+import type { SharedConnection } from '@/stream.js';
+
+/** serverStats チャンネルから届く統計情報（バージョン差を吸収するため両方のキーを許容） */
+type ServerStats = {
+  cpu_usage?: number;
+  cpu?: number;
+};
 
 export default class extends Module {
   public readonly name = 'server';
 
-  private connection?: any;
-  private recentStat: any;
+  private connection?: SharedConnection;
+  private recentStat: ServerStats | undefined;
   private warned = false;
   private lastWarnedAt!: number;
 
   /**
    * 1秒毎のログ1分間分
    */
-  private statsLogs: any[] = [];
+  private statsLogs: (ServerStats | undefined)[] = [];
 
   @bindThis
   public install() {
@@ -42,10 +49,10 @@ export default class extends Module {
 
   @bindThis
   private check() {
-    const average = (arr) => arr.reduce((a, b) => a + b) / arr.length;
+    const average = (arr: number[]) => arr.reduce((a, b) => a + b) / arr.length;
 
     const cpuPercentages = this.statsLogs.map(
-      (s) => (s && (s.cpu_usage || s.cpu) * 100) || 0
+      (s) => (s && (s.cpu_usage || s.cpu || 0) * 100) || 0
     );
     const cpuPercentage = average(cpuPercentages);
     if (cpuPercentage >= 70) {
@@ -56,7 +63,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async onStats(stats: any) {
+  private async onStats(stats: ServerStats) {
     this.recentStat = stats;
   }
 

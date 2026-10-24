@@ -1,13 +1,28 @@
 import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
+import type { DriveFile } from '@/misskey/drive-file.js';
+import type { User } from '@/misskey/user.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { nowHour, todayKey } from '@/services/clock.js';
 import { items } from '@/vocabulary.js';
-import { renderChart } from './render-chart.js';
+import { type Chart, renderChart } from './render-chart.js';
 
-export default class extends Module {
+type Diffs = { normal: number[]; reply: number[]; renote: number[] };
+
+type UserNotesChartResponse = { diffs: Diffs };
+
+type UserFollowingChartResponse = {
+  local: { followers: { total: number[] } };
+  remote: { followers: { total: number[] } };
+};
+
+type InstanceNotesChartResponse = { local: { diffs: Diffs } };
+
+type ChartModuleData = { lastPosted?: string };
+
+export default class extends Module<ChartModuleData> {
   public readonly name = 'chart';
 
   @bindThis
@@ -26,8 +41,8 @@ export default class extends Module {
     if (nowHour() !== 23) return;
     const date = todayKey();
     const data = this.getData();
-    if ((data as any).lastPosted == date) return;
-    (data as any).lastPosted = date;
+    if (data.lastPosted == date) return;
+    data.lastPosted = date;
     this.setData(data);
 
     this.log('Time to chart');
@@ -41,66 +56,78 @@ export default class extends Module {
   }
 
   @bindThis
-  private async genChart(type, params?): Promise<any> {
+  private async genChart(
+    type: string,
+    params?: { user: User }
+  ): Promise<DriveFile> {
     this.log('Chart data fetching...');
 
-    let chart;
+    let chart: Chart;
 
     if (type === 'userNotes') {
-      const data = await this.ai.api('charts/user/notes', {
-        span: 'day',
-        limit: 30,
-        userId: params.user.id,
-      });
+      const data = await this.ai.api<UserNotesChartResponse>(
+        'charts/user/notes',
+        {
+          span: 'day',
+          limit: 30,
+          userId: params!.user.id,
+        }
+      );
 
       chart = {
-        title: `@${params.user.username}さんの投稿数`,
+        title: `@${params!.user.username}さんの投稿数`,
         datasets: [
           {
-            data: (data as any).diffs.normal,
+            data: data.diffs.normal,
           },
           {
-            data: (data as any).diffs.reply,
+            data: data.diffs.reply,
           },
           {
-            data: (data as any).diffs.renote,
+            data: data.diffs.renote,
           },
         ],
       };
     } else if (type === 'followers') {
-      const data = await this.ai.api('charts/user/following', {
-        span: 'day',
-        limit: 30,
-        userId: params.user.id,
-      });
+      const data = await this.ai.api<UserFollowingChartResponse>(
+        'charts/user/following',
+        {
+          span: 'day',
+          limit: 30,
+          userId: params!.user.id,
+        }
+      );
 
       chart = {
-        title: `@${params.user.username}さんのフォロワー数`,
+        title: `@${params!.user.username}さんのフォロワー数`,
         datasets: [
           {
-            data: (data as any).local.followers.total,
+            data: data.local.followers.total,
           },
           {
-            data: (data as any).remote.followers.total,
+            data: data.remote.followers.total,
           },
         ],
       };
     } else if (type === 'notes') {
-      const data = await this.ai.api('charts/notes', {
-        span: 'day',
-        limit: 30,
-      });
+      const data = await this.ai.api<InstanceNotesChartResponse>(
+        'charts/notes',
+        {
+          span: 'day',
+          limit: 30,
+        }
+      );
 
       chart = {
         datasets: [
           {
-            data: (data as any).local.diffs.normal,
+            data: data.local.diffs.normal,
           },
           {
-            data: (data as any).local.diffs.reply,
+            data: data.local.diffs.reply,
           },
           {
-            data: (data as any).local.diffs.renote,
+            data: data.local.diffs.renote,
           },
         ],
       };
@@ -111,7 +138,7 @@ export default class extends Module {
       const diffRange = 150;
       const datasetCount = 1 + Math.floor(Math.random() * 3);
 
-      let datasets: any[] = [];
+      const datasets: { data: number[] }[] = [];
 
       for (let d = 0; d < datasetCount; d++) {
         let values = [Math.random() * 1000];

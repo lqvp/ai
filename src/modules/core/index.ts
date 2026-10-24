@@ -134,7 +134,8 @@ export default class extends Module {
   }
 
   @bindThis
-  private async contextHook(key: any, msg: Message, data: any) {
+  private async contextHook(key: string | null, msg: Message, data: unknown) {
+    const { name } = data as { name: string };
     if (msg.text == null) return;
 
     const done = () => {
@@ -143,10 +144,10 @@ export default class extends Module {
     };
 
     if (msg.text.includes('はい')) {
-      msg.friend.updateName(data.name + 'さん');
+      msg.friend.updateName(name + 'さん');
       done();
     } else if (msg.text.includes('いいえ')) {
-      msg.friend.updateName(data.name);
+      msg.friend.updateName(name);
       done();
     } else {
       msg.reply(serifs.core.yesOrNo).then((reply) => {

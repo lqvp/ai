@@ -116,7 +116,7 @@ export default abstract class Module<
    * このタイマーは記憶に永続化されるので、途中でプロセスを再起動しても有効です。
    */
   @bindThis
-  public setTimeoutWithPersistence(delay: number, data?: any): void {
+  public setTimeoutWithPersistence(delay: number, data?: unknown): void {
     this.ai.setTimeoutWithPersistence(this, delay, data);
   }
 

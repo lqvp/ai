@@ -17,6 +17,25 @@ import type { ProviderContext } from './types.js';
 
 export type { ProviderContext } from './types.js';
 
+/** Gemini API のレスポンス。利用しているフィールドのみ定義する。 */
+type GeminiUrlMetadataEntry = {
+  retrieved_url?: string;
+  url_retrieval_status?: string;
+};
+
+type GeminiCandidate = {
+  content?: { parts?: { text?: string }[] };
+  groundingMetadata?: {
+    groundingChunks?: { web?: { uri?: string; title?: string } }[];
+    webSearchQueries?: string[];
+  };
+  url_context_metadata?: { url_metadata?: GeminiUrlMetadataEntry[] };
+};
+
+type GeminiApiJson = {
+  candidates?: GeminiCandidate[];
+};
+
 export async function genTextByGemini(
   aiChat: AiChat,
   files: Base64File[],
@@ -149,7 +168,7 @@ export async function genTextByGemini(
     json: geminiOptions,
   };
   // ctx.log(JSON.stringify(options));
-  let res_data: any = null;
+  let res_data: GeminiApiJson;
   let responseText: string = '';
   try {
     res_data = await got
@@ -158,22 +177,19 @@ export async function genTextByGemini(
         json: options.json,
         responseType: 'json',
       })
-      .json();
+      .json<GeminiApiJson>();
     ctx.log(JSON.stringify(res_data));
     if (res_data.hasOwnProperty('candidates')) {
-      if (res_data.candidates?.length > 0) {
+      // hasOwnProperty 通過後も candidates が空配列の可能性があるため、
+      // 各ブロックの既存ガード（length チェック / hasOwnProperty）で保護される
+      const candidate = res_data.candidates![0];
+      if ((res_data.candidates?.length ?? 0) > 0) {
         // 結果を取得
-        if (res_data.candidates[0].hasOwnProperty('content')) {
-          if (res_data.candidates[0].content.hasOwnProperty('parts')) {
-            for (
-              let i = 0;
-              i < res_data.candidates[0].content.parts.length;
-              i++
-            ) {
-              if (
-                res_data.candidates[0].content.parts[i].hasOwnProperty('text')
-              ) {
-                responseText += res_data.candidates[0].content.parts[i].text;
+        if (candidate.hasOwnProperty('content')) {
+          if (candidate.content?.hasOwnProperty('parts')) {
+            for (let i = 0; i < candidate.content!.parts!.length; i++) {
+              if (candidate.content!.parts![i].hasOwnProperty('text')) {
+                responseText += String(candidate.content!.parts![i].text);
               }
             }
           }
@@ -181,60 +197,33 @@ export async function genTextByGemini(
       }
       // groundingMetadataを取得
       let groundingMetadata = '';
-      if (res_data.candidates[0].hasOwnProperty('groundingMetadata')) {
+      if (candidate.hasOwnProperty('groundingMetadata')) {
         // 参考サイト情報
-        if (
-          res_data.candidates[0].groundingMetadata.hasOwnProperty(
-            'groundingChunks'
-          )
-        ) {
+        if (candidate.groundingMetadata?.hasOwnProperty('groundingChunks')) {
           // 参考サイトが多すぎる場合があるので、3つに制限
           let checkMaxLength =
-            res_data.candidates[0].groundingMetadata.groundingChunks.length;
-          if (
-            res_data.candidates[0].groundingMetadata.groundingChunks.length > 3
-          ) {
+            candidate.groundingMetadata!.groundingChunks!.length;
+          if (candidate.groundingMetadata!.groundingChunks!.length > 3) {
             checkMaxLength = 3;
           }
           for (let i = 0; i < checkMaxLength; i++) {
-            if (
-              res_data.candidates[0].groundingMetadata.groundingChunks[
-                i
-              ].hasOwnProperty('web')
-            ) {
-              if (
-                res_data.candidates[0].groundingMetadata.groundingChunks[
-                  i
-                ].web.hasOwnProperty('uri') &&
-                res_data.candidates[0].groundingMetadata.groundingChunks[
-                  i
-                ].web.hasOwnProperty('title')
-              ) {
-                groundingMetadata += `参考(${i + 1}): [${
-                  res_data.candidates[0].groundingMetadata.groundingChunks[i]
-                    .web.title
-                }](${
-                  res_data.candidates[0].groundingMetadata.groundingChunks[i]
-                    .web.uri
-                })\n`;
+            const chunk = candidate.groundingMetadata!.groundingChunks![i];
+            if (chunk.hasOwnProperty('web')) {
+              const web = chunk.web!;
+              if (web.hasOwnProperty('uri') && web.hasOwnProperty('title')) {
+                groundingMetadata += `参考(${i + 1}): [${web.title}](${web.uri})\n`;
               }
             }
           }
         }
         // 検索ワード
-        if (
-          res_data.candidates[0].groundingMetadata.hasOwnProperty(
-            'webSearchQueries'
-          )
-        ) {
+        if (candidate.groundingMetadata?.hasOwnProperty('webSearchQueries')) {
           if (
-            res_data.candidates[0].groundingMetadata.webSearchQueries.length > 0
+            (candidate.groundingMetadata!.webSearchQueries?.length ?? 0) > 0
           ) {
             groundingMetadata +=
               '検索ワード: ' +
-              res_data.candidates[0].groundingMetadata.webSearchQueries.join(
-                ','
-              ) +
+              candidate.groundingMetadata!.webSearchQueries!.join(',') +
               '\n';
           }
         }
@@ -247,18 +236,13 @@ export async function genTextByGemini(
 
       // URLコンテキストツールが使用されている場合の処理
       if (geminiOptions.tools?.some((tool) => tool.url_context)) {
-        if (res_data.candidates[0].hasOwnProperty('url_context_metadata')) {
-          if (
-            res_data.candidates[0].url_context_metadata.hasOwnProperty(
-              'url_metadata'
-            )
-          ) {
-            const urlMetadata =
-              res_data.candidates[0].url_context_metadata.url_metadata;
+        if (candidate.hasOwnProperty('url_context_metadata')) {
+          if (candidate.url_context_metadata?.hasOwnProperty('url_metadata')) {
+            const urlMetadata = candidate.url_context_metadata!.url_metadata;
             if (urlMetadata && urlMetadata.length > 0) {
               // URLコンテキストが成功している場合は、フォールバック情報は不要
               const successfulUrls = urlMetadata.filter(
-                (metadata: any) =>
+                (metadata) =>
                   metadata.url_retrieval_status ===
                   'URL_RETRIEVAL_STATUS_SUCCESS'
               );
@@ -270,7 +254,7 @@ export async function genTextByGemini(
 
                 // 成功したURLの情報を表示
                 urlContextMetadata += '\n【参考URL】\n';
-                successfulUrls.forEach((metadata: any, index: number) => {
+                successfulUrls.forEach((metadata, index: number) => {
                   urlContextMetadata += `参考URL(${index + 1}): ${
                     metadata.retrieved_url
                   }\n`;
@@ -292,14 +276,18 @@ export async function genTextByGemini(
     }
   } catch (err: unknown) {
     ctx.log('Error By Call Gemini');
-    let errorCode = null;
-    let errorMessage = null;
+    let errorCode: number | null = null;
+    let errorMessage: string | null = null;
 
     // HTTPErrorからエラーコードと内容を取得
     if (err && typeof err === 'object' && 'response' in err) {
-      const httpError = err as any;
-      errorCode = httpError.response?.statusCode;
-      errorMessage = httpError.response?.statusMessage || httpError.message;
+      const httpError = err as {
+        response?: { statusCode?: number; statusMessage?: string };
+        message?: string;
+      };
+      errorCode = httpError.response?.statusCode ?? null;
+      errorMessage =
+        httpError.response?.statusMessage || httpError.message || null;
     }
 
     if (err instanceof Error) {

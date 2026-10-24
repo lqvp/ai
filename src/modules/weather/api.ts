@@ -47,10 +47,12 @@ export class WeatherApi {
       const obj = parser.parse(xml);
       const nameToIdMap: Record<string, string> = {};
 
-      const extractAreas = (areas: any[]): void => {
+      type AreaNode = { name?: unknown; id?: unknown; children?: unknown };
+
+      const extractAreas = (areas: unknown): void => {
         if (!Array.isArray(areas)) return;
 
-        for (const area of areas) {
+        for (const area of areas as AreaNode[]) {
           if (area?.name && area?.id) {
             nameToIdMap[String(area.name)] = String(area.id);
           }

@@ -35,8 +35,12 @@ const gcStats = {
   lastGCDuration: 0,
 };
 
-function isPromise(p: any): p is Promise<any> {
-  return p !== null && typeof p === 'object' && typeof p.then === 'function';
+function isPromise(p: unknown): p is Promise<unknown> {
+  return (
+    p !== null &&
+    typeof p === 'object' &&
+    typeof (p as Promise<unknown>).then === 'function'
+  );
 }
 
 export function initializeVersion(): void {
@@ -90,7 +94,7 @@ export function setupGCMonitoring(enabled: boolean): () => void {
   ): undefined | Promise<void> => {
     const start = process.hrtime();
     try {
-      let result: any;
+      let result: unknown;
       let gcType: GCType = 'unknown';
 
       if (typeof arg === 'boolean') {
@@ -110,7 +114,7 @@ export function setupGCMonitoring(enabled: boolean): () => void {
       }
 
       updateGCStats(start, gcType);
-      return result;
+      return result as undefined | Promise<void>;
     } catch (error) {
       console.error(
         'GC error:',

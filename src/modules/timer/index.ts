@@ -54,17 +54,23 @@ export default class extends Module {
   }
 
   @bindThis
-  private timeoutCallback(data) {
-    const friend = this.ai.lookupFriend(data.userId);
+  private timeoutCallback(data: unknown) {
+    const { isChat, msgId, userId, time } = data as {
+      isChat: boolean;
+      msgId: string;
+      userId: string;
+      time: string;
+    };
+    const friend = this.ai.lookupFriend(userId);
     if (friend == null) return; // 処理の流れ上、実際にnullになることは無さそうだけど一応
-    const text = serifs.timer.notify(data.time, friend.name);
-    if (data.isChat) {
+    const text = serifs.timer.notify(time, friend.name);
+    if (isChat) {
       this.ai.sendMessage(friend.userId, {
         text: text,
       });
     } else {
       this.ai.post({
-        replyId: data.msgId,
+        replyId: msgId,
         text: text,
       });
     }

@@ -5,9 +5,12 @@ import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Friend from '@/friend.js';
 import Message from '@/message.js';
+import type { User } from '@/misskey/user.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
+import type { SharedConnection } from '@/stream.js';
 import getDate from '@/utils/get-date.js';
+import type { ReversiFormItem, ReversiGame } from './types.js';
 
 const _filename = fileURLToPath(import.meta.url);
 const _dirname = dirname(_filename);
@@ -20,7 +23,7 @@ export default class extends Module {
   /**
    * リバーシストリーム
    */
-  private reversiConnection?: any;
+  private reversiConnection?: SharedConnection;
 
   @bindThis
   public install() {
@@ -29,18 +32,18 @@ export default class extends Module {
     this.reversiConnection = this.ai.connection.useSharedConnection('reversi');
 
     // 招待されたとき
-    this.reversiConnection.on('invited', (msg) =>
+    this.reversiConnection.on('invited', (msg: { user: User }) =>
       this.onReversiInviteMe(msg.user)
     );
 
     // マッチしたとき
-    this.reversiConnection.on('matched', (msg) =>
+    this.reversiConnection.on('matched', (msg: { game: ReversiGame }) =>
       this.onReversiGameStart(msg.game)
     );
 
     if (config.reversiEnabled) {
       const mainStream = this.ai.connection.useSharedConnection('main');
-      mainStream.on('pageEvent', (msg) => {
+      mainStream.on('pageEvent', (msg: { event: string; user: User }) => {
         if (msg.event === 'inviteReversi') {
           this.ai.api('games/reversi/match', {
             userId: msg.user.id,
@@ -78,12 +81,12 @@ export default class extends Module {
   }
 
   @bindThis
-  private async onReversiInviteMe(inviter: any) {
+  private async onReversiInviteMe(inviter: User) {
     this.log(`Someone invited me: @${inviter.username}`);
 
     if (config.reversiEnabled) {
       // 承認
-      const game = await this.ai.api('reversi/match', {
+      const game = await this.ai.api<ReversiGame>('reversi/match', {
         userId: inviter.id,
       });
 
@@ -94,7 +97,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private onReversiGameStart(game: any) {
+  private onReversiGameStart(game: ReversiGame) {
     let strength = 4;
     const friend = this.ai.lookupFriend(
       game.user1Id !== this.ai.account.id ? game.user1Id : game.user2Id
@@ -112,7 +115,7 @@ export default class extends Module {
     });
 
     // フォーム
-    const form = [
+    const form: ReversiFormItem[] = [
       {
         id: 'publish',
         type: 'switch',
@@ -164,33 +167,41 @@ export default class extends Module {
       },
     });
 
-    ai.on('message', (msg: Record<string, any>) => {
-      if (msg.type == 'putStone') {
-        gw.send('putStone', {
-          pos: msg.pos,
-          id: msg.id,
-        });
-      } else if (msg.type == 'ended') {
-        gw.dispose();
+    ai.on(
+      'message',
+      (
+        msg: { type: 'putStone'; pos: number; id: string } | { type: 'ended' }
+      ) => {
+        if (msg.type == 'putStone') {
+          gw.send('putStone', {
+            pos: msg.pos,
+            id: msg.id,
+          });
+        } else if (msg.type == 'ended') {
+          gw.dispose();
 
-        this.onGameEnded(game);
+          this.onGameEnded(game);
+        }
       }
-    });
+    );
 
     // ゲームストリームから情報が流れてきたらそのままバックエンドプロセスに伝える
-    gw.addListener('*', (message) => {
-      ai.send(message);
+    gw.addListener(
+      '*',
+      (message: { type: string; body: { key?: string; value?: unknown } }) => {
+        ai.send(message);
 
-      if (message.type === 'updateSettings') {
-        if (message.body.key === 'canPutEverywhere') {
-          if (message.body.value === true) {
-            gw.send('ready', false);
-          } else {
-            gw.send('ready', true);
+        if (message.type === 'updateSettings') {
+          if (message.body.key === 'canPutEverywhere') {
+            if (message.body.value === true) {
+              gw.send('ready', false);
+            } else {
+              gw.send('ready', true);
+            }
           }
         }
       }
-    });
+    );
     //#endregion
 
     // どんな設定内容の対局でも受け入れる
@@ -211,7 +222,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private onGameEnded(game: any) {
+  private onGameEnded(game: ReversiGame) {
     const user = game.user1Id == this.ai.account.id ? game.user2 : game.user1;
 
     //#region 1日に1回だけ親愛度を上げる

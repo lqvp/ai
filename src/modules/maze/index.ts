@@ -1,6 +1,7 @@
 import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
+import type { DriveFile } from '@/misskey/drive-file.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { nowHour, todayKey } from '@/services/clock.js';
@@ -42,7 +43,10 @@ export default class extends Module {
   }
 
   @bindThis
-  private async genMazeFile(seed, size?): Promise<any> {
+  private async genMazeFile(
+    seed: string | number,
+    size?: string | null
+  ): Promise<DriveFile> {
     this.log('Maze generating...');
     const maze = genMaze(seed, size);
 

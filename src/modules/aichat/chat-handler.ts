@@ -146,10 +146,8 @@ export class ChatHandler {
       msg.reply(
         serifs.aichat.error(
           exist.type,
-          (typeof text.errorCode === 'number' ? text.errorCode : null) as any,
-          (typeof text.errorMessage === 'string'
-            ? text.errorMessage
-            : null) as any
+          typeof text.errorCode === 'number' ? text.errorCode : null,
+          typeof text.errorMessage === 'string' ? text.errorMessage : null
         )
       );
       return false;

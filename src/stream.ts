@@ -7,15 +7,18 @@ import config from './config.js';
 const ReconnectingWebsocket =
   _ReconnectingWebsocket as unknown as (typeof _ReconnectingWebsocket)['default'];
 
+/** 送信ペイロード。heartbeat は生の文字列、それ以外は { type, body } 形。 */
+type OutgoingMessage = string | Record<string, unknown>;
+
 const MAX_BUFFERED_MESSAGES = 1000;
 
 /**
  * Misskey stream connection
  */
 export default class Stream extends EventEmitter {
-  private stream: any;
+  private stream: InstanceType<typeof ReconnectingWebsocket>;
   private state: string;
-  private buffer: any[];
+  private buffer: OutgoingMessage[];
   private sharedConnectionPools: Pool[] = [];
   private sharedConnections: SharedConnection[] = [];
   private nonSharedConnections: NonSharedConnection[] = [];
@@ -37,7 +40,7 @@ export default class Stream extends EventEmitter {
           constructor(
             url: string,
             protocols?: string | string[],
-            options?: any
+            options?: WebSocket.ClientOptions
           ) {
             super(url, protocols, {
               ...options,
@@ -85,7 +88,10 @@ export default class Stream extends EventEmitter {
   }
 
   @bindThis
-  public connectToChannel(channel: string, params?: any): NonSharedConnection {
+  public connectToChannel(
+    channel: string,
+    params?: Record<string, unknown>
+  ): NonSharedConnection {
     const connection = new NonSharedConnection(this, channel, params);
     this.nonSharedConnections.push(connection);
     return connection;
@@ -139,8 +145,8 @@ export default class Stream extends EventEmitter {
    * Callback of when received a message from connection
    */
   @bindThis
-  private onMessage(message) {
-    let parsed: { type: string; body: any };
+  private onMessage(message: MessageEvent) {
+    let parsed: { type: string; body: unknown };
     try {
       parsed = JSON.parse(message.data);
     } catch {
@@ -151,7 +157,11 @@ export default class Stream extends EventEmitter {
     const { type, body } = parsed;
 
     if (type == 'channel') {
-      const id = body.id;
+      const {
+        id,
+        type: eventType,
+        body: eventBody,
+      } = body as { id: string; type: string; body: unknown };
 
       let connections: (Connection | undefined)[];
 
@@ -162,8 +172,8 @@ export default class Stream extends EventEmitter {
       }
 
       for (const c of connections.filter((c) => c != null)) {
-        c!.emit(body.type, body.body);
-        c!.emit('*', { type: body.type, body: body.body });
+        c!.emit(eventType, eventBody);
+        c!.emit('*', { type: eventType, body: eventBody });
       }
     } else {
       this.emit(type, body);
@@ -175,7 +185,7 @@ export default class Stream extends EventEmitter {
    * Send a message to connection
    */
   @bindThis
-  public send(typeOrPayload, payload?) {
+  public send(typeOrPayload: OutgoingMessage, payload?: unknown) {
     const data =
       payload === undefined
         ? typeOrPayload
@@ -234,7 +244,7 @@ class Pool {
   public id: string;
   protected stream: Stream;
   private users = 0;
-  private disposeTimerId: any;
+  private disposeTimerId: ReturnType<typeof setTimeout> | null = null;
   private isConnected = false;
 
   constructor(stream: Stream, channel: string) {
@@ -290,7 +300,7 @@ class Pool {
   }
 }
 
-abstract class Connection extends EventEmitter {
+export abstract class Connection extends EventEmitter {
   public channel: string;
   protected stream: Stream;
   public abstract id: string;
@@ -303,9 +313,15 @@ abstract class Connection extends EventEmitter {
   }
 
   @bindThis
-  public send(id: string, typeOrPayload, payload?) {
-    const type = payload === undefined ? typeOrPayload.type : typeOrPayload;
-    const body = payload === undefined ? typeOrPayload.body : payload;
+  public send(id: string, typeOrPayload: OutgoingMessage, payload?: unknown) {
+    const type =
+      payload === undefined
+        ? (typeOrPayload as Record<string, unknown>).type
+        : typeOrPayload;
+    const body =
+      payload === undefined
+        ? (typeOrPayload as Record<string, unknown>).body
+        : payload;
 
     this.stream.send('ch', {
       id: id,
@@ -317,7 +333,7 @@ abstract class Connection extends EventEmitter {
   public abstract dispose(): void;
 }
 
-class SharedConnection extends Connection {
+export class SharedConnection extends Connection {
   private pool: Pool;
 
   public get id(): string {
@@ -332,7 +348,7 @@ class SharedConnection extends Connection {
   }
 
   @bindThis
-  public send(typeOrPayload, payload?) {
+  public send(typeOrPayload: OutgoingMessage, payload?: unknown) {
     super.send(this.pool.id, typeOrPayload, payload);
   }
 
@@ -344,11 +360,15 @@ class SharedConnection extends Connection {
   }
 }
 
-class NonSharedConnection extends Connection {
+export class NonSharedConnection extends Connection {
   public id: string;
-  protected params: any;
+  protected params: Record<string, unknown> | undefined;
 
-  constructor(stream: Stream, channel: string, params?: any) {
+  constructor(
+    stream: Stream,
+    channel: string,
+    params?: Record<string, unknown>
+  ) {
     super(stream, channel);
 
     this.params = params;
@@ -367,7 +387,7 @@ class NonSharedConnection extends Connection {
   }
 
   @bindThis
-  public send(typeOrPayload, payload?) {
+  public send(typeOrPayload: OutgoingMessage, payload?: unknown) {
     super.send(this.id, typeOrPayload, payload);
   }
 

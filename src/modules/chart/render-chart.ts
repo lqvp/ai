@@ -18,7 +18,7 @@ const colors = {
 
 const yAxisTicks = 4;
 
-type Chart = {
+export type Chart = {
   title?: string;
   datasets: {
     title?: string;
@@ -85,7 +85,7 @@ export function renderChart(chart: Chart) {
     ctx.fillText(step.toString(), chartAreaX, chartAreaY + y - 8);
   }
 
-  const newDatasets: any[] = [];
+  const newDatasets: { data: number[] }[] = [];
 
   for (let series = 0; series < serieses; series++) {
     newDatasets.push({
@@ -195,7 +195,8 @@ function niceScale(
   // Calculate pretty step value
   const mag = Math.floor(Math.log10(tempStep));
   const magPow = Math.pow(10, mag);
-  const magMsd = (parseInt as any)(tempStep / magPow);
+  // parseInt 相当（小数点以下切り捨て。負数でも0方向へ丸める）
+  const magMsd = Math.trunc(tempStep / magPow);
   const stepSize = magMsd * magPow;
 
   // build Y label array.

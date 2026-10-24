@@ -122,7 +122,7 @@ export default class extends Module {
   @bindThis
   private onWolfxMessage(data: WebSocket.RawData): void {
     try {
-      let message: any;
+      let message: { type?: string };
       try {
         message = JSON.parse(data.toString());
       } catch (parseError) {
@@ -135,12 +135,12 @@ export default class extends Module {
       }
 
       if (message.type === 'heartbeat') {
-        this.handleHeartbeat(message);
+        this.handleHeartbeat(message as unknown as HeartbeatData);
         return;
       }
 
       if (message.type === 'jma_eew') {
-        this.handleEarthquakeData(message);
+        this.handleEarthquakeData(message as unknown as WolfxEarthquakeData);
       }
     } catch (error) {
       this.log(`メッセージ処理エラー: ${error}`);

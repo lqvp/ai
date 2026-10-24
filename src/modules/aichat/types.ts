@@ -7,6 +7,14 @@ export type ChatHistoryItem = {
   content: string;
 };
 
+/** 投稿文脈として保持するノート情報（プロンプトでは text のみ使用） */
+export type TimelineContextNote = { text?: string | null };
+
+export type TimelineContext = {
+  before?: TimelineContextNote[];
+  after?: TimelineContextNote[];
+};
+
 export type Base64File = {
   type: string;
   base64: string;
@@ -22,7 +30,7 @@ export type AiChat = {
   friendName?: string;
   grounding?: boolean;
   history?: ChatHistoryItem[];
-  timelineContext?: { before?: any[]; after?: any[] };
+  timelineContext?: TimelineContext;
 };
 
 export type GeminiPart = {

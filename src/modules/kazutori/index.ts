@@ -82,7 +82,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async contextHook(_key: any, msg: Message) {
+  private async contextHook(_key: string | null, msg: Message) {
     if (msg.text == null)
       return {
         reaction: 'hmm',

@@ -1,5 +1,5 @@
 import type Message from '@/message.js';
-import type { AiChat } from '../types.js';
+import type { AiChat, TimelineContext } from '../types.js';
 
 /**
  * プロバイダ実装（Gemini / OpenAI 互換）が必要とするモジュール側の機能。
@@ -14,7 +14,5 @@ export type ProviderContext = {
     hasYoutubeUrl: boolean;
     fallbackUrlInfo: string;
   }>;
-  formatTimelineContext: (
-    context?: { before?: any[]; after?: any[] } | null
-  ) => string;
+  formatTimelineContext: (context?: TimelineContext | null) => string;
 };

@@ -32,8 +32,8 @@ export default class UpdateCheckerModule extends Module {
   }
 
   @bindThis
-  public async timeoutCallback(data?: any) {
-    if (data?.immediate) {
+  public async timeoutCallback(data?: unknown) {
+    if ((data as { immediate?: boolean } | undefined)?.immediate) {
       this.check();
     }
 
