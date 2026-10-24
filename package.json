@@ -38,7 +38,7 @@
     "ws": "8.22.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
+    "@biomejs/biome": "2.6.3",
     "@types/iarna__toml": "2.0.5",
     "@types/lokijs": "1.5.14",
     "@types/node": "24.19.2",
