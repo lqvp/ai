@@ -2,7 +2,31 @@ import chalk from 'chalk';
 import got from 'got';
 import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
+import type { DriveFile } from '@/misskey/drive-file.js';
+import type { Note } from '@/misskey/note.js';
 import log from '@/utils/log.js';
+
+/** Misskey API へ渡すパラメータ。エンドポイント固有のフィールドを許容する。 */
+export type ApiParam = Record<string, unknown>;
+
+/** notes/create へ渡すパラメータ。既知のフィールドは型を付け、それ以外も許容する。 */
+export type PostParam = {
+  text?: string | null;
+  cw?: string | null;
+  /** Misskey の visibility 値（public/home/followers/specified） */
+  visibility?: string;
+  localOnly?: boolean;
+  replyId?: string;
+  renoteId?: string;
+  channelId?: string;
+  fileIds?: string[];
+  poll?: {
+    choices: string[];
+    expiresAt?: number | null;
+    expiredAfter?: number | null;
+    multiple?: boolean;
+  } | null;
+} & ApiParam;
 
 const DEFAULT_API_TIMEOUT_MS = 60_000;
 
@@ -54,7 +78,7 @@ export default class APIClient {
           retry: { limit: 0 },
           timeout: { request: DEFAULT_API_TIMEOUT_MS },
         })
-        .json();
+        .json<DriveFile>();
       return res;
     } catch (error) {
       this.log(`File upload failed: ${String(error)}`);
@@ -66,7 +90,7 @@ export default class APIClient {
    * 投稿します
    */
   @bindThis
-  public async post(param: any): Promise<any> {
+  public async post(param: PostParam): Promise<Note> {
     // 呼び出し元のオブジェクトを破壊しない
     const body = { ...param };
 
@@ -82,7 +106,7 @@ export default class APIClient {
       body.visibility = config.defaultVisibility;
     }
 
-    const res = await this.api<{ createdNote: any }>('notes/create', body);
+    const res = await this.api<{ createdNote: Note }>('notes/create', body);
     return res.createdNote;
   }
 
@@ -90,8 +114,8 @@ export default class APIClient {
    * 指定ユーザーにチャットメッセージを送信します
    */
   @bindThis
-  public sendMessage(userId: any, param: any) {
-    return this.api('chat/messages/create-to-user', {
+  public sendMessage(userId: string, param: ApiParam) {
+    return this.api<unknown>('chat/messages/create-to-user', {
       toUserId: userId,
       ...param,
     });
@@ -101,7 +125,7 @@ export default class APIClient {
    * APIを呼び出します
    */
   @bindThis
-  public api<T>(endpoint: string, param?: any): Promise<T> {
+  public api<T>(endpoint: string, param?: ApiParam): Promise<T> {
     this.log(`API: ${endpoint}`);
     return got
       .post(`${config.apiUrl}/${endpoint}`, {

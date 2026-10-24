@@ -18,7 +18,7 @@ const colors = {
 
 const yAxisTicks = 4;
 
-type Chart = {
+export type Chart = {
   title?: string;
   datasets: {
     title?: string;
@@ -85,7 +85,7 @@ export function renderChart(chart: Chart) {
     ctx.fillText(step.toString(), chartAreaX, chartAreaY + y - 8);
   }
 
-  const newDatasets: any[] = [];
+  const newDatasets: { data: number[] }[] = [];
 
   for (let series = 0; series < serieses; series++) {
     newDatasets.push({
@@ -161,6 +161,22 @@ export function renderChart(chart: Chart) {
 // https://stackoverflow.com/questions/326679/choosing-an-attractive-linear-scale-for-a-graphs-y-axis
 // https://github.com/apexcharts/apexcharts.js/blob/master/src/modules/Scales.js
 // This routine creates the Y axis values for a graph.
+/**
+ * Y軸の「見た目の良い」ステップ幅を計算する。
+ * 小数点以下の切り捨ては parseInt ではなく Math.trunc を使う
+ * （数値入力に対して等価で、1e21 超の指数表記でも壊れない）。
+ */
+export function calcChartStepSize(range: number, tiks: number): number {
+  // Get raw step value
+  const tempStep = range / tiks;
+
+  // Calculate pretty step value
+  const mag = Math.floor(Math.log10(tempStep));
+  const magPow = Math.pow(10, mag);
+  const magMsd = Math.trunc(tempStep / magPow);
+  return magMsd * magPow;
+}
+
 function niceScale(
   lowerBound: number,
   upperBound: number,
@@ -189,14 +205,7 @@ function niceScale(
     tiks -= 2;
   }
 
-  // Get raw step value
-  const tempStep = range / tiks;
-
-  // Calculate pretty step value
-  const mag = Math.floor(Math.log10(tempStep));
-  const magPow = Math.pow(10, mag);
-  const magMsd = (parseInt as any)(tempStep / magPow);
-  const stepSize = magMsd * magPow;
+  const stepSize = calcChartStepSize(range, tiks);
 
   // build Y label array.
   // Lower and upper bounds calculations

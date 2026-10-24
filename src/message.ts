@@ -132,7 +132,7 @@ export default class Message {
       .trim();
   }
 
-  constructor(ai: 藍, chatMessageOrNote: any, isChat: boolean) {
+  constructor(ai: 藍, chatMessageOrNote: Note | ChatMessage, isChat: boolean) {
     this.ai = ai;
     this.isChat = isChat;
     this.source = isChat
@@ -164,6 +164,7 @@ export default class Message {
   }
 
   @bindThis
+  // 戻り値はノート or チャットメッセージ or undefined のため境界は any のまま
   public async reply(text: string | null, opts?: ReplyOptions): Promise<any> {
     if (text == null) return;
 

@@ -2,9 +2,14 @@ name: Release
 
 on:
   push:
+    branches: [master]
     paths:
       - 'package.json'
   workflow_dispatch:
+
+# 既定は読み取りのみ。必要なジョブだけ job 単位で上書きする
+permissions:
+  contents: read
 
 jobs:
   check-version:

@@ -81,12 +81,15 @@ const NO_API_KEY = {
   error: { code: 500, message: 'APIキーが設定されていません' },
 } as const;
 
-function errorResponse(error: any): {
+function errorResponse(error: unknown): {
   error: { code: number; message: string };
 } {
+  const statusCode = (
+    error as { response?: { statusCode?: number } } | null | undefined
+  )?.response?.statusCode;
   return {
     error: {
-      code: error?.response?.statusCode ?? 500,
+      code: statusCode ?? 500,
       message: error instanceof Error ? error.message : String(error),
     },
   };
@@ -145,11 +148,14 @@ export async function generateImageWithGemini(
         retry: { limit: 2 },
       })
       .json<GeminiImageGenerationResponse>();
-  } catch (error: any) {
+  } catch (error: unknown) {
     log(`Gemini API error: ${String(error)}`);
 
     try {
-      const body = await error?.response?.text?.();
+      const httpError = error as {
+        response?: { text?: () => Promise<string> };
+      };
+      const body = await httpError.response?.text?.();
       if (body) log(`Error response body: ${body}`);
     } catch {
       // レスポンスボディが読めなくてもエラー処理は続行する
@@ -196,7 +202,7 @@ export async function generateImage(
         retry: { limit: 2 },
       })
       .json<ImagenResponse>();
-  } catch (error: any) {
+  } catch (error: unknown) {
     log(`Imagen API error: ${String(error)}`);
     return errorResponse(error);
   }

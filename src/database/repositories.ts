@@ -9,7 +9,8 @@ export type ContextDoc = {
   userId?: string;
   module: string;
   key: string | null;
-  data?: any;
+  /** 永続化データ。内容は発行元モジュールが知る（境界では unknown）。 */
+  data?: unknown;
 };
 
 export type TimerDoc = {
@@ -17,7 +18,8 @@ export type TimerDoc = {
   module: string;
   insertedAt: number;
   delay: number;
-  data?: any;
+  /** 永続化データ。内容は発行元モジュールが知る（境界では unknown）。 */
+  data?: unknown;
 };
 
 export type ModuleDataDoc = {
@@ -69,7 +71,9 @@ export class FriendRepository {
     const pattern = new RegExp(`-${monthDay}$`);
     return this.collection.find({
       'user.birthday': { $regex: pattern },
-    } as any) as FriendDoc[];
+    } as unknown as Parameters<
+      loki.Collection<FriendDoc>['find']
+    >[0]) as FriendDoc[];
   }
 
   public all(): FriendDoc[] {

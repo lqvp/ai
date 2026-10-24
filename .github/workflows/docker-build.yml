@@ -1,6 +1,14 @@
 name: Docker Build and Push
 
 on:
+  # Docker関連ファイルの変更をPRで検証する (pushはしない)
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/docker-build.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -14,12 +22,36 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # PR: push せずビルドだけ検証する (読み取り権限のみ)
+  build-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          build-args: |
+            enable_mecab=1
+
+  # 手動 dispatch: レジストリへ push する
   build-and-push:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

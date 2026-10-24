@@ -1,5 +1,5 @@
 import urlToJson from '@/utils/url2json.js';
-import type { AiChat, UrlPreview } from './types.js';
+import type { AiChat, TimelineContext, UrlPreview } from './types.js';
 
 export type UrlPreviewResult = {
   youtubeURLs: string[];
@@ -147,7 +147,7 @@ export async function collectUrlInfo(
  * 投稿文脈（前後のノート）をプロンプト用の文字列にする。
  */
 export function formatTimelineContext(
-  context?: { before?: any[]; after?: any[] } | null
+  context?: TimelineContext | null
 ): string {
   if (!context) return '';
 

@@ -113,7 +113,7 @@ export async function generateVideo(
       error:
         '動画生成がタイムアウトしました（しばらくしてから再試行してください）',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     log(`Veo API error: ${String(error)}`);
     return { error: error instanceof Error ? error.message : String(error) };
   }

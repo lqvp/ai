@@ -1,4 +1,5 @@
 import { bindThis } from '@/decorators.js';
+import type { Note } from '@/misskey/note.js';
 import Module from '@/module.js';
 import type Stream from '@/stream.js';
 
@@ -21,7 +22,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private onLocalNote(note: any) {
+  private onLocalNote(note: Note & { isFirstNote?: boolean }) {
     if (note.isFirstNote) {
       this.later(3000, () => {
         this.ai.api('notes/create', {

@@ -1,6 +1,7 @@
 import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
+import type { Note } from '@/misskey/note.js';
 import Module from '@/module.js';
 import { fetchNoteFiles } from '@/services/media.js';
 import { postAutoNote } from './auto-note.js';
@@ -16,7 +17,7 @@ import {
   ChatHistoryRepository,
 } from './history-repository.js';
 import { TextGenerator } from './text-generator.js';
-import type { AiChat, Base64File } from './types.js';
+import type { AiChat, Base64File, TimelineContext } from './types.js';
 import {
   collectUrlInfo,
   formatTimelineContext,
@@ -184,16 +185,11 @@ export default class extends Module {
 
       if (exist != null) return false;
     } else {
-      const conversationData = await this.ai.api<any[]>('notes/conversation', {
-        noteId: msg.id,
-      });
-
-      if (conversationData != undefined) {
-        exist = this.history.findAnyByPostIds(
-          conversationData.map((message: any) => message.id)
-        );
-        if (exist != null) return false;
-      }
+      exist = await this.findExistingHistoryInChain(
+        msg.id,
+        'notes/conversation'
+      );
+      if (exist != null) return false;
     }
 
     let type = TYPE_GEMINI;
@@ -235,7 +231,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async contextHook(key: any, msg: Message) {
+  private async contextHook(key: string | null, msg: Message) {
     this.log('contextHook...');
     if (msg.text == null) return false;
 
@@ -265,7 +261,7 @@ export default class extends Module {
     if (msg.isChat) {
       exist = this.history.findChat(msg.userId);
     } else {
-      const conversationData: any = await this.ai.api('notes/conversation', {
+      const conversationData = await this.ai.api<Note[]>('notes/conversation', {
         noteId: msg.id,
       });
 
@@ -275,7 +271,7 @@ export default class extends Module {
       }
 
       exist = this.history.findAnyByPostIds(
-        conversationData.map((message: any) => message.id)
+        conversationData.map((message) => message.id)
       );
     }
 
@@ -301,10 +297,23 @@ export default class extends Module {
     return false;
   }
 
+  /**
+   * 会話チェーン（ノートの会話・返信ツリー）の投稿IDを履歴と照合し、
+   * 既出の会話ならその履歴を返す。APIが値を返さなければ null。
+   */
+  private async findExistingHistoryInChain(
+    noteId: string,
+    endpoint: 'notes/conversation' | 'notes/children'
+  ): Promise<AiChatHist | null> {
+    const data = await this.ai.api<Note[] | undefined>(endpoint, { noteId });
+    if (data == undefined) return null;
+    return this.history.findAnyByPostIds(data.map((message) => message.id));
+  }
+
   // フィルタリング処理を関数化
-  private filterInterestedNotes(notes: any[]): any[] {
+  private filterInterestedNotes(notes: Note[]): Note[] {
     return notes.filter(
-      (note: any) =>
+      (note) =>
         note.userId !== this.ai.account.id &&
         note.text != null &&
         note.replyId == null &&
@@ -318,20 +327,20 @@ export default class extends Module {
 
   // ユーザー投稿履歴から文脈取得関数
   private async getUserNotesContext(
-    selectedNote: any,
+    selectedNote: Note,
     userId: string,
     contextRange: number = 5,
     contextUsageCount: number = 3
-  ): Promise<{ before?: any[]; after?: any[] }> {
+  ): Promise<TimelineContext> {
     try {
       // 並列でAPI呼び出しを実行
       const [newerNotes, olderNotes] = await Promise.all([
-        this.ai.api<any[]>('users/notes', {
+        this.ai.api<Note[]>('users/notes', {
           userId: userId,
           sinceId: selectedNote.id,
           limit: contextRange,
         }),
-        this.ai.api<any[]>('users/notes', {
+        this.ai.api<Note[]>('users/notes', {
           userId: userId,
           untilId: selectedNote.id,
           limit: contextRange,
@@ -363,7 +372,7 @@ export default class extends Module {
   @bindThis
   private async aichatRandomTalk() {
     this.log('aichatRandomTalk called');
-    const tl = await this.ai.api<any[]>('notes/timeline', { limit: 30 });
+    const tl = await this.ai.api<Note[]>('notes/timeline', { limit: 30 });
     const interestedNotes = this.filterInterestedNotes(tl);
 
     if (interestedNotes == undefined || interestedNotes.length == 0)
@@ -379,26 +388,17 @@ export default class extends Module {
     exist = this.history.findByPostId(choseNote.id);
     if (exist != null) return false;
 
-    const childrenData: any = await this.ai.api('notes/children', {
-      noteId: choseNote.id,
-    });
-    if (childrenData != undefined) {
-      exist = this.history.findAnyByPostIds(
-        childrenData.map((message: any) => message.id)
-      );
-      if (exist != null) return false;
-    }
+    exist = await this.findExistingHistoryInChain(
+      choseNote.id,
+      'notes/children'
+    );
+    if (exist != null) return false;
 
-    const conversationData: any = await this.ai.api('notes/conversation', {
-      noteId: choseNote.id,
-    });
-
-    if (conversationData != undefined) {
-      exist = this.history.findAnyByPostIds(
-        conversationData.map((message: any) => message.id)
-      );
-      if (exist != null) return false;
-    }
+    exist = await this.findExistingHistoryInChain(
+      choseNote.id,
+      'notes/conversation'
+    );
+    if (exist != null) return false;
 
     exist = this.history.findByOriginalNoteId(choseNote.id);
     if (exist != null) {
@@ -420,7 +420,7 @@ export default class extends Module {
     const contextRange = config.gemini?.randomTalk?.contextRange || 5;
     const contextUsageCount = config.gemini?.randomTalk?.contextUsageCount || 3;
     const enableContext = config.gemini?.randomTalk?.enableContext !== false; // デフォルトtrue
-    let timelineContext: { before?: any[]; after?: any[] } = {};
+    let timelineContext: TimelineContext = {};
 
     if (enableContext) {
       timelineContext = await this.getUserNotesContext(
@@ -439,11 +439,15 @@ export default class extends Module {
       timelineContext: timelineContext, // 文脈情報を保存
     };
 
-    let targetedMessage = choseNote;
-    if (choseNote.extractedText == undefined) {
-      const data = await this.ai.api('notes/show', { noteId: choseNote.id });
-      targetedMessage = new Message(this.ai, data, false);
+    // choseNote はタイムライン由来の生のNote。
+    // extractedText が無い場合のみ取得し直してから Message として包み直す
+    let messageSource = choseNote as Note & { extractedText?: unknown };
+    if (messageSource.extractedText == undefined) {
+      messageSource = await this.ai.api<Note>('notes/show', {
+        noteId: choseNote.id,
+      });
     }
+    const targetedMessage = new Message(this.ai, messageSource, false);
 
     const result = await this.chatHandler.handle(current, targetedMessage);
 
@@ -465,16 +469,21 @@ export default class extends Module {
   }
 
   @bindThis
-  private async timeoutCallback(data) {
+  private async timeoutCallback(data: unknown) {
+    const { isChat, userId, id } = data as {
+      isChat?: boolean;
+      userId: string;
+      id: string;
+    };
     this.log('timeoutCallback...');
     let exist: AiChatHist | null = null;
 
-    if (data.isChat) {
-      exist = this.history.findChat(data.userId);
-      this.unsubscribeReply(data.userId);
+    if (isChat) {
+      exist = this.history.findChat(userId);
+      this.unsubscribeReply(userId);
     } else {
-      exist = this.history.findByPostId(data.id);
-      this.unsubscribeReply(data.id);
+      exist = this.history.findByPostId(id);
+      this.unsubscribeReply(id);
     }
 
     if (exist != null) {

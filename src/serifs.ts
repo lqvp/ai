@@ -430,7 +430,11 @@ const defaultSerifs = {
 
   aichat: {
     nothing: (type) => `あぅ... ${type}のAPIキーが登録されてないみたいです`,
-    error: (type, errorCode = null, errorMessage = null) =>
+    error: (
+      type: string,
+      errorCode: number | null = null,
+      errorMessage: string | null = null
+    ) =>
       errorCode
         ? `うぇ...${type}でエラーが発生しちゃったみたいです。\nエラーコード: ${errorCode}\nエラーメッセージ: ${errorMessage}`
         : `うぇ...${type}でエラーが発生しちゃったみたいです。`,
@@ -591,23 +595,25 @@ function getParamNames(func: Function): string[] {
     .filter((p) => p);
 }
 
-export function deepMerge(
-  target: any,
-  source: any,
+export function deepMerge<T extends object>(
+  target: T,
+  source: Record<string, unknown>,
   parentKey: string = ''
-): any {
+): T {
+  const t = target as Record<string, unknown>;
   for (const key in source) {
+    const sourceValue = source[key];
     if (parentKey === 'noting' && key === 'notes') {
-      target[key] = source[key];
+      t[key] = sourceValue;
       continue;
     }
-    if (typeof target[key] === 'function' && typeof source[key] === 'string') {
-      const originalFunc = target[key];
+    if (typeof t[key] === 'function' && typeof sourceValue === 'string') {
+      const originalFunc = t[key] as (...args: unknown[]) => string;
       const paramNames = getParamNames(originalFunc);
-      const overrideString = source[key];
+      const overrideString = sourceValue;
 
-      target[key] = (...args: any[]) => {
-        const params: { [key: string]: any } = {};
+      t[key] = (...args: unknown[]) => {
+        const params: Record<string, unknown> = {};
 
         // 引数が1つでオブジェクトの場合（例：({name, tension}）はそのプロパティを展開
         if (
@@ -623,20 +629,24 @@ export function deepMerge(
           });
         }
 
-        return overrideString.replace(/{(\w+)}/g, (_, placeholder) =>
-          params.hasOwnProperty(placeholder)
-            ? params[placeholder]
+        return overrideString.replace(/{(\w+)}/g, (_, placeholder: string) =>
+          Object.prototype.hasOwnProperty.call(params, placeholder)
+            ? String(params[placeholder])
             : `{${placeholder}}`
         );
       };
     } else if (
-      source[key] &&
-      typeof source[key] === 'object' &&
-      !Array.isArray(source[key])
+      sourceValue &&
+      typeof sourceValue === 'object' &&
+      !Array.isArray(sourceValue)
     ) {
-      target[key] = deepMerge(target[key] || {}, source[key], key);
+      t[key] = deepMerge(
+        (t[key] as Record<string, unknown>) || {},
+        sourceValue as Record<string, unknown>,
+        key
+      );
     } else {
-      target[key] = source[key];
+      t[key] = sourceValue;
     }
   }
   return target;
@@ -650,7 +660,10 @@ try {
   );
   const loadedSerifs = TOML.parse(fileContent);
   if (loadedSerifs && typeof loadedSerifs === 'object') {
-    computedSerifs = deepMerge(computedSerifs, loadedSerifs);
+    computedSerifs = deepMerge(
+      computedSerifs,
+      loadedSerifs as Record<string, unknown>
+    );
   }
 } catch (e) {
   // Fallback to defaultSerifs if serifs.toml is missing or invalid

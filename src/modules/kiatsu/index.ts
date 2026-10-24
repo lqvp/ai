@@ -2,6 +2,7 @@ import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import { getJson } from '@/http/client.js';
 import Message from '@/message.js';
+import type { DriveFile } from '@/misskey/drive-file.js';
 import Module from '@/module.js';
 import { nowHour } from '@/services/clock.js';
 import { renderKiatsuImage, type WeatherData } from './render-kiatsu.js';
@@ -182,7 +183,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private async generateForecastImageFile(): Promise<any | undefined> {
+  private async generateForecastImageFile(): Promise<DriveFile | undefined> {
     if (!this.latestWeatherData) return undefined;
 
     const image = renderKiatsuImage(this.latestWeatherData);
@@ -199,7 +200,7 @@ export default class extends Module {
 
     await this.update();
 
-    let file: any | undefined;
+    let file: DriveFile | undefined;
 
     try {
       file = await this.generateForecastImageFile();

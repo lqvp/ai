@@ -25,8 +25,13 @@ export default class extends Module {
     if (!config.keywordEnabled) return false;
 
     this.learnedKeywords = this.ai.getCollection('_keyword_learnedKeywords', {
-      indices: ['userId'],
+      indices: ['keyword'],
     });
+    // 既存コレクションが再利用される場合は indices が適用されないため、
+    // 旧環境 (userId インデックスのみ) でも keyword インデックスを保証する
+    if (!('keyword' in this.learnedKeywords.binaryIndices)) {
+      this.learnedKeywords.ensureIndex('keyword');
+    }
 
     this.every(1000 * 60 * 30, this.learn);
 

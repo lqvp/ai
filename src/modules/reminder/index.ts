@@ -133,11 +133,12 @@ export default class extends Module {
   }
 
   @bindThis
-  private async contextHook(key: any, msg: Message, data: any) {
+  private async contextHook(key: string | null, msg: Message, data: unknown) {
+    const { id } = data as { id: string };
     if (msg.text == null) return;
 
     const remind = this.reminds.findOne({
-      id: data.id,
+      id,
     });
 
     if (remind == null) {
@@ -168,9 +169,10 @@ export default class extends Module {
   }
 
   @bindThis
-  private async timeoutCallback(data) {
+  private async timeoutCallback(data: unknown) {
+    const { id } = data as { id: string };
     const remind = this.reminds.findOne({
-      id: data.id,
+      id,
     });
     if (remind == null) return;
 

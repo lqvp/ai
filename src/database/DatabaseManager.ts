@@ -34,7 +34,7 @@ export default class DatabaseManager {
 
   constructor(
     onReady: () => void,
-    onError: (err: any) => void,
+    onError: (err: Error) => void,
     log: (message: string) => void = console.log
   ) {
     this.log = log;
@@ -49,9 +49,9 @@ export default class DatabaseManager {
         fs.mkdirSync(memoryDir, { recursive: true });
         this.log(chalk.blue(`Created memory directory: ${memoryDir}`));
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       const error = new Error(
-        `Failed to create memory directory: ${e.message}`
+        `Failed to create memory directory: ${e instanceof Error ? e.message : String(e)}`
       );
       this.log(chalk.red(error.message));
       onError(error);
@@ -90,7 +90,7 @@ export default class DatabaseManager {
   private attemptRecovery(
     file: string,
     onReady: () => void,
-    onError: (err: any) => void
+    onError: (err: Error) => void
   ) {
     try {
       this.log(chalk.yellow('Attempting to recover database...'));
@@ -111,8 +111,10 @@ export default class DatabaseManager {
       this.initializeCollections();
       this.log(chalk.green('Database recovered successfully'));
       onReady();
-    } catch (e: any) {
-      const error = new Error(`Failed to recover database: ${e.message}`);
+    } catch (e: unknown) {
+      const error = new Error(
+        `Failed to recover database: ${e instanceof Error ? e.message : String(e)}`
+      );
       this.log(chalk.red(error.message));
       onError(error);
     }
@@ -207,7 +209,7 @@ export default class DatabaseManager {
   @bindThis
   public getCollection<T extends object = any>(
     name: string,
-    opts?: any
+    opts?: { indices?: (keyof T)[] }
   ): loki.Collection<T> {
     let collection = this.db.getCollection<T>(name);
 

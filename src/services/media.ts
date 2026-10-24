@@ -1,4 +1,5 @@
 import type APIClient from '@/api/APIClient.js';
+import type { DriveFile } from '@/misskey/drive-file.js';
 import type { Note } from '@/misskey/note.js';
 import urlToBase64 from '@/utils/url2base64.js';
 
@@ -8,7 +9,7 @@ export type Base64File = {
   url?: string;
 };
 
-type NoteWithFiles = Partial<Note & { files: any[] }>;
+type NoteWithFiles = Partial<Note>;
 
 export type FetchNoteFilesOptions = {
   /** 取得したファイル URL を結果に含めるか */
@@ -28,7 +29,7 @@ function normalizeImageType(type: string): string {
   return MIME_ALIASES[type] ?? type;
 }
 
-function pickFileInfo(file: any): { type?: string; url?: string } {
+function pickFileInfo(file: DriveFile): { type?: string; url?: string } {
   const type = typeof file?.type === 'string' ? file.type : undefined;
 
   let url: string | undefined;

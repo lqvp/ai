@@ -2,13 +2,15 @@
 
 import chalk from 'chalk';
 import loki from 'lokijs';
+import type * as Misskey from 'misskey-js';
 import { createRequire } from 'module';
-import APIClient from '@/api/APIClient.js';
+import APIClient, { type ApiParam, type PostParam } from '@/api/APIClient.js';
 import config from '@/config.js';
 import DatabaseManager from '@/database/DatabaseManager.js';
 import { bindThis } from '@/decorators.js';
 import Friend from '@/friend.js';
-import Message from '@/message.js';
+import Message, { type ChatMessage } from '@/message.js';
+import type { Note } from '@/misskey/note.js';
 import type { User } from '@/misskey/user.js';
 import Module from '@/module.js';
 import { ReactionService } from '@/services/reaction.js';
@@ -21,13 +23,17 @@ import { sleep } from './utils/sleep.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
+/** chatUser チャンネルから届くメッセージ。fromUser は省略されてくる。 */
+type ChatStreamMessage = Omit<ChatMessage, 'fromUser'> & { fromUser?: User };
+
 export type MentionHook = (msg: Message) => Promise<boolean | HandlerResult>;
+// data は永続化層経由のため内容はモジュール側が知る。境界では unknown とする。
 export type ContextHook = (
-  key: any,
+  key: string | null,
   msg: Message,
-  data?: any
+  data?: unknown
 ) => Promise<void | boolean | HandlerResult>;
-export type TimeoutCallback = (data?: any) => void | Promise<void>;
+export type TimeoutCallback = (data?: unknown) => void | Promise<void>;
 
 export type HandlerResult = {
   reaction?: string | null;
@@ -232,7 +238,7 @@ export default class 藍 {
    * メンション/リプライのストリームイベントを処理する。
    */
   private async handleIncomingNote(
-    raw: any,
+    raw: Note,
     options: { requireMention: boolean }
   ): Promise<void> {
     if (raw.userId == this.account.id) return; // 自分は弾く
@@ -240,7 +246,7 @@ export default class 藍 {
     let data = raw;
     // Misskeyのバグで投稿が非公開扱いになることがあるため、textが無ければ取得する
     if (data.text == null) {
-      data = await this.api('notes/show', { noteId: data.id });
+      data = await this.api<Note>('notes/show', { noteId: data.id });
     }
 
     const text: string | null = data.text ?? null;
@@ -256,7 +262,7 @@ export default class 藍 {
     await this.onReceiveMessage(new Message(this, data, false));
   }
 
-  private async handleRenote(data: any): Promise<void> {
+  private async handleRenote(data: Note): Promise<void> {
     if (data.userId == this.account.id) return; // 自分は弾く
     if (data.text == null && (data.files || []).length == 0) return;
 
@@ -264,7 +270,7 @@ export default class 藍 {
     await this.reactions.react(data.id, 'love', friend);
   }
 
-  private async handleChatMessage(data: any): Promise<void> {
+  private async handleChatMessage(data: ChatMessage): Promise<void> {
     const fromUser = data.fromUser;
     if (data.fromUserId == this.account.id) return; // 自分は弾く
     await this.onReceiveMessage(new Message(this, data, true));
@@ -288,7 +294,7 @@ export default class 藍 {
     };
     setTimer();
 
-    chatStream.on('message', (message: any) => {
+    chatStream.on('message', (message: ChatStreamMessage) => {
       if (message.fromUserId == this.account.id) return; // 自分は弾く
       chatStream.send('read', { id: message.id });
       void this.onReceiveMessage(
@@ -401,7 +407,7 @@ export default class 藍 {
   }
 
   @bindThis
-  private onNotification(notification: any) {
+  private onNotification(notification: Misskey.entities.Notification) {
     switch (notification.type) {
       // リアクションされたら親愛度を少し上げる
       // TODO: リアクション取り消しをよしなにハンドリングする
@@ -428,8 +434,11 @@ export default class 藍 {
    * データベースのコレクションを取得します
    */
   @bindThis
-  public getCollection(name: string, opts?: any): loki.Collection {
-    return this.dbManager.getCollection(name, opts);
+  public getCollection<T extends object = any>(
+    name: string,
+    opts?: { indices?: (keyof T)[] }
+  ): loki.Collection<T> {
+    return this.dbManager.getCollection<T>(name, opts);
   }
 
   @bindThis
@@ -450,7 +459,7 @@ export default class 藍 {
 
     const reactionModule = this.modules.find(
       (m) => m.name === 'reaction-config'
-    ) as any;
+    ) as unknown as { isReactionEnabled(friend: Friend): boolean } | undefined;
 
     return reactionModule ? reactionModule.isReactionEnabled(friend) : true;
   }
@@ -470,7 +479,7 @@ export default class 藍 {
    * 投稿します
    */
   @bindThis
-  public async post(param: any): Promise<any> {
+  public async post(param: PostParam): Promise<Note> {
     return this.apiClient.post(param);
   }
 
@@ -478,7 +487,7 @@ export default class 藍 {
    * 指定ユーザーにチャットメッセージを送信します
    */
   @bindThis
-  public sendMessage(userId: any, param: any) {
+  public sendMessage(userId: string, param: ApiParam) {
     return this.apiClient.sendMessage(userId, param);
   }
 
@@ -486,7 +495,7 @@ export default class 藍 {
    * APIを呼び出します
    */
   @bindThis
-  public api<T>(endpoint: string, param?: any): Promise<T> {
+  public api<T>(endpoint: string, param?: ApiParam): Promise<T> {
     return this.apiClient.api<T>(endpoint, param);
   }
 
@@ -504,7 +513,7 @@ export default class 藍 {
     key: string | null,
     isChat: boolean,
     id: string,
-    data?: any
+    data?: unknown
   ) {
     this.repos.contexts.subscribe(
       isChat
@@ -540,7 +549,11 @@ export default class 藍 {
    * このタイマーは記憶に永続化されるので、途中でプロセスを再起動しても有効です。
    */
   @bindThis
-  public setTimeoutWithPersistence(module: Module, delay: number, data?: any) {
+  public setTimeoutWithPersistence(
+    module: Module,
+    delay: number,
+    data?: unknown
+  ) {
     return this.timerManager.setTimeoutWithPersistence(module, delay, data);
   }
 

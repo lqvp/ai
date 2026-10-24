@@ -1,5 +1,5 @@
 import type loki from 'lokijs';
-import type { Base64File, ChatHistoryItem } from './types.js';
+import type { Base64File, ChatHistoryItem, TimelineContext } from './types.js';
 
 /**
  * AIチャットの会話履歴1件分。
@@ -18,7 +18,7 @@ export type AiChatHist = {
   youtubeUrls?: string[];
   isChat?: boolean;
   chatUserId?: string;
-  timelineContext?: { before?: any[]; after?: any[] };
+  timelineContext?: TimelineContext;
   quotedFiles?: Base64File[];
 };
 

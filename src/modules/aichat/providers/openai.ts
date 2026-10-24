@@ -20,6 +20,16 @@ import type {
 } from '../types.js';
 import type { ProviderContext } from './types.js';
 
+/** OpenAI互換API (chat/completions) のレスポンス。利用フィールドのみ定義。 */
+type OpenaiChatCompletion = {
+  choices?: {
+    message?: {
+      content?: unknown;
+      tool_calls?: OpenaiToolCall[];
+    };
+  }[];
+};
+
 export async function genTextByOpenai(
   aiChat: AiChat,
   files: Base64File[],
@@ -147,7 +157,7 @@ export async function genTextByOpenai(
       openaiOptions.tool_choice = 'auto';
     }
 
-    let resData: any = null;
+    let resData: OpenaiChatCompletion;
     try {
       resData = await got
         .post(apiUrl, {
@@ -158,7 +168,7 @@ export async function genTextByOpenai(
           json: openaiOptions,
           responseType: 'json',
         })
-        .json();
+        .json<OpenaiChatCompletion>();
 
       ctx.log(
         `OpenAI互換APIレスポンス(round=${round}): ${JSON.stringify(resData)}`
@@ -197,7 +207,7 @@ export async function genTextByOpenai(
     const structuredToolCalls: OpenaiToolCall[] | undefined = Array.isArray(
       assistantMessage.tool_calls
     )
-      ? (assistantMessage.tool_calls as OpenaiToolCall[])
+      ? assistantMessage.tool_calls
       : undefined;
 
     let contentText: string =
@@ -264,7 +274,7 @@ export async function genTextByOpenai(
     if (isLastRound) {
       ctx.log('最終ラウンドに到達したため、ツールなしで最終応答を取得します');
       try {
-        const finalRes: any = await got
+        const finalRes = await got
           .post(apiUrl, {
             headers: {
               Authorization: `Bearer ${apiKey}`,
@@ -273,11 +283,10 @@ export async function genTextByOpenai(
             json: { model, messages },
             responseType: 'json',
           })
-          .json();
+          .json<OpenaiChatCompletion>();
+        const finalMessage = finalRes.choices?.[0]?.message;
         const finalContent =
-          typeof finalRes?.choices?.[0]?.message?.content === 'string'
-            ? finalRes.choices[0].message.content
-            : '';
+          typeof finalMessage?.content === 'string' ? finalMessage.content : '';
         responseText = finalContent;
       } catch (err: unknown) {
         if (err instanceof Error) {

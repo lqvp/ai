@@ -1,3 +1,4 @@
+import type { SKRSContext2D } from '@napi-rs/canvas';
 import { nowHour } from '@/services/clock.js';
 import { createCanvasWithBackground } from '@/utils/canvas.js';
 import { ensureFont } from '@/utils/font.js';
@@ -193,7 +194,7 @@ function getLevelStyle(level: string): LevelStyle {
 }
 
 function drawCenteredText(
-  ctx: any,
+  ctx: SKRSContext2D,
   text: string,
   x: number,
   y: number,

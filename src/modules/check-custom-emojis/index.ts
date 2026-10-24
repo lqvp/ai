@@ -1,10 +1,13 @@
 import loki from 'lokijs';
+import type { entities as MisskeyEntities } from 'misskey-js';
 import config from '@/config.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { nowHour, todayKey } from '@/services/clock.js';
+
+type EmojiDetailed = MisskeyEntities.EmojiDetailed;
 
 export default class extends Module {
   public readonly name = 'checkCustomEmojis';
@@ -103,28 +106,28 @@ export default class extends Module {
   }
 
   @bindThis
-  private async checkCumstomEmojis(lastId: any) {
+  private async checkCumstomEmojis(lastId: string | null) {
     this.log('CustomEmojis fetching...');
-    let emojisData;
+    let emojisData: EmojiDetailed[];
     if (lastId != null) {
       this.log('lastId is **not** null');
-      emojisData = await this.ai.api('admin/emoji/list', {
+      emojisData = await this.ai.api<EmojiDetailed[]>('admin/emoji/list', {
         sinceId: lastId,
         limit: 30,
       });
     } else {
       this.log('lastId is null');
-      emojisData = await this.ai.api('admin/emoji/list', {
+      emojisData = await this.ai.api<EmojiDetailed[]>('admin/emoji/list', {
         limit: 100,
       });
 
       // 最後まで取得
-      let beforeEmoji = null;
+      let beforeEmoji: EmojiDetailed | null = null;
       let afterEmoji = emojisData.length > 1 ? emojisData[0] : null;
       while (emojisData.length == 100 && beforeEmoji != afterEmoji) {
         const lastId = emojisData[emojisData.length - 1].id;
         // sinceIdを指定して再度取り直す
-        emojisData = await this.ai.api('admin/emoji/list', {
+        emojisData = await this.ai.api<EmojiDetailed[]>('admin/emoji/list', {
           limit: 100,
           sinceId: lastId,
         });
@@ -134,7 +137,7 @@ export default class extends Module {
       }
 
       // sinceIdが未指定の場合、末尾から5件程度にしておく
-      let newJson: any[] = [];
+      const newJson: EmojiDetailed[] = [];
       for (let i = emojisData.length - 5; i < emojisData.length; i++) {
         newJson.push(emojisData[i]);
       }
