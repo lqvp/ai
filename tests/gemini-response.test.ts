@@ -33,7 +33,7 @@ function aiChat(): AiChat {
 }
 
 beforeAll(async () => {
-  server = createServer((req, res) => {
+  server = createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(nextResponse));
   });
