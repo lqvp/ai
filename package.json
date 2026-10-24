@@ -12,7 +12,7 @@
     "dev": "concurrently -k -p \"[{name}]\" -n \"TSC,NODE\" -c \"cyan.bold,green.bold\" \"pnpm dev:tsc\" \"pnpm dev:nodemon\"",
     "dev:tsc": "chokidar \"src/**/*.ts\" -c \"pnpm build\"",
     "dev:nodemon": "nodemon --watch built --ext js --delay 1500ms built/index.js",
-    "build": "tspc",
+    "build": "tsc && tsc-alias",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -50,9 +50,8 @@
     "chokidar-cli": "3.0.0",
     "concurrently": "10.0.6",
     "nodemon": "3.1.14",
-    "ts-patch": "4.0.1",
-    "typescript": "6.0.3",
-    "typescript-transform-paths": "4.0.0",
+    "tsc-alias": "^1.8.16",
+    "typescript": "7.0.2",
     "vitest": "5.0.5"
   },
   "nodemonConfig": {

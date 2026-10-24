@@ -45,7 +45,7 @@ pnpm typecheck    # src と tests の型チェック
 pnpm test         # vitest
 pnpm lint         # biome check --write
 pnpm lint:ci      # CI 用（書き換えなし）
-pnpm build        # 本番ビルド（ts-patch で @/ エイリアスを解決）
+pnpm build        # 本番ビルド（tsc + tsc-alias で @/ エイリアスを解決）
 ```
 
 CI (`.github/workflows/ci.yml`) では typecheck / lint / test / build を実行します。
