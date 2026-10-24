@@ -1,6 +1,13 @@
 name: Docker Build and Push
 
 on:
+  # Docker関連ファイルの変更をPRで検証する (pushはしない)
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
   workflow_dispatch:
     inputs:
       tag:
@@ -38,9 +45,10 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
+          # PRではビルドの検証のみ行い、レジストリへはpushしない
+          push: ${{ github.event_name == 'workflow_dispatch' }}
           build-args: |
             enable_mecab=1
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag || 'latest' }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest

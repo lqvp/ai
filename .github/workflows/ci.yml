@@ -5,9 +5,18 @@ on:
     branches: [master]
   pull_request:
 
+# 同じブランチ/PRの古い実行をキャンセルしてCI時間を節約する
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
