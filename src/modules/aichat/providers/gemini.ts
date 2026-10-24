@@ -180,10 +180,8 @@ export async function genTextByGemini(
       .json<GeminiApiJson>();
     ctx.log(JSON.stringify(res_data));
     if (res_data.hasOwnProperty('candidates')) {
-      // hasOwnProperty 通過後も candidates が空配列の可能性があるため、
-      // 各ブロックの既存ガード（length チェック / hasOwnProperty）で保護される
-      const candidate = res_data.candidates![0];
-      if ((res_data.candidates?.length ?? 0) > 0) {
+      const candidate = res_data.candidates?.[0];
+      if (candidate != null) {
         // 結果を取得
         if (candidate.hasOwnProperty('content')) {
           if (candidate.content?.hasOwnProperty('parts')) {
@@ -197,7 +195,7 @@ export async function genTextByGemini(
       }
       // groundingMetadataを取得
       let groundingMetadata = '';
-      if (candidate.hasOwnProperty('groundingMetadata')) {
+      if (candidate?.hasOwnProperty('groundingMetadata')) {
         // 参考サイト情報
         if (candidate.groundingMetadata?.hasOwnProperty('groundingChunks')) {
           // 参考サイトが多すぎる場合があるので、3つに制限
@@ -236,7 +234,7 @@ export async function genTextByGemini(
 
       // URLコンテキストツールが使用されている場合の処理
       if (geminiOptions.tools?.some((tool) => tool.url_context)) {
-        if (candidate.hasOwnProperty('url_context_metadata')) {
+        if (candidate?.hasOwnProperty('url_context_metadata')) {
           if (candidate.url_context_metadata?.hasOwnProperty('url_metadata')) {
             const urlMetadata = candidate.url_context_metadata!.url_metadata;
             if (urlMetadata && urlMetadata.length > 0) {

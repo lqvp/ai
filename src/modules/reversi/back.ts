@@ -124,11 +124,11 @@ class Session {
   };
 
   // 親プロセスからデータをもらう
-  private onInit = (
-    msg: BackendMessage & { type: '_init_' } extends never
-      ? never
-      : { game: ReversiGame; form: ReversiFormItem[]; account: User }
-  ) => {
+  private onInit = (msg: {
+    game: ReversiGame;
+    form: ReversiFormItem[];
+    account: User;
+  }) => {
     this.game = msg.game;
     this.form = msg.form;
     this.account = msg.account;
