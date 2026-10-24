@@ -8,6 +8,7 @@ on:
       - '.dockerignore'
       - 'package.json'
       - 'pnpm-lock.yaml'
+      - '.github/workflows/docker-build.yml'
   workflow_dispatch:
     inputs:
       tag:
