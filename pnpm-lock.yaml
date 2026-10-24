@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '--frozen-lockfile':
+        specifier: 1.0.0
+        version: 1.0.0
       '@iarna/toml':
         specifier: 2.2.5
         version: 2.2.5
@@ -88,16 +91,19 @@ importers:
         specifier: 4.0.1
         version: 4.0.1
       typescript:
-        specifier: 5.9.3
-        version: 5.9.3
+        specifier: 6.0.3
+        version: 6.0.3
       typescript-transform-paths:
         specifier: 4.0.0
-        version: 4.0.0(typescript@5.9.3)
+        version: 4.0.0(typescript@6.0.3)
       vitest:
         specifier: 5.0.5
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.5(@types/node@24.19.2))
 
 packages:
+
+  '--frozen-lockfile@1.0.0':
+    resolution: {integrity: sha512-jzXd+L74tZk0IQKqN+bl5vWhcmAaDzYAHW+AVM2n5V0CIGLH5bp7W60PIPn8obUEqZetz5re06sVVq4VYjBAyg==}
 
   '@biomejs/biome@2.6.2':
     resolution: {integrity: sha512-JLTFAFF9vfJcWwLhwuL4ZHflLg+XfTEC4IUnAlJRX1cMRt57++Xd1Ysb9Fdmlh9YUrvyCXfPEHjjEIqKJGdPKw==}
@@ -497,6 +503,10 @@ packages:
   chalk@4.1.2:
     resolution: {integrity: sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA==}
     engines: {node: '>=10'}
+
+  chalk@5.6.2:
+    resolution: {integrity: sha512-7NzBL0rN6fMUW+f7A6Io4h40qQlG+xGmtMxfbnH/K7TAtt8JQWVQK+6g0UXKMeVJoyV5EkkNsErQ8pVD3bLHbA==}
+    engines: {node: ^12.17.0 || ^14.13 || >=16.0.0}
 
   chalk@6.0.1:
     resolution: {integrity: sha512-/Ce6KNm3vIbWdMlNna6RVIZ/ICQxnJxCicet5LBKK9ZffBkqzDw0xh9EiKSljdRtiIQ1S1z4YgcscUUGzNCWrA==}
@@ -1049,8 +1059,8 @@ packages:
     peerDependencies:
       typescript: '>=5'
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -1207,6 +1217,8 @@ packages:
     engines: {node: ^20.19.0 || ^22.12.0 || >=23}
 
 snapshots:
+
+  '--frozen-lockfile@1.0.0': {}
 
   '@biomejs/biome@2.6.2':
     optionalDependencies:
@@ -1473,6 +1485,8 @@ snapshots:
     dependencies:
       ansi-styles: 4.3.0
       supports-color: 7.2.0
+
+  chalk@5.6.2: {}
 
   chalk@6.0.1: {}
 
@@ -1957,12 +1971,12 @@ snapshots:
     dependencies:
       tagged-tag: 1.0.0
 
-  typescript-transform-paths@4.0.0(typescript@5.9.3):
+  typescript-transform-paths@4.0.0(typescript@6.0.3):
     dependencies:
       minimatch: 10.2.6
-      typescript: 5.9.3
+      typescript: 6.0.3
 
-  typescript@5.9.3: {}
+  typescript@6.0.3: {}
 
   uint8array-extras@1.6.0: {}
 
