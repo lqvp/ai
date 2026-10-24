@@ -28,7 +28,7 @@
     "fast-xml-parser": "5.11.2",
     "got": "16.1.0",
     "lokijs": "1.5.12",
-    "misskey-js": "2026.10.0",
+    "misskey-js": "2026.10.1",
     "promise-retry": "2.0.1",
     "random-seed": "0.3.0",
     "reconnecting-websocket": "4.4.0",
