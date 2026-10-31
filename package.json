@@ -35,7 +35,7 @@
     "reconnecting-websocket": "4.4.0",
     "seedrandom": "3.0.5",
     "twemoji-parser": "14.0.0",
-    "ws": "8.22.0"
+    "ws": "8.22.1"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
