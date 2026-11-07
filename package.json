@@ -48,7 +48,7 @@
     "@types/twemoji-parser": "13.1.4",
     "@types/ws": "8.18.2",
     "chokidar-cli": "3.0.0",
-    "concurrently": "10.0.6",
+    "concurrently": "10.0.7",
     "nodemon": "3.1.14",
     "tsc-alias": "^1.8.16",
     "typescript": "7.0.2",
