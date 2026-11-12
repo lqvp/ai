@@ -24,7 +24,7 @@
   "dependencies": {
     "--frozen-lockfile": "1.0.0",
     "@iarna/toml": "2.2.5",
-    "@napi-rs/canvas": "1.1.0",
+    "@napi-rs/canvas": "1.1.1",
     "chalk": "6.0.1",
     "fast-xml-parser": "5.12.0",
     "got": "16.2.0",
