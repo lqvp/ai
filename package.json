@@ -26,7 +26,7 @@
     "@iarna/toml": "2.2.5",
     "@napi-rs/canvas": "1.1.1",
     "chalk": "6.0.1",
-    "fast-xml-parser": "5.12.0",
+    "fast-xml-parser": "5.12.1",
     "got": "16.2.0",
     "lokijs": "1.5.12",
     "misskey-js": "2026.11.0",
