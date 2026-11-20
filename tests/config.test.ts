@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, resolveConfig } from '../src/config.js';
+import { ConfigError, loadConfig, resolveConfig } from '../src/config/index.js';
 
 const base = {
   host: 'https://example.com/',

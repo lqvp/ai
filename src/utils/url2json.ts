@@ -1,5 +1,5 @@
 import got from 'got';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import log from '@/utils/log.js';
 
 export default async function (url: string): Promise<unknown> {

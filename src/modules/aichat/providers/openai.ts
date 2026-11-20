@@ -1,5 +1,5 @@
 import got from 'got';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import type Message from '@/message.js';
 import { EXA_TOOL_SEARCH, JINA_TOOL_READ } from '../constants.js';
 import {

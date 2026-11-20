@@ -1,6 +1,6 @@
 import loki from 'lokijs';
 import { describe, expect, it } from 'vitest';
-import { initConfig, resolveConfig } from '../src/config.js';
+import { initConfig, resolveConfig } from '../src/config/index.js';
 import KeywordModule from '../src/modules/keyword/index.js';
 
 describe('keyword module collection', () => {

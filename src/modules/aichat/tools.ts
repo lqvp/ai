@@ -1,4 +1,4 @@
-import type { Config } from '@/config.js';
+import type { Config } from '@/config/index.js';
 import { exaSearch } from '@/utils/exa.js';
 import { jinaRead } from '@/utils/jina.js';
 import { EXA_TOOL_SEARCH, JINA_TOOL_READ } from './constants.js';

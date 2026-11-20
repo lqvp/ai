@@ -1,7 +1,7 @@
 import { HandlerResult } from '@/ai.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import { Note } from '@/misskey/note.js';
+import { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
 
 export default class extends Module {

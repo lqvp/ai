@@ -1,6 +1,6 @@
 import os from 'os';
 import type { default as AI } from '@/ai.js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import type Message from '@/message.js';
 import Module from '@/module.js';

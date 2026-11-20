@@ -1,7 +1,7 @@
 import got from 'got';
 import { createRequire } from 'module';
 import { InstallerResult } from '@/ai.js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
 import { isNewerVersion } from '@/utils/version.js';

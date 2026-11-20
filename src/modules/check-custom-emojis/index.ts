@@ -1,6 +1,6 @@
 import loki from 'lokijs';
 import type { entities as MisskeyEntities } from 'misskey-js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
 import Module from '@/module.js';

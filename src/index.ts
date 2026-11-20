@@ -6,9 +6,9 @@ import got from 'got';
 // import pkg from '../package.json' assert { type: 'json' };
 import { createRequire } from 'module';
 import promiseRetry from 'promise-retry';
-import type { User } from '@/misskey/user.js';
+import type { User } from '@/misskey/types.js';
 import 藍 from './ai.js';
-import config, { type Config, initConfig, loadConfig } from './config.js';
+import config, { type Config, initConfig, loadConfig } from './config/index.js';
 import { checkMissingConfigKeys } from './config-updater.js';
 import _log from './utils/log.js';
 

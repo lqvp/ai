@@ -7,9 +7,8 @@
  */
 
 import got from 'got';
-import config, { initConfig, loadConfig } from '@/config.js';
-import type { Note } from '@/misskey/note.js';
-import type { User } from '@/misskey/user.js';
+import config, { initConfig, loadConfig } from '@/config/index.js';
+import type { Note, User } from '@/misskey/types.js';
 import serifs from '@/serifs.js';
 import * as Reversi from './engine.js';
 import type { BackendMessage, ReversiFormItem, ReversiGame } from './types.js';

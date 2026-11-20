@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import loki from 'lokijs';
 import path from 'path';
 import type { Meta } from '@/ai.js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import type { FriendDoc } from '@/friend.js';
 import { CURRENT_SCHEMA_VERSION, migrate } from './migrations.js';

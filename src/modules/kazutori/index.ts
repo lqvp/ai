@@ -1,7 +1,7 @@
 import loki from 'lokijs';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import type { User } from '@/misskey/user.js';
+import type { User } from '@/misskey/types.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { acct } from '@/utils/acct.js';

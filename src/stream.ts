@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import _ReconnectingWebsocket from 'reconnecting-websocket';
 import WebSocket from 'ws';
 import { bindThis } from '@/decorators.js';
-import config from './config.js';
+import config from './config/index.js';
 
 const ReconnectingWebsocket =
   _ReconnectingWebsocket as unknown as (typeof _ReconnectingWebsocket)['default'];

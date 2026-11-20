@@ -1,4 +1,4 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 
 export function formatMemoryUsage(bytes: number): string {
   if (bytes === 0) return '0 B';

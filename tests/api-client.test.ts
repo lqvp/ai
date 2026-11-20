@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import APIClient from '../src/api/APIClient.js';
-import { initConfig, resolveConfig } from '../src/config.js';
+import { initConfig, resolveConfig } from '../src/config/index.js';
 
 let server: http.Server;
 let baseUrl: string;

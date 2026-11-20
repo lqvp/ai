@@ -1,4 +1,4 @@
-import type { User } from '@/misskey/user.js';
+import type { User } from '@/misskey/types.js';
 
 /**
  * reversi/match API やストリームから受け取る対局データ。
