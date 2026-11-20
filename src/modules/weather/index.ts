@@ -91,7 +91,14 @@ export default class WeatherModule extends Module {
     const dateLabel = normalizeDateLabel(match[1]?.trim());
     const place = match[2]?.trim() || defaultWeatherPlace();
 
-    const location = await this.api.searchLocation(place);
+    let location;
+    try {
+      location = await this.api.searchLocation(place);
+    } catch (e) {
+      this.log(`Failed to search location ${place}: ${String(e)}`);
+      await msg.reply(serifs.weather.fetchError);
+      return { reaction: '❌' };
+    }
     if (!location) {
       await msg.reply(serifs.weather.notFound(place));
       return { reaction: '❌' };

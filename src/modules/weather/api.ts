@@ -34,27 +34,23 @@ export class WeatherApi {
   /**
    * 地名を検索して座標を解決する。
    *
-   * @returns 見つからない場合、または取得に失敗した場合に null
+   * @returns 見つからなかった場合に null
+   * @throws リクエストが失敗した場合
    */
   public async searchLocation(query: string): Promise<GeocodingResult | null> {
-    try {
-      const data = await getJson<{ results?: GeocodingResult[] }>(
-        OPEN_METEO_GEOCODING_URL,
-        {
-          searchParams: {
-            name: query,
-            count: '1',
-            language: 'ja',
-            format: 'json',
-          },
-          timeoutMs: REQUEST_TIMEOUT_MS,
-        }
-      );
-      return data.results?.[0] ?? null;
-    } catch (e) {
-      this.log(`Error searching location ${query}: ${String(e)}`);
-      return null;
-    }
+    const data = await getJson<{ results?: GeocodingResult[] }>(
+      OPEN_METEO_GEOCODING_URL,
+      {
+        searchParams: {
+          name: query,
+          count: '1',
+          language: 'ja',
+          format: 'json',
+        },
+        timeoutMs: REQUEST_TIMEOUT_MS,
+      }
+    );
+    return data.results?.[0] ?? null;
   }
 
   /**
@@ -116,8 +112,14 @@ export class WeatherApi {
   /**
    * 時間ごとの降水確率を対象日の 6 時間ごとの区間へ集約する。
    *
-   * `hourly.time` は対象地点のローカル時刻（ISO 8601 の拡張なし形式）で
-   * 返るため、日付と時刻の文字列をそのまま区間判定に使う。
+   * Open-Meteo の `precipitation_probability` は時刻 T において
+   *「T-1 時〜T 時の1時間」の降水確率を表す。`hourly.time` は対象地点の
+   * ローカル時刻で返るため、各サンプルはその1時間前の時間帯に
+   * 割り当てる（00:00 のサンプルは前日の 18-24 時に属するため除外）。
+   *
+   * また、各区間の値は時間ごとの確率の平均ではなく最大値を採る。
+   * 平均では「6時間のどこかで降水がある確率」を表せないため、
+   * 傘の要否を判断する指標として最悪値を示す。
    */
   private toRainChance(
     hourly: ForecastResponse['hourly'],
@@ -130,27 +132,27 @@ export class WeatherApi {
       const time = hourly.time[i];
       if (!time.startsWith(date)) continue;
 
+      const hour = Number.parseInt(time.slice(11, 13), 10);
+      if (hour === 0 || Number.isNaN(hour)) continue;
+      if (hour < 1 || hour > 24) continue;
+
       const probability = hourly.precipitation_probability[i];
       if (probability === null || probability === undefined) continue;
 
-      const hour = Number.parseInt(time.slice(11, 13), 10);
-      if (Number.isNaN(hour)) continue;
-      buckets[Math.floor(hour / 6)].push(probability);
+      buckets[Math.floor((hour - 1) / 6)].push(probability);
     }
 
     // 対象日のデータが1つもない場合は降水確率を表示しない
     if (buckets.every((bucket) => bucket.length === 0)) return null;
 
-    const average = (values: number[]): number =>
-      values.length === 0
-        ? 0
-        : Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
+    const max = (values: number[]): number =>
+      values.length === 0 ? 0 : Math.max(...values);
 
     return {
-      T00_06: average(buckets[0]),
-      T06_12: average(buckets[1]),
-      T12_18: average(buckets[2]),
-      T18_24: average(buckets[3]),
+      T00_06: max(buckets[0]),
+      T06_12: max(buckets[1]),
+      T12_18: max(buckets[2]),
+      T18_24: max(buckets[3]),
     };
   }
 }
