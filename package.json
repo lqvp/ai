@@ -22,7 +22,6 @@
     "preinstall": "npx only-allow pnpm"
   },
   "dependencies": {
-    "--frozen-lockfile": "1.0.0",
     "@iarna/toml": "2.2.5",
     "@napi-rs/canvas": "1.1.1",
     "chalk": "6.0.1",

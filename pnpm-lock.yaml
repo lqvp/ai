@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '--frozen-lockfile':
-        specifier: 1.0.0
-        version: 1.0.0
       '@iarna/toml':
         specifier: 2.2.5
         version: 2.2.5
@@ -98,9 +95,6 @@ importers:
         version: 5.1.1(@types/node@24.19.2)(vite@8.3.5(@types/node@24.19.2))
 
 packages:
-
-  '--frozen-lockfile@1.0.0':
-    resolution: {integrity: sha512-jzXd+L74tZk0IQKqN+bl5vWhcmAaDzYAHW+AVM2n5V0CIGLH5bp7W60PIPn8obUEqZetz5re06sVVq4VYjBAyg==}
 
   '@biomejs/biome@2.6.8':
     resolution: {integrity: sha512-kqZUFvX6/aYQOmzfRN5ANcfNS9wLH4aHLWWP/dQKyhRZVoA6rdWszA7DGugFcxPbMiznUyVYyukVl+ExZN4PQA==}
@@ -1329,8 +1323,6 @@ packages:
     engines: {node: ^20.19.0 || ^22.12.0 || >=23}
 
 snapshots:
-
-  '--frozen-lockfile@1.0.0': {}
 
   '@biomejs/biome@2.6.8':
     optionalDependencies:
