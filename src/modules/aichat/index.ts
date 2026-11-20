@@ -14,7 +14,7 @@ import {
 } from './constants.js';
 import { DiaryRepository } from './diary-repository.js';
 import {
-  createOpenaiLlmCall,
+  createAuxLlmCall,
   extractEpisodes,
   resolveContradictions,
 } from './episode-extractor.js';
@@ -57,11 +57,14 @@ export default class extends Module {
 
   private chatHandler!: ChatHandler;
 
-  /** この生成ラウンドでLLMツールがリアクションを付けたノートID */
-  private toolReactedNoteIds = new Set<string>();
+  /** この生成ラウンドでLLMツールがリアクションを付けたノートIDと記録時刻 */
+  private toolReactedNoteIds = new Map<string, number>();
 
   /** LLMが [[REACTION: ...]] マーカーで選んだリアクション（noteId → 絵文字 or null） */
-  private personalizedReactionChoices = new Map<string, string | null>();
+  private personalizedReactionChoices = new Map<
+    string,
+    { reaction: string | null; ts: number }
+  >();
 
   @bindThis
   public install() {
@@ -114,7 +117,7 @@ export default class extends Module {
               endpoint === 'notes/reactions/create' &&
               typeof param?.noteId === 'string'
             ) {
-              this.toolReactedNoteIds.add(param.noteId);
+              this.toolReactedNoteIds.set(param.noteId, Date.now());
             }
             return result;
           },
@@ -149,7 +152,10 @@ export default class extends Module {
         if (config.aichat?.moodEngine?.reactionPersonalization === false) {
           return;
         }
-        this.personalizedReactionChoices.set(noteId, reaction);
+        this.personalizedReactionChoices.set(noteId, {
+          reaction,
+          ts: Date.now(),
+        });
       },
     });
 
@@ -278,9 +284,16 @@ export default class extends Module {
     files: Base64File[],
     msg?: Message
   ): Promise<string | import('./types.js').ApiErrorResponse | null> {
-    // ツールが付けたリアクションの記録は生成ラウンドごとにリセットする
-    this.toolReactedNoteIds.clear();
-    this.personalizedReactionChoices.clear();
+    // 並行生成で共有セットを一括クリアすると先着側の記録が消えるため、
+    // 期限切れエントリ（1時間）のみを除去する方式にする
+    const now = Date.now();
+    for (const [id, ts] of this.toolReactedNoteIds) {
+      if (now - ts > 3_600_000) this.toolReactedNoteIds.delete(id);
+    }
+    for (const [id, entry] of this.personalizedReactionChoices) {
+      if (now - entry.ts > 3_600_000)
+        this.personalizedReactionChoices.delete(id);
+    }
     return this.generator.genText(this.getProvider(), aiChat, files, msg);
   }
 
@@ -302,7 +315,7 @@ export default class extends Module {
     const choice = this.personalizedReactionChoices.get(noteId);
     if (choice !== undefined) {
       // null は LLM が「リアクションしない」と選んだ場合
-      return choice;
+      return choice.reaction;
     }
     return 'like';
   }
@@ -658,7 +671,7 @@ export default class extends Module {
 
     const tlDiaryConfig = config.aichat?.tlDiary;
     try {
-      const api = createOpenaiLlmCall((m) => this.log(m));
+      const api = createAuxLlmCall((m) => this.log(m));
       // 気分エンジン有効時のみ現在の気分を文脈として渡す（日記のトーン反映）
       const moodState =
         config.aichat?.moodEngine?.enabled === false
@@ -669,6 +682,7 @@ export default class extends Module {
           api: this.ai.api,
           selfUserId: this.ai.account.id,
           repository: this.diary,
+          maxEntries: tlDiaryConfig?.maxEntries,
           log: (m) => this.log(m),
         },
         api,
@@ -697,7 +711,7 @@ export default class extends Module {
     if (config.aichat?.proactiveFollowup?.enabled === false) return;
 
     try {
-      const api = createOpenaiLlmCall((m) => this.log(m));
+      const api = createAuxLlmCall((m) => this.log(m));
       // 全ユーザーの有効な記憶（重要度3以上・アーカイブ/置換済み除外）を渡す
       const memories = this.memoryCollection
         .find({ importance: { $gte: 3 } })
@@ -803,7 +817,7 @@ export default class extends Module {
 
     void (async () => {
       try {
-        const api = createOpenaiLlmCall((m) => this.log(m));
+        const api = createAuxLlmCall((m) => this.log(m));
         const current = this.loadMoodState();
         const next = await updateMood(
           current,
@@ -838,7 +852,7 @@ export default class extends Module {
         .map((note) => note.text ?? '')
         .join('\n');
 
-      const api = createOpenaiLlmCall((m) => this.log(m));
+      const api = createAuxLlmCall((m) => this.log(m));
       const current = this.loadMoodState();
       const next = await updateMood(
         current,
@@ -869,7 +883,7 @@ export default class extends Module {
 
     void (async () => {
       try {
-        const api = createOpenaiLlmCall((m) => this.log(m));
+        const api = createAuxLlmCall((m) => this.log(m));
         const log = (m: string) => this.log(m);
         const newMemories = await extractEpisodes(history, userId, api, log);
         if (newMemories.length === 0) return;

@@ -23,6 +23,8 @@ const REACTION_MARKER_RE = /\[\[REACTION:\s*([^\]]*?)\s*\]\]\s*$/;
 export type ReactionMarkerResult = {
   /** 選択された絵文字。none またはパース失敗時は null */
   reaction: string | null;
+  /** マーカーが実際に存在したか。欠落時はリアクション選択として扱わない */
+  markerFound: boolean;
   /** マーカーを除去した投稿用テキスト */
   cleaned: string;
 };
@@ -36,7 +38,7 @@ export type ReactionMarkerResult = {
 export function stripReactionMarker(text: string): ReactionMarkerResult {
   const match = text.match(REACTION_MARKER_RE);
   if (match == null) {
-    return { reaction: null, cleaned: text };
+    return { reaction: null, markerFound: false, cleaned: text };
   }
 
   const value = match[1]?.trim() ?? '';
@@ -44,6 +46,7 @@ export function stripReactionMarker(text: string): ReactionMarkerResult {
 
   return {
     reaction,
+    markerFound: true,
     cleaned: text.slice(0, match.index).trimEnd(),
   };
 }

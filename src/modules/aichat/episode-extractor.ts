@@ -1,4 +1,6 @@
 import got from 'got';
+import config from '@/config/index.js';
+import { getGeminiApiUrl } from './constants.js';
 import type { EpisodeMemory, NewEpisodeMemory } from './episode-memory.js';
 import { resolveOpenaiSettings } from './openai-settings.js';
 
@@ -276,4 +278,55 @@ export function createOpenaiLlmCall(log: MemoryLog = noopLog): LlmCallFn {
     }
     return content;
   };
+}
+
+/**
+ * Gemini プロバイダー選択時の LlmCallFn。
+ * gemini.generateContent API に system+user の2パートだけを送る最小構成で、
+ * 抽出用途（短い JSON 応答）に限定する。
+ */
+export function createGeminiLlmCall(log: MemoryLog = noopLog): LlmCallFn {
+  return async (system: string, user: string): Promise<string> => {
+    const geminiConfig = config.gemini;
+    if (geminiConfig?.apiKey == null || geminiConfig.model == null) {
+      log('記憶系LLM呼び出し: Gemini設定が不完全です');
+      return '';
+    }
+    const url = getGeminiApiUrl();
+    const res = await got
+      .post(url, {
+        headers: { 'x-goog-api-key': geminiConfig.apiKey },
+        json: {
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: 'user', parts: [{ text: user }] }],
+        },
+        responseType: 'json',
+        timeout: { request: 60_000 },
+      })
+      .json<{
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+      }>();
+
+    const parts = res.candidates?.[0]?.content?.parts ?? [];
+    const text = parts
+      .map((p) => p.text ?? '')
+      .join('')
+      .trim();
+    if (text.length === 0) {
+      log('記憶系LLM呼び出し: Gemini応答本文が空でした');
+      return '';
+    }
+    return text;
+  };
+}
+
+/**
+ * 選択中のプロバイダーに応じた LlmCallFn を返す。
+ * 記憶抽出・気分・日記・フォローアップの補助LLM呼び出しは
+ * メイン会話のプロバイダー設定と同じものを使う。
+ */
+export function createAuxLlmCall(log: MemoryLog = noopLog): LlmCallFn {
+  return config.aiProvider?.provider === 'gemini'
+    ? createGeminiLlmCall(log)
+    : createOpenaiLlmCall(log);
 }

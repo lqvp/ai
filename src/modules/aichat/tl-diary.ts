@@ -32,6 +32,8 @@ export type TlDiaryDeps = {
   /** 自分（ボット）のアカウントID。自分のノートを除外するために使う。 */
   selfUserId: string;
   repository: DiaryRepository;
+  /** 保持する日記の最大件数（設定値。未指定ならリポジトリ既定） */
+  maxEntries?: number;
   log?: DiaryLog;
 };
 
@@ -119,11 +121,16 @@ export async function generateTlDiary(
     return null;
   }
 
-  const entry = deps.repository.insert({
-    createdAt: Date.now(),
-    content,
-    moodAtWrite: moodState != null ? moodState.mood : null,
-  });
+  const entry = deps.repository.insert(
+    {
+      createdAt: Date.now(),
+      content,
+      moodAtWrite: moodState != null ? moodState.mood : null,
+    },
+    // 設定の maxEntries を指定しないとリポジトリ既定値(20)が使われ
+    // 設定変更が反映されないため明示的に渡す
+    { maxEntries: deps.maxEntries }
+  );
   log(`TL日記を保存しました (${content.length}字)`);
   return entry;
 }

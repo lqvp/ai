@@ -181,9 +181,13 @@ export class ChatHandler {
     // パーソナライズドリアクション: 応答末尾の [[REACTION: ...]] を
     // 投稿前に剥がし、リアクション選択としてコアへ渡す。
     // 無効時もマーカーが紛れ込んだ場合に備えて常に剥がす。
-    const { reaction, cleaned } = stripReactionMarker(responseText);
+    const { reaction, markerFound, cleaned } =
+      stripReactionMarker(responseText);
     responseText = cleaned;
-    this.deps.registerReactionChoice?.(msg.id, reaction);
+    // マーカーが無い応答は「未選択」として扱い、既定の like へフォールバックさせる
+    if (markerFound) {
+      this.deps.registerReactionChoice?.(msg.id, reaction);
+    }
 
     // friendName が含まれている場合、plain を適用したものに置換
     if (friendName) {
