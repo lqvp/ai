@@ -87,5 +87,8 @@ ${forecast.dateLabel}の天気は「${mfm.bold(forecast.weather.description)}」
 
   body += CLOSING_MESSAGES[Math.floor(Math.random() * CLOSING_MESSAGES.length)];
 
+  // Open-Meteo のライセンスにより出典のクレジットが求められる
+  body += `\n[Weather data by Open-Meteo.com](https://open-meteo.com/)`;
+
   return body;
 }

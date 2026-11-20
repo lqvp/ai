@@ -106,7 +106,7 @@ function toForecasts(data: ForecastResponse): WeatherForecast[] {
   const daily = data.daily;
   if (!daily) return [];
 
-  return daily.time.map((date, index) => ({
+  return daily.time.slice(0, FORECAST_DAYS).map((date, index) => ({
     date,
     dateLabel: DATE_LABELS[index] ?? `${index}日後`,
     weather: WMO_CODE_MAP[daily.weathercode[index]] ?? UNKNOWN_WMO_CODE,
@@ -125,25 +125,37 @@ export class WeatherApi {
   /**
    * 地名を検索して座標を解決する。
    *
+   * Open-Meteo の地名検索は3文字未満の地名で結果を返さないため、
+   * 短い地名には自治体の接尾辞を補って再検索する。
+   *
    * @returns 見つからなかった場合に null
    * @throws リクエストが失敗した場合
    */
   public async searchLocation(query: string): Promise<GeocodingResult | null> {
-    const data = await getJson<{ results?: GeocodingResult[] }>(
-      OPEN_METEO_GEOCODING_URL,
-      {
-        searchParams: {
-          name: query,
-          count: '1',
-          language: 'ja',
-          // 旧実装（JMA の国内エリア）に合わせて日本国内の地名に絞る
-          countrycode: 'JP',
-          format: 'json',
-        },
-        timeoutMs: REQUEST_TIMEOUT_MS,
-      }
-    );
-    return data.results?.[0] ?? null;
+    const candidates =
+      query.length >= 3
+        ? [query]
+        : [`${query}都`, `${query}府`, `${query}県`, `${query}市`];
+
+    for (const name of candidates) {
+      const data = await getJson<{ results?: GeocodingResult[] }>(
+        OPEN_METEO_GEOCODING_URL,
+        {
+          searchParams: {
+            name,
+            count: '1',
+            language: 'ja',
+            // 旧実装（JMA の国内エリア）に合わせて日本国内の地名に絞る
+            countryCode: 'JP',
+            format: 'json',
+          },
+          timeoutMs: REQUEST_TIMEOUT_MS,
+        }
+      );
+      const result = data.results?.[0];
+      if (result) return result;
+    }
+    return null;
   }
 
   /**
@@ -163,7 +175,9 @@ export class WeatherApi {
           daily: 'weathercode,temperature_2m_max,temperature_2m_min',
           hourly: 'precipitation_probability',
           timezone: 'auto',
-          forecast_days: String(FORECAST_DAYS),
+          // 最終日の翌日 00:00 のサンプル（最終日の 23-24 時台）を
+          // 含めるため、表示対象より1日多く取得する
+          forecast_days: String(FORECAST_DAYS + 1),
         },
         timeoutMs: REQUEST_TIMEOUT_MS,
       });
