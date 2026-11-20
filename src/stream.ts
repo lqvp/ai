@@ -57,7 +57,7 @@ export default class Stream extends EventEmitter {
     };
 
     this.stream = new ReconnectingWebsocket(
-      `${config.wsUrl}/streaming?i=${config.i}`,
+      `${config.wsUrl}/streaming?i=${encodeURIComponent(config.i)}`,
       [],
       wsOptions
     );
@@ -230,6 +230,15 @@ export default class Stream extends EventEmitter {
       }
     }
     this.sharedConnections = [];
+
+    for (const connection of this.nonSharedConnections) {
+      try {
+        connection.dispose();
+      } catch {
+        // 切断済みでも停止処理は続行する
+      }
+    }
+    this.nonSharedConnections = [];
 
     try {
       this.stream.close();

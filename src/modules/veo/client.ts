@@ -29,6 +29,36 @@ const REQUEST_TIMEOUT_MS = 60_000;
 /** 動画1本あたりの上限（メモリ圧迫を防ぐ） */
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
+/**
+ * 動画ダウンロードを許可するホストの許可リスト。
+ * API レスポンスの URI は外部入力のため、検証前に任意の URL への取得を防ぐ。
+ */
+const ALLOWED_VIDEO_HOSTS: ReadonlySet<string> = new Set([
+  'generativelanguage.googleapis.com',
+]);
+
+/** 許可リストのサフィックス（*.googleapis.com / *.google.com 系）。 */
+const ALLOWED_VIDEO_HOST_SUFFIXES: readonly string[] = [
+  '.googleapis.com',
+  '.google.com',
+];
+
+/** API が返した動画 URI が取得先として許可されるか検証する。 */
+function isAllowedVideoUri(uri: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  return (
+    ALLOWED_VIDEO_HOSTS.has(host) ||
+    ALLOWED_VIDEO_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
+  );
+}
+
 export type VeoClientOptions = {
   apiKey: string | undefined;
   log: (message: string) => void;
@@ -85,6 +115,7 @@ export async function generateVideo(
       const statusResponse = await got
         .get(`${BASE_URL}/${operationName}`, {
           headers: { 'x-goog-api-key': apiKey },
+          timeout: { request: REQUEST_TIMEOUT_MS },
         })
         .json<VeoStatusResponse>();
 
@@ -126,10 +157,30 @@ export async function downloadVideo(
   log: (message: string) => void = () => {}
 ): Promise<Buffer | null> {
   try {
+    if (!isAllowedVideoUri(videoUri)) {
+      log(`Refusing to download video from disallowed host: ${videoUri}`);
+      return null;
+    }
     const response = await got(videoUri, {
       headers: apiKey ? { 'x-goog-api-key': apiKey } : {},
       responseType: 'buffer',
       timeout: { request: REQUEST_TIMEOUT_MS },
+      // リダイレクト自動追従で許可外ホストへ接続 (APIキー送信) しないよう、
+      // リダイレクト先にも許可リスト検査を適用する
+      hooks: {
+        beforeRedirect: [
+          (redirectOptions) => {
+            const redirectUrl = redirectOptions.url
+              ? String(redirectOptions.url)
+              : '';
+            if (!isAllowedVideoUri(redirectUrl)) {
+              throw new Error(
+                `Refusing to follow redirect to disallowed host: ${redirectUrl}`
+              );
+            }
+          },
+        ],
+      },
     });
 
     const declaredLength = Number(response.headers['content-length'] ?? 0);

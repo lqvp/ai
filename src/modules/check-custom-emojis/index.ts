@@ -158,6 +158,10 @@ export default class extends Module {
     ) {
       return false;
     } else {
+      if (msg.user.username !== config.master || msg.user.host != null) {
+        this.log('Check CustomEmojis requested but not master');
+        return true;
+      }
       this.log('Check CustomEmojis requested');
     }
 

@@ -171,7 +171,7 @@ export async function genTextByOpenai(
         .json<OpenaiChatCompletion>();
 
       ctx.log(
-        `OpenAI互換APIレスポンス(round=${round}): ${JSON.stringify(resData)}`
+        `OpenAI互換APIレスポンス(round=${round}): ${JSON.stringify(resData).slice(0, 1000)}`
       );
     } catch (err: unknown) {
       ctx.log('Error By Call OpenAI Compatible API');
@@ -280,7 +280,13 @@ export async function genTextByOpenai(
               Authorization: `Bearer ${apiKey}`,
               'Content-Type': 'application/json',
             },
-            json: { model, messages },
+            json: {
+              model,
+              messages,
+              ...(includeAnyTool
+                ? { tools, tool_choice: 'none' as const }
+                : {}),
+            },
             responseType: 'json',
           })
           .json<OpenaiChatCompletion>();
