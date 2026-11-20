@@ -62,6 +62,21 @@ describe('urlToBase64', () => {
     expect(() => assertNotLocalAddress('http://169.254.169.254/file')).toThrow(
       /local address/
     );
+    expect(() => assertNotLocalAddress('http://localhost./file')).toThrow(
+      /local address/
+    );
+    expect(() => assertNotLocalAddress('http://127.0.0.1./file')).toThrow(
+      /local address/
+    );
+    expect(() =>
+      assertNotLocalAddress('http://[::ffff:127.0.0.1]/file')
+    ).toThrow(/local address/);
+    expect(() => assertNotLocalAddress('http://[::ffff:7f00:1]/file')).toThrow(
+      /local address/
+    );
+    expect(() => assertNotLocalAddress('http://[fe80::1]/file')).toThrow(
+      /local address/
+    );
   });
 
   it('allows public and RFC1918 addresses', () => {

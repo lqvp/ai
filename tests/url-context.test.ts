@@ -37,6 +37,11 @@ describe('isPrivateUrl', () => {
     expect(isPrivateUrl('http://metadata.google.internal/')).toBe(true);
   });
 
+  it('rejects metadata endpoints with trailing dot', () => {
+    expect(isPrivateUrl('http://metadata.google.internal./')).toBe(true);
+    expect(isPrivateUrl('http://sub.metadata.google.internal./')).toBe(true);
+  });
+
   it('rejects IPv6 link-local and unique local addresses', () => {
     expect(isPrivateUrl('http://[fe80::1]/')).toBe(true);
     expect(isPrivateUrl('http://[fd12::1]/')).toBe(true);

@@ -244,10 +244,16 @@ function validateAndResolve(input: RawConfig): Config {
     }
   }
 
-  const gemini = isObject(raw.gemini) ? { ...raw.gemini } : undefined;
+  const gemini = isObject(raw.gemini)
+    ? (copyForNormalization(raw.gemini) as Record<string, unknown>)
+    : undefined;
   if (gemini) {
     if (gemini.autoNote != null) {
-      const autoNote = gemini.autoNote as Record<string, unknown>;
+      const autoNote = copyForNormalization(gemini.autoNote) as Record<
+        string,
+        unknown
+      >;
+      gemini.autoNote = autoNote;
       if (autoNote.probability !== undefined) {
         const p = Number(autoNote.probability);
         if (!Number.isFinite(p) || p < 0 || p > 1) {
@@ -275,7 +281,11 @@ function validateAndResolve(input: RawConfig): Config {
     }
 
     if (gemini.randomTalk != null) {
-      const randomTalk = gemini.randomTalk as Record<string, unknown>;
+      const randomTalk = copyForNormalization(gemini.randomTalk) as Record<
+        string,
+        unknown
+      >;
+      gemini.randomTalk = randomTalk;
       if (randomTalk.probability !== undefined) {
         const p = Number(randomTalk.probability);
         if (!Number.isFinite(p) || p < 0 || p > 1) {

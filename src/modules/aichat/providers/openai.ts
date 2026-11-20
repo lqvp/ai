@@ -284,7 +284,7 @@ export async function genTextByOpenai(
               model,
               messages,
               ...(includeAnyTool
-                ? { tools, tool_choice: 'auto' as const }
+                ? { tools, tool_choice: 'none' as const }
                 : {}),
             },
             responseType: 'json',

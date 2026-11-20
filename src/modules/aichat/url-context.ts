@@ -22,7 +22,9 @@ const YOUTUBE_HOSTS = new Set([
 
 function hostnameOf(url: string): string | null {
   try {
-    return new URL(url).hostname.toLowerCase();
+    // 末尾ドット付きFQDN (例: "metadata.google.internal.") も
+    // 同一ホストとして扱えるよう、DNS的に等価な末尾ドットを除去する
+    return new URL(url).hostname.toLowerCase().replace(/\.+$/, '');
   } catch {
     return null;
   }

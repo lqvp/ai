@@ -165,6 +165,22 @@ export async function downloadVideo(
       headers: apiKey ? { 'x-goog-api-key': apiKey } : {},
       responseType: 'buffer',
       timeout: { request: REQUEST_TIMEOUT_MS },
+      // リダイレクト自動追従で許可外ホストへ接続 (APIキー送信) しないよう、
+      // リダイレクト先にも許可リスト検査を適用する
+      hooks: {
+        beforeRedirect: [
+          (redirectOptions) => {
+            const redirectUrl = redirectOptions.url
+              ? String(redirectOptions.url)
+              : '';
+            if (!isAllowedVideoUri(redirectUrl)) {
+              throw new Error(
+                `Refusing to follow redirect to disallowed host: ${redirectUrl}`
+              );
+            }
+          },
+        ],
+      },
     });
 
     const declaredLength = Number(response.headers['content-length'] ?? 0);
