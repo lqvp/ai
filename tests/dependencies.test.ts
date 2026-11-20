@@ -81,7 +81,10 @@ describe('dependencies', () => {
 
   it('keeps the lockfile importer in sync with package.json', () => {
     const lockfile = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
-    const importer = lockfile.split('\nimporters:')[1]?.split('\npackages:')[0];
+    // pnpm 12 はロックファイルを複数の YAML ドキュメントで書く。
+    // 依存の importers があるのは従来形式と同じ最後のドキュメント。
+    const lastDoc = lockfile.split(/\n---\n/).pop() ?? '';
+    const importer = lastDoc.split('\nimporters:')[1]?.split('\npackages:')[0];
 
     expect(importer).toBeDefined();
 
