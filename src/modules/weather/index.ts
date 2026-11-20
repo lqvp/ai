@@ -5,8 +5,7 @@ import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { msUntilNextHour } from '@/services/clock.js';
 import { WeatherApi } from './api.js';
-import { formatWeatherToMfm, weatherEmoji } from './format.js';
-import type { RawForecast, WeatherInfo } from './types.js';
+import { formatWeatherToMfm } from './format.js';
 
 const DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -18,34 +17,24 @@ function defaultAutoNoteHour(): number {
   return config.weatherAutoNoteHour ?? 7;
 }
 
+function normalizeDateLabel(dayInput?: string): string {
+  if (!dayInput) return '今日';
+  if (['明日', 'あした'].includes(dayInput)) return '明日';
+  if (['明後日', 'あさって'].includes(dayInput)) return '明後日';
+  return '今日';
+}
+
 export default class WeatherModule extends Module {
   public readonly name = 'weather';
   private readonly api = new WeatherApi((message) => this.log(message));
 
   @bindThis
   public install() {
-    void this.api.warmup();
     this.scheduleWeatherAutoNote();
 
     return {
       mentionHook: this.mentionHook,
     };
-  }
-
-  private autoNoteSerif(telop: string): string {
-    const serifMap: Record<string, string> = {
-      雷: serifs.weather.autoNote.thunder,
-      雪: serifs.weather.autoNote.snowy,
-      雨: serifs.weather.autoNote.rainy,
-      曇: serifs.weather.autoNote.cloudy,
-      晴: serifs.weather.autoNote.sunny,
-    };
-    for (const keyword in serifMap) {
-      if (telop.includes(keyword)) {
-        return serifMap[keyword];
-      }
-    }
-    return serifs.weather.autoNote.other;
   }
 
   private scheduleWeatherAutoNote(): void {
@@ -63,38 +52,28 @@ export default class WeatherModule extends Module {
 
   private async postWeatherNoteForAuto(place: string): Promise<void> {
     try {
-      const areaId = await this.api.getAreaId(place);
-      if (!areaId) {
-        this.log(`Area ID not found for auto-note: ${place}`);
+      const location = await this.api.searchLocation(place);
+      if (!location) {
+        this.log(`Location not found for auto-note: ${place}`);
         return;
       }
 
-      const weatherData = await this.api.fetchWeatherData(areaId);
-      if (
-        !weatherData ||
-        !weatherData.forecasts ||
-        weatherData.forecasts.length === 0
-      ) {
+      const forecasts = await this.api.fetchDailyForecasts(
+        location.latitude,
+        location.longitude
+      );
+      if (forecasts.length === 0) {
         this.log(`No forecast data for auto-note: ${place}`);
         return;
       }
 
-      const todayForecast = weatherData.forecasts[0];
-      const weatherInfo: WeatherInfo = {
-        place: this.api.resolvePlaceName(weatherData),
-        dateLabel: todayForecast.dateLabel,
-        telop: todayForecast.telop,
-        tempMin: todayForecast.temperature?.min?.celsius ?? null,
-        tempMax: todayForecast.temperature?.max?.celsius ?? null,
-        rain: todayForecast.chanceOfRain ?? null,
-        greeting: this.autoNoteSerif(todayForecast.telop),
-      };
-
-      if (weatherInfo.tempMin == null && weatherInfo.tempMax == null) {
-        weatherInfo.additionalMessage = serifs.weather.noTemp;
-      }
-
-      await this.ai.post({ text: formatWeatherToMfm(weatherInfo) });
+      const today = forecasts[0];
+      const text = formatWeatherToMfm(
+        { place: location.name, forecasts },
+        today,
+        serifs.weather.autoNote[today.weather.serifKey]
+      );
+      await this.ai.post({ text });
     } catch (e) {
       this.log(`Error in postWeatherNoteForAuto: ${String(e)}`);
     }
@@ -109,60 +88,31 @@ export default class WeatherModule extends Module {
     );
     if (!match) return false;
 
-    const dayInput = match[1]?.trim();
-    const placeInput = match[2]?.trim();
+    const dateLabel = normalizeDateLabel(match[1]?.trim());
+    const place = match[2]?.trim() || defaultWeatherPlace();
 
-    const dateLabel = this.normalizeDateLabel(dayInput);
-    const place = placeInput || defaultWeatherPlace();
-
-    let areaId: string | undefined;
-    try {
-      areaId = await this.api.getAreaId(place);
-    } catch (e) {
-      this.log(`Failed to resolve area: ${String(e)}`);
-      await msg.reply(serifs.weather.fetchError);
-      return { reaction: '❌' };
-    }
-    if (!areaId) {
+    const location = await this.api.searchLocation(place);
+    if (!location) {
       await msg.reply(serifs.weather.notFound(place));
       return { reaction: '❌' };
     }
 
-    const weatherData = await this.api.fetchWeatherData(areaId);
-    if (!weatherData) {
+    const forecasts = await this.api.fetchDailyForecasts(
+      location.latitude,
+      location.longitude
+    );
+    const forecast = forecasts.find((f) => f.dateLabel === dateLabel);
+    if (forecasts.length === 0 || !forecast) {
       await msg.reply(serifs.weather.fetchError);
       return { reaction: '❌' };
     }
 
-    const forecast = weatherData.forecasts.find(
-      (f: RawForecast) => f.dateLabel === dateLabel
+    const text = formatWeatherToMfm(
+      { place: location.name, forecasts },
+      forecast,
+      ''
     );
-    if (!forecast) {
-      await msg.reply(`${dateLabel}の天気データが見つかりませんでした。`);
-      return { reaction: '❌' };
-    }
-
-    const weatherInfo: WeatherInfo = {
-      place: this.api.resolvePlaceName(weatherData),
-      dateLabel: forecast.dateLabel,
-      telop: forecast.telop,
-      tempMin: forecast.temperature?.min?.celsius ?? null,
-      tempMax: forecast.temperature?.max?.celsius ?? null,
-      rain: forecast.chanceOfRain ?? null,
-    };
-
-    if (weatherInfo.tempMin == null && weatherInfo.tempMax == null) {
-      weatherInfo.additionalMessage = serifs.weather.noTemp;
-    }
-
-    await msg.reply(formatWeatherToMfm(weatherInfo));
-    return { reaction: weatherEmoji(forecast.telop) };
-  }
-
-  private normalizeDateLabel(dayInput?: string): string {
-    if (!dayInput) return '今日';
-    if (['明日', 'あした'].includes(dayInput)) return '明日';
-    if (['明後日', 'あさって'].includes(dayInput)) return '明後日';
-    return '今日';
+    await msg.reply(text);
+    return { reaction: forecast.weather.emoji };
   }
 }

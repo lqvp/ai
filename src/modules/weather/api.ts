@@ -1,218 +1,156 @@
-import { XMLParser } from 'fast-xml-parser';
-import { getJson, getText } from '@/http/client.js';
-import type { RawWeatherData } from './types.js';
+import { getJson } from '@/http/client.js';
+import type { GeocodingResult, RainChance, WeatherForecast } from './types.js';
+import { UNKNOWN_WMO_CODE, WMO_CODE_MAP } from './types.js';
 
-const WEATHER_API_BASE_URL = 'https://weather.tsukumijima.net';
-const PRIMARY_AREA_XML_URL = `${WEATHER_API_BASE_URL}/primary_area.xml`;
-const FORECAST_API_URL_BASE = `${WEATHER_API_BASE_URL}/api/forecast/city/`;
-const JMA_AREA_API_URL = 'https://www.jma.go.jp/bosai/common/const/area.json';
+const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_GEOCODING_URL =
+  'https://geocoding-api.open-meteo.com/v1/search';
 
-const PREF_MAP_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const REQUEST_TIMEOUT_MS = 10_000;
+const FORECAST_DAYS = 3;
 
-type Cache<T> = { data: T; fetchedAt: number } | null;
+const DATE_LABELS = ['今日', '明日', '明後日'] as const;
+
+/** Open-Meteo の予報 API レスポンス（利用するフィールドのみ）。 */
+interface ForecastResponse {
+  daily?: {
+    time: string[];
+    weathercode: number[];
+    temperature_2m_max: (number | null)[];
+    temperature_2m_min: (number | null)[];
+  };
+  hourly?: {
+    time: string[];
+    precipitation_probability: (number | null)[];
+  };
+}
 
 /**
- * 天気予報 API との通信と地域名解決。
- *
- * 以前は WeatherModule の中にキャッシュ・XML パース・HTTP 呼び出しが
- * すべて同居していた。
+ * Open-Meteo API との通信と地名解決。
  */
 export class WeatherApi {
-  private prefMapCache: Cache<Record<string, string>> = null;
-  private cityMapCache: Cache<Record<string, string>> = null;
-  private prefMapUpdatePromise: Promise<boolean> | null = null;
-  private cityMapUpdatePromise: Promise<boolean> | null = null;
-
   constructor(private readonly log: (message: string) => void) {}
 
-  public async warmup(): Promise<void> {
-    await Promise.all([this.updateWeatherMaps(), this.updateCityMap()]);
-  }
-
   /**
-   * 都道府県名 → エリアID のマップを更新する。
+   * 地名を検索して座標を解決する。
    *
-   * @returns キャッシュが利用可能なら true、取得失敗で利用不可能なら false
+   * @returns 見つからない場合、または取得に失敗した場合に null
    */
-  public async updateWeatherMaps(): Promise<boolean> {
-    if (
-      this.prefMapCache &&
-      Date.now() - this.prefMapCache.fetchedAt < PREF_MAP_CACHE_TTL_MS
-    ) {
-      return true;
-    }
-
-    // in-flight な更新を再利用して重複取得を防ぐ
-    if (this.prefMapUpdatePromise) return this.prefMapUpdatePromise;
-
-    const promise = this.fetchWeatherMaps().finally(() => {
-      if (this.prefMapUpdatePromise === promise) {
-        this.prefMapUpdatePromise = null;
-      }
-    });
-    this.prefMapUpdatePromise = promise;
-    return promise;
-  }
-
-  private async fetchWeatherMaps(): Promise<boolean> {
+  public async searchLocation(query: string): Promise<GeocodingResult | null> {
     try {
-      const xml = await getText(PRIMARY_AREA_XML_URL, {
-        timeoutMs: REQUEST_TIMEOUT_MS,
-      });
-      const parser = new XMLParser({ ignoreAttributes: false });
-      const obj = parser.parse(xml);
-      const nameToIdMap: Record<string, string> = {};
-
-      type AreaNode = { name?: unknown; id?: unknown; children?: unknown };
-
-      const extractAreas = (areas: unknown): void => {
-        if (!Array.isArray(areas)) return;
-
-        for (const area of areas as AreaNode[]) {
-          if (area?.name && area?.id) {
-            nameToIdMap[String(area.name)] = String(area.id);
-          }
-          if (area?.children) {
-            extractAreas(area.children);
-          }
+      const data = await getJson<{ results?: GeocodingResult[] }>(
+        OPEN_METEO_GEOCODING_URL,
+        {
+          searchParams: {
+            name: query,
+            count: '1',
+            language: 'ja',
+            format: 'json',
+          },
+          timeoutMs: REQUEST_TIMEOUT_MS,
         }
-      };
-
-      const primaryArea = obj?.primary_area;
-      if (primaryArea?.prefecture) {
-        extractAreas(
-          Array.isArray(primaryArea.prefecture)
-            ? primaryArea.prefecture
-            : [primaryArea.prefecture]
-        );
-      }
-
-      this.prefMapCache = { data: nameToIdMap, fetchedAt: Date.now() };
-      return true;
-    } catch (e) {
-      this.log(`Error updating weather maps: ${String(e)}`);
-      return false;
-    }
-  }
-
-  /**
-   * 市区町村名 → 正式名 のマップを更新する。
-   *
-   * @returns キャッシュが利用可能なら true、取得失敗で利用不可能なら false
-   */
-  public async updateCityMap(): Promise<boolean> {
-    if (
-      this.cityMapCache &&
-      Date.now() - this.cityMapCache.fetchedAt < PREF_MAP_CACHE_TTL_MS
-    ) {
-      return true;
-    }
-
-    // in-flight な更新を再利用して重複取得を防ぐ
-    if (this.cityMapUpdatePromise) return this.cityMapUpdatePromise;
-
-    const promise = this.fetchCityMap().finally(() => {
-      if (this.cityMapUpdatePromise === promise) {
-        this.cityMapUpdatePromise = null;
-      }
-    });
-    this.cityMapUpdatePromise = promise;
-    return promise;
-  }
-
-  private async fetchCityMap(): Promise<boolean> {
-    try {
-      const data = await getJson<{
-        class20s: Record<string, { name: string }>;
-      }>(JMA_AREA_API_URL, { timeoutMs: REQUEST_TIMEOUT_MS });
-
-      const cityMap: Record<string, string> = {};
-      for (const code in data.class20s) {
-        const fullName = data.class20s[code].name;
-        if (!fullName) continue;
-        const baseName = fullName.replace(/(市|町|村|区)$/, '');
-        if (!cityMap[baseName]) {
-          cityMap[baseName] = fullName;
-        }
-      }
-
-      this.cityMapCache = { data: cityMap, fetchedAt: Date.now() };
-      return true;
-    } catch (e) {
-      this.log(`Error updating city map: ${String(e)}`);
-      return false;
-    }
-  }
-
-  public async getAreaId(place: string): Promise<string | undefined> {
-    const mapAvailable = await this.updateWeatherMaps();
-    if (!mapAvailable || !this.prefMapCache?.data) {
-      // 取得失敗と「地域不明」を区別するため、呼び出し元に失敗を伝える
-      throw new Error('Failed to update weather maps');
-    }
-    const prefIdMap = this.prefMapCache.data;
-
-    // 完全一致
-    if (prefIdMap[place]) return prefIdMap[place];
-
-    // 接尾辞なしで一致
-    const placeWithoutSuffix = place.replace(/(都|府|県)$/, '');
-    if (prefIdMap[placeWithoutSuffix]) return prefIdMap[placeWithoutSuffix];
-
-    // 接尾辞を補って一致
-    if (!/(都|府|県)$/.test(place)) {
-      if (prefIdMap[`${place}都`]) return prefIdMap[`${place}都`];
-      if (prefIdMap[`${place}府`]) return prefIdMap[`${place}府`];
-      if (prefIdMap[`${place}県`]) return prefIdMap[`${place}県`];
-    }
-
-    return undefined;
-  }
-
-  public async fetchWeatherData(
-    areaId: string
-  ): Promise<RawWeatherData | null> {
-    try {
-      const weatherData = await getJson<RawWeatherData>(
-        `${FORECAST_API_URL_BASE}${areaId}`,
-        { timeoutMs: REQUEST_TIMEOUT_MS }
       );
-
-      if (weatherData?.error) {
-        this.log(
-          `Weather API error for areaId ${areaId}: ${weatherData.error}`
-        );
-        return null;
-      }
-      if (!weatherData?.forecasts || !weatherData?.location) {
-        this.log(
-          `Invalid weather data received: ${JSON.stringify(weatherData).slice(0, 1000)}`
-        );
-        return null;
-      }
-      return weatherData;
+      return data.results?.[0] ?? null;
     } catch (e) {
-      this.log(
-        `Error fetching weather data for areaId ${areaId}: ${String(e)}`
-      );
+      this.log(`Error searching location ${query}: ${String(e)}`);
       return null;
     }
   }
 
   /**
-   * API レスポンスから表示用の地名を組み立てる。
+   * 座標から日単位の予報を取得する。
+   *
+   * @returns 取得に失敗した場合に空配列
    */
-  public resolvePlaceName(weatherData: RawWeatherData): string {
-    const city = weatherData.location?.city;
-    const fullCityName = city ? this.cityMapCache?.data?.[city] : null;
+  public async fetchDailyForecasts(
+    latitude: number,
+    longitude: number
+  ): Promise<WeatherForecast[]> {
+    try {
+      const data = await getJson<ForecastResponse>(OPEN_METEO_FORECAST_URL, {
+        searchParams: {
+          latitude: String(latitude),
+          longitude: String(longitude),
+          daily: 'weathercode,temperature_2m_max,temperature_2m_min',
+          hourly: 'precipitation_probability',
+          timezone: 'auto',
+          forecast_days: String(FORECAST_DAYS),
+        },
+        timeoutMs: REQUEST_TIMEOUT_MS,
+      });
 
-    if (weatherData.location?.prefecture && fullCityName) {
-      return `${weatherData.location.prefecture} ${fullCityName}`;
+      if (!data.daily) {
+        this.log('Invalid forecast data received: daily is missing');
+        return [];
+      }
+      return this.toForecasts(data);
+    } catch (e) {
+      this.log(
+        `Error fetching forecast for ${latitude},${longitude}: ${String(e)}`
+      );
+      return [];
     }
-    if (weatherData.location?.prefecture && city) {
-      return `${weatherData.location.prefecture} ${city}`;
+  }
+
+  /**
+   * API レスポンスを表示用の予報リストへ変換する。
+   *
+   * Open-Meteo は対象地点のタイムゾーンにおける今日を起点に
+   * 日付の昇順で予報を返すため、配列インデックスがそのまま
+   * 今日からの相対日数に対応する。
+   */
+  private toForecasts(data: ForecastResponse): WeatherForecast[] {
+    const daily = data.daily;
+    if (!daily) return [];
+
+    return daily.time.map((date, index) => ({
+      date,
+      dateLabel: DATE_LABELS[index] ?? `${index}日後`,
+      weather: WMO_CODE_MAP[daily.weathercode[index]] ?? UNKNOWN_WMO_CODE,
+      tempMax: daily.temperature_2m_max[index] ?? null,
+      tempMin: daily.temperature_2m_min[index] ?? null,
+      rain: this.toRainChance(data.hourly, date),
+    }));
+  }
+
+  /**
+   * 時間ごとの降水確率を対象日の 6 時間ごとの区間へ集約する。
+   *
+   * `hourly.time` は対象地点のローカル時刻（ISO 8601 の拡張なし形式）で
+   * 返るため、日付と時刻の文字列をそのまま区間判定に使う。
+   */
+  private toRainChance(
+    hourly: ForecastResponse['hourly'],
+    date: string
+  ): RainChance | null {
+    if (!hourly || hourly.time.length === 0) return null;
+
+    const buckets: number[][] = [[], [], [], []];
+    for (let i = 0; i < hourly.time.length; i++) {
+      const time = hourly.time[i];
+      if (!time.startsWith(date)) continue;
+
+      const probability = hourly.precipitation_probability[i];
+      if (probability === null || probability === undefined) continue;
+
+      const hour = Number.parseInt(time.slice(11, 13), 10);
+      if (Number.isNaN(hour)) continue;
+      buckets[Math.floor(hour / 6)].push(probability);
     }
-    return weatherData.title?.replace(/ の天気$/, '') ?? city ?? '';
+
+    // 対象日のデータが1つもない場合は降水確率を表示しない
+    if (buckets.every((bucket) => bucket.length === 0)) return null;
+
+    const average = (values: number[]): number =>
+      values.length === 0
+        ? 0
+        : Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
+
+    return {
+      T00_06: average(buckets[0]),
+      T06_12: average(buckets[1]),
+      T12_18: average(buckets[2]),
+      T18_24: average(buckets[3]),
+    };
   }
 }
