@@ -1,8 +1,8 @@
 import got from 'got';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import log from '@/utils/log.js';
 
-export default async function (url: string): Promise<string> {
+export default async function (url: string): Promise<unknown> {
   try {
     const urlPreviewUrl = config.host + '/url';
     return await got(urlPreviewUrl, {

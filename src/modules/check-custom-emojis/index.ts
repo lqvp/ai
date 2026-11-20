@@ -1,6 +1,6 @@
 import loki from 'lokijs';
 import type { entities as MisskeyEntities } from 'misskey-js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
 import Module from '@/module.js';
@@ -158,6 +158,10 @@ export default class extends Module {
     ) {
       return false;
     } else {
+      if (msg.user.username !== config.master || msg.user.host != null) {
+        this.log('Check CustomEmojis requested but not master');
+        return true;
+      }
       this.log('Check CustomEmojis requested');
     }
 

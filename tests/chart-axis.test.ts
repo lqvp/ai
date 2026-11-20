@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { calcChartStepSize } from '../src/modules/chart/render-chart.js';
+import {
+  calcChartStepSize,
+  renderChart,
+} from '../src/modules/chart/render-chart.js';
 
 /** 旧実装 (parseInt を数値に適用していたもの) の再現。回帰比較用。 */
 function legacyStepSize(range: number, tiks: number): number {
@@ -37,4 +40,27 @@ describe('calcChartStepSize', () => {
     const step = calcChartStepSize(1e22, 10);
     expect(step).toBe(1e21);
   });
+});
+
+describe('renderChart degenerate data', () => {
+  it('returns an image without hanging on constant non-zero data', () => {
+    const buf = renderChart({
+      datasets: [{ data: [5, 5, 5] }],
+    });
+    expect(buf.length).toBeGreaterThan(0);
+  }, 10_000);
+
+  it('returns an image without dividing by zero on all-zero data', () => {
+    const buf = renderChart({
+      datasets: [{ data: [0, 0, 0] }],
+    });
+    expect(buf.length).toBeGreaterThan(0);
+  }, 10_000);
+
+  it('returns an image on empty data', () => {
+    const buf = renderChart({
+      datasets: [{ data: [] }],
+    });
+    expect(buf.length).toBeGreaterThan(0);
+  }, 10_000);
 });

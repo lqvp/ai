@@ -6,9 +6,9 @@ import got from 'got';
 // import pkg from '../package.json' assert { type: 'json' };
 import { createRequire } from 'module';
 import promiseRetry from 'promise-retry';
-import type { User } from '@/misskey/user.js';
+import type { User } from '@/misskey/types.js';
 import 藍 from './ai.js';
-import config, { type Config, initConfig, loadConfig } from './config.js';
+import config, { type Config, initConfig, loadConfig } from './config/index.js';
 import { checkMissingConfigKeys } from './config-updater.js';
 import _log from './utils/log.js';
 
@@ -58,12 +58,24 @@ process.on('uncaughtException', (err) => {
     console.error(`Uncaught exception: ${err.message}`);
     console.dir(err, { colors: true, depth: 2 });
   } catch {}
+
+  // ログだけ吐いて握りつぶすとプロセスが壊れた状態で動き続けるため、
+  // 終了コードを設定して graceful shutdown を試みる
+  process.exitCode = 1;
+  void (ai?.stop() ?? Promise.resolve()).finally(() => {
+    // 一定時間経っても終了しなければ強制終了する
+    const timer = setTimeout(() => {
+      process.exit(1);
+    }, 10_000);
+    timer.unref?.();
+  });
 });
 
 process.on('unhandledRejection', (reason) => {
   try {
     console.error('Unhandled rejection:', reason);
   } catch {}
+  process.exitCode = 1;
 });
 
 let ai: 藍 | undefined;

@@ -1,7 +1,7 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import type { Note } from '@/misskey/note.js';
+import type { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
 import { genItem } from '@/vocabulary.js';
 
@@ -139,7 +139,8 @@ export default class extends Module {
   private async mentionHook(msg: Message) {
     if (
       !msg.or(['/poll']) ||
-      (msg.user.username !== config.master && msg.user.host == null)
+      msg.user.username !== config.master ||
+      msg.user.host != null
     ) {
       return false;
     } else {
@@ -154,9 +155,20 @@ export default class extends Module {
   @bindThis
   private async timeoutCallback(data: unknown) {
     const { title, noteId } = data as { title: string; noteId: string };
-    const note: Note = await this.ai.api('notes/show', { noteId });
+    let note: Note;
+    try {
+      note = await this.ai.api('notes/show', { noteId });
+    } catch (e) {
+      this.log(`Failed to fetch poll note: ${String(e)}`);
+      return;
+    }
 
-    const choices = note.poll!.choices;
+    const choices = note.poll?.choices;
+
+    if (choices == null) {
+      this.log(`Poll choices are not available for note: ${noteId}`);
+      return;
+    }
 
     let mostVotedChoice;
 

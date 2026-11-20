@@ -1,5 +1,5 @@
 import loki from 'lokijs';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
@@ -34,15 +34,38 @@ export default class extends Module {
     }
 
     this.every(1000 * 60 * 30, this.learn);
+    this.every(1000 * 60 * 60 * 24, this.cleanupLearnedKeywords);
 
     return {};
   }
 
+  /**
+   * learnedKeywords は挿入のみだと無制限に成長するため、
+   * learnedAt が 30 日超の古いエントリを定期的に削除する。
+   */
+  @bindThis
+  private cleanupLearnedKeywords() {
+    const threshold = Date.now() - 1000 * 60 * 60 * 24 * 30;
+    const stale = this.learnedKeywords.find({ learnedAt: { $lt: threshold } });
+    for (const item of stale) {
+      this.learnedKeywords.remove(item);
+    }
+    if (stale.length > 0) {
+      this.log(`Removed ${stale.length} stale learned keywords`);
+    }
+  }
+
   @bindThis
   private async learn() {
-    const tl = await this.ai.api<any[]>('notes/hybrid-timeline', {
-      limit: 30,
-    });
+    let tl: any[];
+    try {
+      tl = await this.ai.api<any[]>('notes/hybrid-timeline', {
+        limit: 30,
+      });
+    } catch (e) {
+      this.log(`Failed to fetch timeline: ${String(e)}`);
+      return;
+    }
 
     const interestedNotes = tl.filter(
       (note) =>
@@ -56,7 +79,13 @@ export default class extends Module {
     let keywords: string[][] = [];
 
     for (const note of interestedNotes) {
-      const tokens = await mecab(note.text, config.mecab, config.mecabDic);
+      let tokens: string[][];
+      try {
+        tokens = await mecab(note.text, config.mecab, config.mecabDic);
+      } catch (e) {
+        this.log(`Failed to run mecab: ${String(e)}`);
+        continue;
+      }
       const keywordsInThisNote = tokens.filter(
         (token) => token[2] == '固有名詞' && token[8] != null
       );

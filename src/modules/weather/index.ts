@@ -1,4 +1,4 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import type Message from '@/message.js';
 import Module from '@/module.js';
@@ -115,7 +115,14 @@ export default class WeatherModule extends Module {
     const dateLabel = this.normalizeDateLabel(dayInput);
     const place = placeInput || defaultWeatherPlace();
 
-    const areaId = await this.api.getAreaId(place);
+    let areaId: string | undefined;
+    try {
+      areaId = await this.api.getAreaId(place);
+    } catch (e) {
+      this.log(`Failed to resolve area: ${String(e)}`);
+      await msg.reply(serifs.weather.fetchError);
+      return { reaction: '❌' };
+    }
     if (!areaId) {
       await msg.reply(serifs.weather.notFound(place));
       return { reaction: '❌' };

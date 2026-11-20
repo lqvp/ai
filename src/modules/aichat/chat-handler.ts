@@ -1,5 +1,5 @@
 import type 藍 from '@/ai.js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import type Friend from '@/friend.js';
 import type Message from '@/message.js';
 import serifs from '@/serifs.js';
@@ -181,7 +181,7 @@ export class ChatHandler {
     msg.reply(serifs.aichat.post(responseText)).then((reply) => {
       historyItems.push({ role: 'user', content: question });
       historyItems.push({ role: 'model', content: text as string });
-      if (historyItems.length > DEFAULTS.MAX_HISTORY_LENGTH) {
+      while (historyItems.length > DEFAULTS.MAX_HISTORY_LENGTH) {
         historyItems.shift();
       }
       exist.history = historyItems;

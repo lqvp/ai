@@ -1,7 +1,7 @@
 import { parse } from 'twemoji-parser';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
-import type { Note } from '@/misskey/note.js';
+import type { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
 import Stream from '@/stream.js';
 import includes from '@/utils/includes.js';

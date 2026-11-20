@@ -1,9 +1,9 @@
+import { randomBytes } from 'node:crypto';
 import 藍 from '@/ai.js';
 import { bindThis } from '@/decorators.js';
-import type { User } from '@/misskey/user.js';
+import type { User } from '@/misskey/types.js';
 import IModule from '@/module.js';
 import getDate from '@/utils/get-date.js';
-import { genItem } from '@/vocabulary.js';
 
 export type FriendDoc = {
   userId: string;
@@ -176,7 +176,8 @@ export default class Friend {
 
   @bindThis
   public generateTransferCode(): string {
-    const code = genItem();
+    // Math.random は予測可能なため、暗号学的に乱数を生成する
+    const code = randomBytes(16).toString('hex');
 
     this.doc.transferCode = code;
     this.save();
@@ -194,9 +195,12 @@ export default class Friend {
     this.doc.love = src.love;
     this.doc.married = src.married;
     this.doc.perModulesData = src.perModulesData;
-    this.save();
 
-    // TODO: 合言葉を忘れる
+    // 合言葉は使い捨て：転送元・転送先の双方で無効化する
+    delete src.transferCode;
+    delete this.doc.transferCode;
+    this.ai.repos.friends.save(src);
+    this.save();
 
     return true;
   }

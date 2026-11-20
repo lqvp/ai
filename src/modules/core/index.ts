@@ -151,7 +151,12 @@ export default class extends Module {
       done();
     } else {
       msg.reply(serifs.core.yesOrNo).then((reply) => {
-        this.subscribeReply(msg.userId, msg.isChat, reply.id, data);
+        this.subscribeReply(
+          msg.userId,
+          msg.isChat,
+          msg.isChat ? msg.userId : reply.id,
+          data
+        );
       });
     }
   }

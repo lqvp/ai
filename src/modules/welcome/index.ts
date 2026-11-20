@@ -1,5 +1,5 @@
 import { bindThis } from '@/decorators.js';
-import type { Note } from '@/misskey/note.js';
+import type { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
 import type Stream from '@/stream.js';
 

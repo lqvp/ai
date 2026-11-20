@@ -5,13 +5,12 @@ import loki from 'lokijs';
 import type * as Misskey from 'misskey-js';
 import { createRequire } from 'module';
 import APIClient, { type ApiParam, type PostParam } from '@/api/APIClient.js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import DatabaseManager from '@/database/DatabaseManager.js';
 import { bindThis } from '@/decorators.js';
 import Friend from '@/friend.js';
 import Message, { type ChatMessage } from '@/message.js';
-import type { Note } from '@/misskey/note.js';
-import type { User } from '@/misskey/user.js';
+import type { Note, User } from '@/misskey/types.js';
 import Module from '@/module.js';
 import { ReactionService } from '@/services/reaction.js';
 import { RelationshipService } from '@/services/relationship.js';
@@ -25,6 +24,13 @@ const pkg = require('../package.json');
 
 /** chatUser チャンネルから届くメッセージ。fromUser は省略されてくる。 */
 type ChatStreamMessage = Omit<ChatMessage, 'fromUser'> & { fromUser?: User };
+
+/** ユーザーごとの chatUser チャンネル接続の管理エントリ */
+type ChatStreamEntry = {
+  stream: ReturnType<Stream['connectToChannel']>;
+  timer: NodeJS.Timeout | undefined;
+  refreshIdleTimer: () => void;
+};
 
 export type MentionHook = (msg: Message) => Promise<boolean | HandlerResult>;
 // data は永続化層経由のため内容はモジュール側が知る。境界では unknown とする。
@@ -72,6 +78,8 @@ export default class 藍 {
   private apiClient!: APIClient;
   private timerManager!: TimerManager;
   private intervals: NodeJS.Timeout[] = [];
+  /** ユーザーごとの chatUser チャンネル接続 (重複接続防止のため Map で管理) */
+  private chatStreams = new Map<string, ChatStreamEntry>();
   private stopping = false;
   public lastSleepedAt!: number;
 
@@ -278,21 +286,42 @@ export default class 藍 {
     // 一定期間 chatUser のストリームに接続して今後のやり取りに備える
     if (!data.fromUserId) return;
 
+    // 同一ユーザーへの接続が重複して増えないよう、既存の接続を再利用する
+    this.ensureChatStream(data.fromUserId, fromUser);
+  }
+
+  /**
+   * ユーザーごとに chatUser チャンネルへの接続を保持し、再利用する。
+   * 2分間アイドルで切断し、その際に管理情報からも削除する。
+   */
+  private ensureChatStream(userId: string, fromUser: User): void {
+    const existing = this.chatStreams.get(userId);
+    if (existing) {
+      existing.refreshIdleTimer();
+      return;
+    }
+
     const chatStream = this.connection.connectToChannel('chatUser', {
-      otherId: data.fromUserId,
+      otherId: userId,
     });
 
-    let timer: NodeJS.Timeout | undefined;
-    const setTimer = (): void => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(
-        () => {
-          chatStream.dispose();
-        },
-        1000 * 60 * 2
-      );
+    const entry: ChatStreamEntry = {
+      stream: chatStream,
+      timer: undefined,
+      refreshIdleTimer: () => {
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.timer = setTimeout(
+          () => {
+            this.chatStreams.delete(userId);
+            chatStream.dispose();
+          },
+          1000 * 60 * 2
+        );
+      },
     };
-    setTimer();
+
+    this.chatStreams.set(userId, entry);
+    entry.refreshIdleTimer();
 
     chatStream.on('message', (message: ChatStreamMessage) => {
       if (message.fromUserId == this.account.id) return; // 自分は弾く
@@ -308,7 +337,7 @@ export default class 藍 {
           true
         )
       ).catch((err) => this.log(`chat message failed: ${String(err)}`));
-      setTimer();
+      entry.refreshIdleTimer();
     });
   }
 
@@ -578,6 +607,13 @@ export default class 藍 {
 
     for (const id of this.intervals) clearInterval(id);
     this.intervals = [];
+
+    // chatUser チャンネル接続とそのアイドルタイマーを破棄する
+    for (const entry of this.chatStreams.values()) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.stream.dispose();
+    }
+    this.chatStreams.clear();
 
     for (const module of this.modules) {
       try {

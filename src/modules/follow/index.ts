@@ -1,7 +1,7 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import { User, UserDetailed } from '@/misskey/user.js';
+import { User, UserDetailed } from '@/misskey/types.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { UserFormatter } from '@/utils/user-formatter.js';

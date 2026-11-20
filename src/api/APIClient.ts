@@ -1,9 +1,8 @@
 import chalk from 'chalk';
 import got from 'got';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
-import type { DriveFile } from '@/misskey/drive-file.js';
-import type { Note } from '@/misskey/note.js';
+import type { DriveFile, Note } from '@/misskey/types.js';
 import log from '@/utils/log.js';
 
 /** Misskey API へ渡すパラメータ。エンドポイント固有のフィールドを許容する。 */
@@ -133,6 +132,7 @@ export default class APIClient {
         headers: {
           'User-Agent': this.getDefaultUserAgent(),
         },
+        retry: { limit: 0 },
         timeout: { request: DEFAULT_API_TIMEOUT_MS },
       })
       .json<T>();

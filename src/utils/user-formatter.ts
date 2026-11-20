@@ -1,4 +1,4 @@
-import { User } from '@/misskey/user.js';
+import { User } from '@/misskey/types.js';
 
 export class UserFormatter {
   public static formatUserForLog(user: User): string {

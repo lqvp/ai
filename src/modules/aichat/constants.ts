@@ -1,4 +1,4 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 
 /** API関連定数 */
 export const TYPE_GEMINI = 'gemini';

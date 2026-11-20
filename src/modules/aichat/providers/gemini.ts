@@ -1,5 +1,5 @@
 import got from 'got';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import type Message from '@/message.js';
 import {
   buildBaseInstruction,
@@ -79,31 +79,6 @@ export async function genTextByGemini(
     systemInstruction: systemInstruction,
   };
 
-  // URLコンテキストツールが使用される場合、質問文を調整
-  if (geminiOptions.tools?.some((tool) => tool.url_context)) {
-    // URLコンテキストツールが使用される場合、質問文にURLを明示的に含める
-    const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
-    const urlarray = [...aiChat.question.matchAll(urlexp)];
-    if (urlarray.length > 0) {
-      const nonYoutubeUrls = urlarray.filter(
-        (url) => !ctx.isYoutubeUrl(url[0])
-      );
-      if (nonYoutubeUrls.length > 0) {
-        // 最初のユーザーメッセージの質問文を更新
-        if (contents.length > 0) {
-          const lastContent = contents[contents.length - 1];
-          if (lastContent.role === 'user' && lastContent.parts.length > 0) {
-            const questionText = `${
-              aiChat.question
-            }\n\n参考URL:\n${nonYoutubeUrls.map((url) => url[0]).join('\n')}`;
-            lastContent.parts[0].text = questionText;
-            ctx.log('URLコンテキスト用に質問文を調整しました');
-          }
-        }
-      }
-    }
-  }
-
   // thinkingConfigの設定
   if (config.gemini?.thinkingBudget !== undefined) {
     geminiOptions.generationConfig = {
@@ -155,6 +130,31 @@ export async function genTextByGemini(
     ctx.log('Google Searchツールを有効化しました');
   }
 
+  // URLコンテキストツールが使用される場合、質問文を調整
+  // （ツール設定は上で完了しているため、ここで tools を参照できる）
+  if (geminiOptions.tools?.some((tool) => tool.url_context)) {
+    const urlexp = RegExp("(https?://[a-zA-Z0-9!?/+_~=:;.,*&@#$%'-]+)", 'g');
+    const urlarray = [...aiChat.question.matchAll(urlexp)];
+    if (urlarray.length > 0) {
+      const nonYoutubeUrls = urlarray.filter(
+        (url) => !ctx.isYoutubeUrl(url[0])
+      );
+      if (nonYoutubeUrls.length > 0) {
+        // 最初のユーザーメッセージの質問文を更新
+        if (contents.length > 0) {
+          const lastContent = contents[contents.length - 1];
+          if (lastContent.role === 'user' && lastContent.parts.length > 0) {
+            const questionText = `${
+              aiChat.question
+            }\n\n参考URL:\n${nonYoutubeUrls.map((url) => url[0]).join('\n')}`;
+            lastContent.parts[0].text = questionText;
+            ctx.log('URLコンテキスト用に質問文を調整しました');
+          }
+        }
+      }
+    }
+  }
+
   // ツールが設定されているかログ出力
   if (geminiOptions.tools.length > 0) {
     ctx.log(`使用するツール: ${JSON.stringify(geminiOptions.tools)}`);
@@ -162,8 +162,8 @@ export async function genTextByGemini(
 
   let options = {
     url: aiChat.api,
-    searchParams: {
-      key: aiChat.key,
+    headers: {
+      'x-goog-api-key': aiChat.key,
     },
     json: geminiOptions,
   };
@@ -173,12 +173,13 @@ export async function genTextByGemini(
   try {
     res_data = await got
       .post(options.url, {
-        searchParams: options.searchParams,
+        headers: options.headers,
         json: options.json,
         responseType: 'json',
+        timeout: { request: 60_000 },
       })
       .json<GeminiApiJson>();
-    ctx.log(JSON.stringify(res_data));
+    ctx.log(JSON.stringify(res_data).slice(0, 1000));
     if (res_data.hasOwnProperty('candidates')) {
       const candidate = res_data.candidates?.[0];
       if (candidate != null) {

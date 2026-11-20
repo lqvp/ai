@@ -47,6 +47,12 @@ export function renderChart(chart: Chart) {
     chartAreaHeight -= titleTextSize;
   }
 
+  // データが空だと以降の計算 (yAxisRange, perXAxisWidth) が
+  // 0 除算・Infinity になるため、背景のみの画像を返す
+  if (chart.datasets.length === 0 || chart.datasets[0].data.length === 0) {
+    return canvas.toBuffer('image/png');
+  }
+
   const xAxisCount = chart.datasets[0].data.length;
   const serieses = chart.datasets.length;
 
@@ -67,6 +73,12 @@ export function renderChart(chart: Chart) {
   const yAxisStepsMin = yAxisSteps[0];
   const yAxisStepsMax = yAxisSteps[yAxisSteps.length - 1];
   const yAxisRange = yAxisStepsMax - yAxisStepsMin;
+
+  // 全データが0のとき yAxisRange === 0 となり、
+  // newDatasets の計算で 0 除算 (NaN) になるため早期リターン
+  if (!Number.isFinite(yAxisRange) || yAxisRange === 0) {
+    return canvas.toBuffer('image/png');
+  }
 
   // Draw Y axis
   ctx.lineWidth = yAxisThickness;
@@ -206,6 +218,12 @@ function niceScale(
   }
 
   const stepSize = calcChartStepSize(range, tiks);
+
+  // 定数データ (lower === upper ≠ 0) だと range === 0 で
+  // stepSize が NaN になり、while ループが終わらなくなる
+  if (!Number.isFinite(stepSize) || stepSize <= 0) {
+    return [lowerBound];
+  }
 
   // build Y label array.
   // Lower and upper bounds calculations

@@ -67,7 +67,7 @@ export function hasConfig(): boolean {
 }
 
 /**
- * 既存の `import config from '@/config.js'` との互換用プロキシ。
+ * デフォルトエクスポート用の遅延初期化プロキシ。
  * import 時にはファイル I/O を行わない。
  */
 const configProxy = new Proxy({} as Config, {

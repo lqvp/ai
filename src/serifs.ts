@@ -601,7 +601,12 @@ export function deepMerge<T extends object>(
   parentKey: string = ''
 ): T {
   const t = target as Record<string, unknown>;
-  for (const key in source) {
+  // Object.keys はプロトタイプ連鎖を走査しないため、__proto__ や
+  // constructor / prototype によるプロトタイプ汚染を避けられる
+  for (const key of Object.keys(source)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue;
+    }
     const sourceValue = source[key];
     if (parentKey === 'noting' && key === 'notes') {
       t[key] = sourceValue;
@@ -667,6 +672,10 @@ try {
   }
 } catch (e) {
   // Fallback to defaultSerifs if serifs.toml is missing or invalid
+  console.warn(
+    'Failed to load serifs.toml, falling back to default serifs:',
+    e instanceof Error ? e.message : e
+  );
 }
 
 export default computedSerifs;

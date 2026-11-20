@@ -7,9 +7,8 @@
  */
 
 import got from 'got';
-import config, { initConfig, loadConfig } from '@/config.js';
-import type { Note } from '@/misskey/note.js';
-import type { User } from '@/misskey/user.js';
+import config, { initConfig, loadConfig } from '@/config/index.js';
+import type { Note, User } from '@/misskey/types.js';
 import serifs from '@/serifs.js';
 import * as Reversi from './engine.js';
 import type { BackendMessage, ReversiFormItem, ReversiGame } from './types.js';
@@ -299,6 +298,10 @@ class Session {
     if (log.id == null || !this.appliedOps.includes(log.id)) {
       switch (log.operation) {
         case 'put': {
+          // 盤外の pos が渡ると engine 側で壊れるため範囲検証する
+          if (log.pos < 0 || log.pos >= this.engine.board.length) {
+            break;
+          }
           this.engine.putStone(log.pos);
           this.currentTurn++;
 
@@ -519,6 +522,7 @@ class Session {
         const res = await got
           .post(`${config.host}/api/notes/create`, {
             json: body,
+            timeout: { request: 30_000 },
           })
           .json<{ createdNote: Note }>();
 

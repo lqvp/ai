@@ -15,11 +15,17 @@ type RequestOptions = Omit<OptionsInit, 'timeout' | 'retry'> & {
   retryLimit?: number;
 };
 
-function buildOptions(options: RequestOptions = {}): OptionsInit {
+/** GET 系リクエストのデフォルトリトライ回数（POST は既定でリトライしない）。 */
+const DEFAULT_GET_RETRY_LIMIT = 2;
+
+function buildOptions(
+  options: RequestOptions = {},
+  defaultRetryLimit = 0
+): OptionsInit {
   const { timeoutMs, retryLimit, ...rest } = options;
   return {
     timeout: { request: timeoutMs ?? DEFAULT_TIMEOUT_MS },
-    retry: { limit: retryLimit ?? 0 },
+    retry: { limit: retryLimit ?? defaultRetryLimit },
     ...rest,
   };
 }
@@ -28,7 +34,7 @@ export async function getJson<T>(
   url: string,
   options?: RequestOptions
 ): Promise<T> {
-  return got.get(url, buildOptions(options)).json<T>();
+  return got.get(url, buildOptions(options, DEFAULT_GET_RETRY_LIMIT)).json<T>();
 }
 
 export async function postJson<T>(
@@ -45,7 +51,7 @@ export async function getText(
   url: string,
   options?: RequestOptions
 ): Promise<string> {
-  return got.get(url, buildOptions(options)).text();
+  return got.get(url, buildOptions(options, DEFAULT_GET_RETRY_LIMIT)).text();
 }
 
 /**
@@ -55,7 +61,9 @@ export async function getBuffer(
   url: string,
   options?: RequestOptions
 ): Promise<Buffer> {
-  const bytes = await got.get(url, buildOptions(options)).buffer();
+  const bytes = await got
+    .get(url, buildOptions(options, DEFAULT_GET_RETRY_LIMIT))
+    .buffer();
   return Buffer.from(bytes);
 }
 

@@ -1,7 +1,7 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import type { Note } from '@/misskey/note.js';
+import type { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
 import { fetchNoteFiles } from '@/services/media.js';
 import { postAutoNote } from './auto-note.js';
@@ -223,6 +223,7 @@ export default class extends Module {
     }
 
     const result = await this.chatHandler.handle(current, msg);
+    current.quotedFiles = undefined;
 
     if (result) {
       return { reaction: 'like' };

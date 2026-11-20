@@ -26,6 +26,17 @@ describe('deepMerge', () => {
     );
     expect(merged.noting.notes).toEqual(['c']);
   });
+
+  it('does not pollute Object.prototype via __proto__ / constructor / prototype keys', () => {
+    const malicious = JSON.parse(
+      '{"__proto__": {"polluted": "yes"}, "constructor": {"prototype": {"polluted": "yes"}}, "prototype": {"polluted": "yes"}}'
+    ) as Record<string, unknown>;
+
+    deepMerge({ safe: 'target' }, malicious);
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(({} as Record<string, unknown>).safe).toBeUndefined();
+  });
 });
 
 describe('getSerif', () => {
