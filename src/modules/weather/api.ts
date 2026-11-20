@@ -21,6 +21,8 @@ type Cache<T> = { data: T; fetchedAt: number } | null;
 export class WeatherApi {
   private prefMapCache: Cache<Record<string, string>> = null;
   private cityMapCache: Cache<Record<string, string>> = null;
+  private prefMapUpdatePromise: Promise<boolean> | null = null;
+  private cityMapUpdatePromise: Promise<boolean> | null = null;
 
   constructor(private readonly log: (message: string) => void) {}
 
@@ -30,15 +32,30 @@ export class WeatherApi {
 
   /**
    * 都道府県名 → エリアID のマップを更新する。
+   *
+   * @returns キャッシュが利用可能なら true、取得失敗で利用不可能なら false
    */
-  public async updateWeatherMaps(): Promise<void> {
+  public async updateWeatherMaps(): Promise<boolean> {
     if (
       this.prefMapCache &&
       Date.now() - this.prefMapCache.fetchedAt < PREF_MAP_CACHE_TTL_MS
     ) {
-      return;
+      return true;
     }
 
+    // in-flight な更新を再利用して重複取得を防ぐ
+    if (this.prefMapUpdatePromise) return this.prefMapUpdatePromise;
+
+    const promise = this.fetchWeatherMaps().finally(() => {
+      if (this.prefMapUpdatePromise === promise) {
+        this.prefMapUpdatePromise = null;
+      }
+    });
+    this.prefMapUpdatePromise = promise;
+    return promise;
+  }
+
+  private async fetchWeatherMaps(): Promise<boolean> {
     try {
       const xml = await getText(PRIMARY_AREA_XML_URL, {
         timeoutMs: REQUEST_TIMEOUT_MS,
@@ -72,22 +89,39 @@ export class WeatherApi {
       }
 
       this.prefMapCache = { data: nameToIdMap, fetchedAt: Date.now() };
+      return true;
     } catch (e) {
       this.log(`Error updating weather maps: ${String(e)}`);
+      return false;
     }
   }
 
   /**
    * 市区町村名 → 正式名 のマップを更新する。
+   *
+   * @returns キャッシュが利用可能なら true、取得失敗で利用不可能なら false
    */
-  public async updateCityMap(): Promise<void> {
+  public async updateCityMap(): Promise<boolean> {
     if (
       this.cityMapCache &&
       Date.now() - this.cityMapCache.fetchedAt < PREF_MAP_CACHE_TTL_MS
     ) {
-      return;
+      return true;
     }
 
+    // in-flight な更新を再利用して重複取得を防ぐ
+    if (this.cityMapUpdatePromise) return this.cityMapUpdatePromise;
+
+    const promise = this.fetchCityMap().finally(() => {
+      if (this.cityMapUpdatePromise === promise) {
+        this.cityMapUpdatePromise = null;
+      }
+    });
+    this.cityMapUpdatePromise = promise;
+    return promise;
+  }
+
+  private async fetchCityMap(): Promise<boolean> {
     try {
       const data = await getJson<{
         class20s: Record<string, { name: string }>;
@@ -104,18 +138,20 @@ export class WeatherApi {
       }
 
       this.cityMapCache = { data: cityMap, fetchedAt: Date.now() };
+      return true;
     } catch (e) {
       this.log(`Error updating city map: ${String(e)}`);
+      return false;
     }
   }
 
   public async getAreaId(place: string): Promise<string | undefined> {
-    await this.updateWeatherMaps();
-    const prefIdMap = this.prefMapCache?.data;
-    if (!prefIdMap) {
-      this.log('Prefecture ID map is not available.');
-      return undefined;
+    const mapAvailable = await this.updateWeatherMaps();
+    if (!mapAvailable || !this.prefMapCache?.data) {
+      // 取得失敗と「地域不明」を区別するため、呼び出し元に失敗を伝える
+      throw new Error('Failed to update weather maps');
     }
+    const prefIdMap = this.prefMapCache.data;
 
     // 完全一致
     if (prefIdMap[place]) return prefIdMap[place];
@@ -151,7 +187,7 @@ export class WeatherApi {
       }
       if (!weatherData?.forecasts || !weatherData?.location) {
         this.log(
-          `Invalid weather data received: ${JSON.stringify(weatherData)}`
+          `Invalid weather data received: ${JSON.stringify(weatherData).slice(0, 1000)}`
         );
         return null;
       }

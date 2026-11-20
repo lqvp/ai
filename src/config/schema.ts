@@ -175,6 +175,27 @@ function positive(value: unknown, fallback: number): number {
     : fallback;
 }
 
+/**
+ * 正規化で書き換えるセクションのためのディープコピー。
+ * TOML 由来の値はプレーンなオブジェクト・配列・プリミティブなので再帰コピーで十分。
+ */
+function copyForNormalization(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(copyForNormalization);
+  }
+  if (value instanceof Date) {
+    return new Date(value.getTime());
+  }
+  if (isObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      out[key] = copyForNormalization(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
 function normalizeHost(rawHost: string, issues: string[]): string {
   let host = rawHost.trim().replace(/\/+$/, '');
 
@@ -195,8 +216,11 @@ function normalizeHost(rawHost: string, issues: string[]): string {
   }
 }
 
-function validateAndResolve(raw: RawConfig): Config {
+function validateAndResolve(input: RawConfig): Config {
   const issues: string[] = [];
+
+  // 正規化結果の書き込み先として入力のコピーを作る（呼び出し元のオブジェクトを壊さない）
+  const raw: RawConfig = { ...input };
 
   if (typeof raw.host !== 'string' || raw.host.trim() === '') {
     issues.push('host は必須です');
@@ -267,12 +291,11 @@ function validateAndResolve(raw: RawConfig): Config {
     }
   }
 
-  for (const [name, section] of [
-    ['jina', raw.jina],
-    ['exa', raw.exa],
-  ] as const) {
+  // 正規化で入力を破壊的に書き換えないよう、対象セクションはコピーしてから扱う
+  for (const name of ['jina', 'exa'] as const) {
+    const section = copyForNormalization(raw[name]);
     if (!isObject(section)) continue;
-    const search = (section as Record<string, unknown>).search;
+    const search = section.search;
     if (isObject(search) && search.maxResults !== undefined) {
       const value = Number(search.maxResults);
       if (!Number.isInteger(value) || value < 1 || value > 5) {
@@ -280,10 +303,11 @@ function validateAndResolve(raw: RawConfig): Config {
       }
       search.maxResults = clamp(value, 1, 5);
     }
-    const tool = (section as Record<string, unknown>).tool;
+    const tool = section.tool;
     if (isObject(tool) && tool.maxRounds !== undefined) {
       tool.maxRounds = Math.max(1, Math.floor(Number(tool.maxRounds) || 1));
     }
+    raw[name] = section;
   }
 
   for (const [name, section] of [
@@ -302,30 +326,38 @@ function validateAndResolve(raw: RawConfig): Config {
   }
 
   if (isObject(raw.updateChecker)) {
-    if (raw.updateChecker.intervalMinutes !== undefined) {
-      raw.updateChecker.intervalMinutes = positive(
-        raw.updateChecker.intervalMinutes,
+    const updateChecker = copyForNormalization(
+      raw.updateChecker
+    ) as NonNullable<RawConfig['updateChecker']>;
+    if (updateChecker.intervalMinutes !== undefined) {
+      updateChecker.intervalMinutes = positive(
+        updateChecker.intervalMinutes,
         60
       );
     }
     if (
-      raw.updateChecker.repository !== undefined &&
-      !/^[\w.-]+\/[\w.-]+$/.test(String(raw.updateChecker.repository))
+      updateChecker.repository !== undefined &&
+      !/^[\w.-]+\/[\w.-]+$/.test(String(updateChecker.repository))
     ) {
       issues.push(
         'updateChecker.repository は owner/repo 形式で指定してください'
       );
     }
+    raw.updateChecker = updateChecker;
   }
 
   if (
     isObject(raw.info) &&
     raw.info.eventLoopMonitoringInterval !== undefined
   ) {
-    raw.info.eventLoopMonitoringInterval = positive(
-      raw.info.eventLoopMonitoringInterval,
+    const info = copyForNormalization(raw.info) as NonNullable<
+      RawConfig['info']
+    >;
+    info.eventLoopMonitoringInterval = positive(
+      info.eventLoopMonitoringInterval,
       1000
     );
+    raw.info = info;
   }
 
   if (issues.length > 0) {

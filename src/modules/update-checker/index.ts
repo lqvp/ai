@@ -54,7 +54,13 @@ export default class UpdateCheckerModule extends Module {
 
     try {
       const release = await got(
-        `https://api.github.com/repos/${repo}/releases/latest`
+        `https://api.github.com/repos/${repo}/releases/latest`,
+        {
+          timeout: { request: 10_000 },
+          headers: {
+            'User-Agent': 'ai-update-checker (misskey bot version check)',
+          },
+        }
       ).json<GitHubRelease>();
       const latestVersion = release.tag_name.replace(/^v/, '');
       const currentVersion = pkg._v;

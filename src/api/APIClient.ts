@@ -133,6 +133,7 @@ export default class APIClient {
         headers: {
           'User-Agent': this.getDefaultUserAgent(),
         },
+        retry: { limit: 0 },
         timeout: { request: DEFAULT_API_TIMEOUT_MS },
       })
       .json<T>();

@@ -199,7 +199,11 @@ export default class extends Module {
         // renote対象が消されていたらリマインダー解除
         if (isHttpStatus(err, 400)) {
           this.unsubscribeReply(
-            remind.thing == null && remind.quoteId ? remind.quoteId : remind.id
+            remind.isChat
+              ? remind.userId
+              : remind.thing == null && remind.quoteId
+                ? remind.quoteId
+                : remind.id
           );
           this.reminds.remove(remind);
           return;

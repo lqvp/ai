@@ -45,13 +45,22 @@ export async function cmd(
 ): Promise<string[]> {
   const child = spawn(command, args);
 
+  // spawn 失敗 (コマンドが存在しない等) で Promise が滞留しないよう
+  // 'error' イベントでも解決させる
+  const childFailed = new Promise<never>((_, reject) => {
+    child.on('error', reject);
+  });
+
   const stdoutPromise = streamText(child.stdout);
   const stderrPromise = streamText(child.stderr);
 
   child.stdin.write(stdin);
   child.stdin.end();
 
-  const [exitCode] = (await once(child, 'close')) as [number | null];
+  const [exitCode] = (await Promise.race([
+    once(child, 'close'),
+    childFailed,
+  ])) as [number | null];
   const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
 
   if (exitCode !== 0) {

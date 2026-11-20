@@ -273,7 +273,7 @@ export default class extends Module {
   }
 
   @bindThis
-  private handleEarthquakeData(data: WolfxEarthquakeData): void {
+  private async handleEarthquakeData(data: WolfxEarthquakeData): Promise<void> {
     // データの基本検証
     if (!validateEarthquakeData(data, (m) => this.log(m))) {
       this.log('無効な地震データを受信しました。処理をスキップします。');
@@ -313,7 +313,24 @@ export default class extends Module {
         return;
       }
 
-      this.processNewEarthquake(data);
+      // 楽観ロック: プレースホルダを先に置き、二重投稿を防ぐ
+      this.activeEvents.set(eventId, {
+        eventId,
+        initialPostId: '',
+        lastUpdate: 0,
+        reportCount: 0,
+        isFinal: false,
+        isCancel: false,
+        connectionId: this.connectionId,
+      });
+
+      try {
+        await this.processNewEarthquake(data);
+      } catch (e) {
+        // 投稿失敗時はロックを解除して再試行を許す
+        this.activeEvents.delete(eventId);
+        this.log(`Failed to process new earthquake: ${String(e)}`);
+      }
     } else if (data.isCancel && !existingEvent.isCancel) {
       // キャンセル情報
       this.processCancellation(data, existingEvent);
@@ -364,6 +381,9 @@ export default class extends Module {
         );
       }
     } catch (error) {
+      // 初期投稿に失敗したときはプレースホルダを除去し、
+      // 続報が空 replyId の通常ノートとして投稿されるのを防ぐ
+      this.activeEvents.delete(data.EventID);
       this.log(`メッセージ送信エラー: ${error}`);
     }
   }

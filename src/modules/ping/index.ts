@@ -32,14 +32,18 @@ export default class extends Module {
     const serverDiff = createdAt - Date.now(); // サーバー時刻との差
 
     setTimeout(async () => {
-      await msg.reply(
-        `⏱️ **詳細レイテンシ**\n` +
-          `総時間: ${totalMs.toFixed(2)} ms\n` +
-          `サーバー時刻差: ${serverDiff.toFixed(0)} ms`
-      );
+      try {
+        await msg.reply(
+          `⏱️ **詳細レイテンシ**\n` +
+            `総時間: ${totalMs.toFixed(2)} ms\n` +
+            `サーバー時刻差: ${serverDiff.toFixed(0)} ms`
+        );
 
-      // 詳細レイテンシ情報にもリアクションを付ける
-      await this.ai.reactions.react(msg.id, '⏱️', msg.friend);
+        // 詳細レイテンシ情報にもリアクションを付ける
+        await this.ai.reactions.react(msg.id, '⏱️', msg.friend);
+      } catch (e) {
+        this.log(`Failed to reply ping details: ${String(e)}`);
+      }
     }, 200);
 
     // pingコマンド成功時のリアクション

@@ -299,6 +299,10 @@ class Session {
     if (log.id == null || !this.appliedOps.includes(log.id)) {
       switch (log.operation) {
         case 'put': {
+          // 盤外の pos が渡ると engine 側で壊れるため範囲検証する
+          if (log.pos < 0 || log.pos >= this.engine.board.length) {
+            break;
+          }
           this.engine.putStone(log.pos);
           this.currentTurn++;
 
@@ -519,6 +523,7 @@ class Session {
         const res = await got
           .post(`${config.host}/api/notes/create`, {
             json: body,
+            timeout: { request: 30_000 },
           })
           .json<{ createdNote: Note }>();
 

@@ -223,6 +223,7 @@ export default class extends Module {
     }
 
     const result = await this.chatHandler.handle(current, msg);
+    current.quotedFiles = undefined;
 
     if (result) {
       return { reaction: 'like' };
