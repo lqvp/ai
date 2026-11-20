@@ -7,7 +7,7 @@ import {
   TimerRepository,
 } from '../src/database/repositories.js';
 import type { FriendDoc } from '../src/friend.js';
-import type { User } from '../src/misskey/user.js';
+import type { User } from '../src/misskey/types.js';
 
 function createDb<T extends object>(
   name: string,

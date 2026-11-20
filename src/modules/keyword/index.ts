@@ -1,5 +1,5 @@
 import loki from 'lokijs';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';

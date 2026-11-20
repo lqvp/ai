@@ -1,4 +1,4 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { nowHour } from '@/services/clock.js';
 import { getGeminiApiUrl } from './constants.js';
 import type { AiChat, Base64File } from './types.js';

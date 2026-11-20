@@ -1,5 +1,5 @@
 import type WebSocket from 'ws';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Module from '@/module.js';
 import {

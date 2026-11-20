@@ -1,10 +1,9 @@
 import chalk from 'chalk';
 import 藍 from '@/ai.js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Friend from '@/friend.js';
-import type { Note } from '@/misskey/note.js';
-import type { User } from '@/misskey/user.js';
+import type { Note, User } from '@/misskey/types.js';
 import includes from '@/utils/includes.js';
 import or from '@/utils/or.js';
 import { sleep } from '@/utils/sleep.js';

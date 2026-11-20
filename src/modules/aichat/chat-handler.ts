@@ -1,5 +1,5 @@
 import type 藍 from '@/ai.js';
-import config from '@/config.js';
+import config from '@/config/index.js';
 import type Friend from '@/friend.js';
 import type Message from '@/message.js';
 import serifs from '@/serifs.js';

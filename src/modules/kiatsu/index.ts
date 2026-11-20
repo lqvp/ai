@@ -1,8 +1,8 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import { getJson } from '@/http/client.js';
 import Message from '@/message.js';
-import type { DriveFile } from '@/misskey/drive-file.js';
+import type { DriveFile } from '@/misskey/types.js';
 import Module from '@/module.js';
 import { nowHour } from '@/services/clock.js';
 import { renderKiatsuImage, type WeatherData } from './render-kiatsu.js';

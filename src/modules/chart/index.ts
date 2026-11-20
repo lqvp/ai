@@ -1,8 +1,7 @@
-import config from '@/config.js';
+import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
-import type { DriveFile } from '@/misskey/drive-file.js';
-import type { User } from '@/misskey/user.js';
+import type { DriveFile, User } from '@/misskey/types.js';
 import Module from '@/module.js';
 import serifs from '@/serifs.js';
 import { nowHour, todayKey } from '@/services/clock.js';

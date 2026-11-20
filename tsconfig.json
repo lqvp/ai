@@ -16,8 +16,9 @@
     "strictNullChecks": true,
     "experimentalDecorators": true,
     "noImplicitReturns": true,
-    "noImplicitAny": false,
     "noUnusedLocals": true,
+    // TODO: noImplicitAny を true にすると src/serifs.ts 等で約100件の暗黙 any が出るため false を維持する
+    "noImplicitAny": false,
     "noUnusedParameters": true,
     "esModuleInterop": true,
     "typeRoots": ["./node_modules/@types"],

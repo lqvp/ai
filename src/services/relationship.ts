@@ -1,5 +1,5 @@
 import type APIClient from '@/api/APIClient.js';
-import type { User } from '@/misskey/user.js';
+import type { User } from '@/misskey/types.js';
 
 type RelationResult = { isFollowing?: boolean };
 

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { initConfig, resolveConfig } from '../src/config.js';
+import { initConfig, resolveConfig } from '../src/config/index.js';
 import { genTextByGemini } from '../src/modules/aichat/providers/gemini.js';
 import type { ProviderContext } from '../src/modules/aichat/providers/types.js';
 import type { AiChat } from '../src/modules/aichat/types.js';

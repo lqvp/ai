@@ -1,6 +1,5 @@
 import type APIClient from '@/api/APIClient.js';
-import type { DriveFile } from '@/misskey/drive-file.js';
-import type { Note } from '@/misskey/note.js';
+import type { DriveFile, Note } from '@/misskey/types.js';
 import urlToBase64 from '@/utils/url2base64.js';
 
 export type Base64File = {

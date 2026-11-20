@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import 藍 from '@/ai.js';
 import { bindThis } from '@/decorators.js';
-import type { User } from '@/misskey/user.js';
+import type { User } from '@/misskey/types.js';
 import IModule from '@/module.js';
 import getDate from '@/utils/get-date.js';
 
