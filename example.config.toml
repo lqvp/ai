@@ -50,9 +50,12 @@ weatherAutoNoteHour = 7 # 天気予報を投稿する時間
 provider = "gemini" # デフォルトのAIプロバイダー (例: "gemini", "openai")
 
 [aiProvider.openai]
-apiKey = "token" # OpenAI APIキー
-baseUrl = "https://api.openai.com" # OpenAI APIのベースURL
+apiKey = "token" # OpenAI APIキー（キー不要のエンドポイントでは省略可）
+baseUrl = "https://api.openai.com" # OpenAI APIのベースURL（`.../v1` 付きでも可）
 model = "gpt-4" # 使用するモデル (例: "gpt-4", "gpt-3.5-turbo")
+# temperature = 0.7 # 生成の温度（省略時はAPI側のデフォルト）
+# maxTokens = 2048 # 最大トークン数（省略時はAPI側のデフォルト）
+# timeoutMs = 120000 # リクエストタイムアウト（ミリ秒、省略時120000）
 
 # Gemini AI 統合設定
 [gemini]
@@ -93,6 +96,38 @@ followingOnly = true  # フォローしているユーザーのみ対象
 contextRange = 5  # 選択されたユーザーの投稿履歴から前後それぞれ何件まで文脈として取得するか (前5件+後5件=最大10件) (デフォルト: 5)
 contextUsageCount = 3  # 取得した文脈の中から実際にプロンプトに使用する前後それぞれの件数 (デフォルト: 3)
 enableContext = true  # ユーザー投稿履歴文脈機能を有効にするか (デフォルト: true)
+llmSelection = false  # LLMによる対象ノート選択（OpenAI互換プロバイダーのみ。確率フィルタの代わりにLLMが「話しかける価値がある投稿」を選ぶ）
+
+# Misskey操作ツール - LLMがノート検索・ユーザー検索・リアクションを自律的に使う (OpenAI互換プロバイダーのみ)
+[aichat.misskeyTools]
+enabled = true  # デフォルト: true
+allowReaction = true  # リアクションツールを有効にするか (デフォルト: true)
+
+# エピソード記憶 - 会話終了時（タイムアウト）にLLMで長期記憶を抽出して保存し、以降の会話で回想する
+[aichat.episodeMemory]
+enabled = true  # デフォルト: true
+maxMemoriesPerUser = 50  # ユーザーごとの最大記憶件数。超過分は挿入をスキップ (デフォルト: 50)
+
+# 気分エンジン - 会話やタイムラインから藍の気分を更新し、応答の演技とリアクション選択に反映する
+[aichat.moodEngine]
+enabled = true  # デフォルト: true
+reactionPersonalization = true  # LLMが [[REACTION: ...]] マーカーでリアクション絵文字を選ぶか (デフォルト: true)
+updateIntervalHours = 6  # タイムライン文脈による定期気分更新の間隔（時間） (デフォルト: 6)
+
+# TL日記 - タイムラインを見て藍が主観日記を書き、独り言に反映する
+[aichat.tlDiary]
+enabled = true  # デフォルト: true
+intervalHours = 6  # 日記生成の間隔（時間） (デフォルト: 6)
+retentionHours = 72  # 日記の保持期間（時間）。過ぎたものは注入対象から除外・削除 (デフォルト: 72)
+maxEntries = 20  # 保持する日記の最大件数。超過分は古いものから削除 (デフォルト: 20)
+
+# プロアクティブ発話 - エピソード記憶に基づいて藍からユーザーへフォローアップをDMで送る
+[aichat.proactiveFollowup]
+enabled = true  # デフォルト: true
+intervalHours = 12  # 定期実行の間隔（時間）。初回もこの間隔後に発火 (デフォルト: 12)
+maxPerDay = 1  # 1実行で送るフォローアップの最大数。現状は1で固定 (デフォルト: 1)
+cooldownDays = 7  # 2回連続で無視されたユーザーへのクールダウン日数 (デフォルト: 7)
+userThrottleHours = 72  # 同一ユーザーへの再送スロットル（時間） (デフォルト: 72)
 
 # チャット機能 - リプライしてくれるようになります
 [gemini.chat]

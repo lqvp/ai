@@ -12,11 +12,30 @@ import {
   MINUTES_TO_MS,
   TYPE_GEMINI,
 } from './constants.js';
+import { DiaryRepository } from './diary-repository.js';
+import {
+  createOpenaiLlmCall,
+  extractEpisodes,
+  resolveContradictions,
+} from './episode-extractor.js';
+import type { EpisodeMemory } from './episode-memory.js';
+import { EpisodeMemoryRepository } from './episode-memory-repository.js';
+import { FollowupStateRepository } from './followup-state.js';
 import {
   type AiChatHist,
   ChatHistoryRepository,
 } from './history-repository.js';
+import { buildMoodContextText, updateMood } from './mood-engine.js';
+import {
+  createDefaultMoodState,
+  decayMood,
+  type MoodState,
+} from './mood-state.js';
+import { selectNoteByLlm } from './note-selector.js';
+import { runProactiveFollowUp } from './proactive-followup.js';
+import { buildMemoryRecallContext } from './prompt-builder.js';
 import { TextGenerator } from './text-generator.js';
+import { buildDiaryContext, generateTlDiary } from './tl-diary.js';
 import type { AiChat, Base64File, TimelineContext } from './types.js';
 import {
   collectUrlInfo,
@@ -27,12 +46,22 @@ import {
 export default class extends Module {
   public readonly name = 'aichat';
   private history!: ChatHistoryRepository;
+  private memory!: EpisodeMemoryRepository;
+  private memoryCollection!: import('lokijs').Collection<EpisodeMemory>;
+  private followupState!: FollowupStateRepository;
+  private diary!: DiaryRepository;
   private generator!: TextGenerator;
   private randomTalkProbability: number = DEFAULTS.RANDOMTALK_PROBABILITY;
   private randomTalkIntervalMs: number =
     DEFAULTS.RANDOMTALK_INTERVAL_HOURS * HOURS_TO_MS;
 
   private chatHandler!: ChatHandler;
+
+  /** この生成ラウンドでLLMツールがリアクションを付けたノートID */
+  private toolReactedNoteIds = new Set<string>();
+
+  /** LLMが [[REACTION: ...]] マーカーで選んだリアクション（noteId → 絵文字 or null） */
+  private personalizedReactionChoices = new Map<string, string | null>();
 
   @bindThis
   public install() {
@@ -42,12 +71,56 @@ export default class extends Module {
       })
     );
 
+    // エピソード記憶（会話から抽出した長期記憶）のリポジトリ。
+    // プロアクティブ発話で全ユーザー横断のクエリが必要なため
+    // 生のコレクション参照も保持する（リポジトリは読み取り専用制約のため変更しない）
+    const memoryCollection = this.ai.getCollection<EpisodeMemory>(
+      'aichatMemory',
+      {
+        indices: ['userId', 'createdAt'],
+      }
+    );
+    this.memoryCollection = memoryCollection;
+    this.memory = new EpisodeMemoryRepository(memoryCollection);
+
+    // プロアクティブ発話（フォローアップ）のユーザーごとの状態
+    this.followupState = new FollowupStateRepository(
+      this.ai.getCollection('aichatFollowupState', {
+        indices: ['userId'],
+      })
+    );
+
+    // TL日記（タイムラインを見て藍が書く主観日記）のリポジトリ
+    this.diary = new DiaryRepository(
+      this.ai.getCollection('aichatDiary', {
+        indices: ['createdAt'],
+      })
+    );
+
     this.generator = new TextGenerator({
       log: (message) => this.log(message),
       isMasterUser: (msg) => this.isMasterUser(msg),
       isYoutubeUrl,
       collectUrlInfo: (aiChat) => collectUrlInfo(aiChat, (m) => this.log(m)),
       formatTimelineContext,
+      getMisskeyTools: () => {
+        const toolsConfig = config.aichat?.misskeyTools;
+        if (toolsConfig?.enabled === false) return null;
+        return {
+          api: async (endpoint: string, param?: Record<string, unknown>) => {
+            const result = await this.ai.api(endpoint, param);
+            // ツールによるリアクション成功を記録し、コアの自動リアクションと衝突しないようにする
+            if (
+              endpoint === 'notes/reactions/create' &&
+              typeof param?.noteId === 'string'
+            ) {
+              this.toolReactedNoteIds.add(param.noteId);
+            }
+            return result;
+          },
+          allowReaction: toolsConfig?.allowReaction !== false,
+        };
+      },
     });
 
     this.chatHandler = new ChatHandler({
@@ -61,6 +134,23 @@ export default class extends Module {
       setTimeoutWithPersistence: (delay, data) =>
         this.setTimeoutWithPersistence(delay, data),
       later: (ms, task) => this.later(ms, task),
+      // エピソード記憶の回想コンテキスト（重要度4以上のみ・上限2000字）
+      buildMemoryRecallContext: (userId) =>
+        config.aichat?.episodeMemory?.enabled === false
+          ? ''
+          : buildMemoryRecallContext(this.memory.findByUserId(userId)),
+      // 現在の気分の演技コンテキスト（気分エンジン有効時のみ）
+      buildMoodContext: () =>
+        config.aichat?.moodEngine?.enabled === false
+          ? ''
+          : buildMoodContextText(this.loadMoodState()),
+      // LLMが選んだリアクションの受け取り口（パーソナライズ有効時のみ記録）
+      registerReactionChoice: (noteId, reaction) => {
+        if (config.aichat?.moodEngine?.reactionPersonalization === false) {
+          return;
+        }
+        this.personalizedReactionChoices.set(noteId, reaction);
+      },
     });
 
     // Gemini全体が有効かチェック
@@ -132,6 +222,44 @@ export default class extends Module {
       this.log('Gemini自動ノート投稿確率: probability=' + probability);
     }
 
+    // 気分エンジンの定期更新ジョブ（タイムライン文脈による気分メンテナンス）
+    const moodConfig = config.aichat?.moodEngine;
+    if (moodConfig?.enabled !== false) {
+      const intervalHours = moodConfig?.updateIntervalHours ?? 6;
+      this.every(intervalHours * HOURS_TO_MS, this.periodicMoodUpdate);
+      this.log(`気分エンジンの定期更新を有効化: interval=${intervalHours}h`);
+    }
+
+    // TL日記の定期生成ジョブ。気分更新ジョブ（6h）と同間隔だが
+    // 乱数オフセットを足して同時発火を避ける（APIレートとログの分散）
+    const tlDiaryConfig = config.aichat?.tlDiary;
+    if (tlDiaryConfig?.enabled !== false) {
+      const intervalHours = tlDiaryConfig?.intervalHours ?? 6;
+      const retentionHours = tlDiaryConfig?.retentionHours ?? 72;
+      const maxEntries = tlDiaryConfig?.maxEntries ?? 20;
+      this.every(
+        intervalHours * HOURS_TO_MS + Math.random() * 30 * MINUTES_TO_MS,
+        this.periodicTlDiary
+      );
+      this.log(
+        `TL日記生成を有効化: interval=${intervalHours}h retention=${retentionHours}h maxEntries=${maxEntries}`
+      );
+    }
+
+    // プロアクティブ発話の定期ジョブ（エピソード記憶に基づくフォローアップDM）
+    const followupConfig = config.aichat?.proactiveFollowup;
+    if (followupConfig?.enabled !== false) {
+      const intervalHours = followupConfig?.intervalHours ?? 12;
+      // 乱数オフセットで他ジョブとの同時発火を避ける。初回発火もこの間隔後
+      this.every(
+        intervalHours * HOURS_TO_MS + Math.random() * 30 * MINUTES_TO_MS,
+        this.periodicProactiveFollowUp
+      );
+      this.log(
+        `プロアクティブフォローアップを有効化: interval=${intervalHours}h`
+      );
+    }
+
     return {
       mentionHook: this.mentionHook,
       contextHook: this.contextHook,
@@ -150,7 +278,33 @@ export default class extends Module {
     files: Base64File[],
     msg?: Message
   ): Promise<string | import('./types.js').ApiErrorResponse | null> {
+    // ツールが付けたリアクションの記録は生成ラウンドごとにリセットする
+    this.toolReactedNoteIds.clear();
+    this.personalizedReactionChoices.clear();
     return this.generator.genText(this.getProvider(), aiChat, files, msg);
+  }
+
+  /**
+   * コアの自動リアクション（like）を付けるか。
+   * LLMツールが既にこのノートへリアクション済みなら null を返して抑制する
+   * （Misskeyは1ノート1リアクションで、後付けが前の絵文字を上書きするため）。
+   * パーソナライズドリアクションが有効な場合は LLM の選択で置き換える
+   * （未選択・パース失敗時は既存どおり like にフォールバック）。
+   */
+  @bindThis
+  private coreReactionFor(noteId: string): string | null {
+    if (this.toolReactedNoteIds.has(noteId)) {
+      this.log(
+        'LLMツールが既にリアクション済みのため、コアの自動リアクションをスキップします'
+      );
+      return null;
+    }
+    const choice = this.personalizedReactionChoices.get(noteId);
+    if (choice !== undefined) {
+      // null は LLM が「リアクションしない」と選んだ場合
+      return choice;
+    }
+    return 'like';
   }
 
   @bindThis
@@ -226,7 +380,7 @@ export default class extends Module {
     current.quotedFiles = undefined;
 
     if (result) {
-      return { reaction: 'like' };
+      return { reaction: this.coreReactionFor(msg.id) };
     }
     return false;
   }
@@ -293,7 +447,7 @@ export default class extends Module {
     const result = await this.chatHandler.handle(exist, msg);
 
     if (result) {
-      return { reaction: 'like' };
+      return { reaction: this.coreReactionFor(msg.id) };
     }
     return false;
   }
@@ -379,10 +533,30 @@ export default class extends Module {
     if (interestedNotes == undefined || interestedNotes.length == 0)
       return false;
 
-    if (Math.random() >= this.randomTalkProbability) return false;
+    let choseNote;
 
-    const choseNote =
-      interestedNotes[Math.floor(Math.random() * interestedNotes.length)];
+    // LLM による対象ノート選択（OpenAI互換プロバイダー時のみ有効）
+    const useLlmSelection =
+      config.gemini?.randomTalk?.llmSelection === true &&
+      this.getProvider() === 'openai';
+
+    if (useLlmSelection) {
+      this.log('LLMによるランダムトーク対象の選択を実行します');
+      const selectedIndex = await selectNoteByLlm(
+        interestedNotes.map((note) => ({ id: note.id, text: note.text ?? '' })),
+        (m) => this.log(m)
+      );
+      if (selectedIndex == null) {
+        this.log('LLMは応答すべきノートがないと判断しました');
+        return false;
+      }
+      choseNote = interestedNotes[selectedIndex];
+    } else {
+      if (Math.random() >= this.randomTalkProbability) return false;
+
+      choseNote =
+        interestedNotes[Math.floor(Math.random() * interestedNotes.length)];
+    }
 
     let exist: AiChatHist | null = null;
 
@@ -453,7 +627,7 @@ export default class extends Module {
     const result = await this.chatHandler.handle(current, targetedMessage);
 
     if (result) {
-      return { reaction: 'like' };
+      return { reaction: this.coreReactionFor(choseNote.id) };
     }
 
     return false;
@@ -466,7 +640,111 @@ export default class extends Module {
       getProvider: () => this.getProvider(),
       genText: (aiChat, files) => this.genText(aiChat, files),
       post: (options) => this.ai.post(options),
+      // TL日記を独り言のネタとして渡す（最新2件・合計1000字まで）
+      buildDiaryContext: () =>
+        config.aichat?.tlDiary?.enabled === false
+          ? ''
+          : buildDiaryContext(this.diary.findRecent()),
     });
+  }
+
+  /**
+   * 定期ジョブ: TL日記を生成して保存する（fire-and-forget相当の軽い処理）。
+   * 失敗しても他機能に影響しないよう、エラーはログのみ。
+   */
+  @bindThis
+  private async periodicTlDiary() {
+    if (config.aichat?.tlDiary?.enabled === false) return;
+
+    const tlDiaryConfig = config.aichat?.tlDiary;
+    try {
+      const api = createOpenaiLlmCall((m) => this.log(m));
+      // 気分エンジン有効時のみ現在の気分を文脈として渡す（日記のトーン反映）
+      const moodState =
+        config.aichat?.moodEngine?.enabled === false
+          ? null
+          : this.loadMoodState();
+      const entry = await generateTlDiary(
+        {
+          api: this.ai.api,
+          selfUserId: this.ai.account.id,
+          repository: this.diary,
+          log: (m) => this.log(m),
+        },
+        api,
+        moodState
+      );
+      // 保持期間切れの日記をこのタイミングで掃除する
+      const retentionHours = tlDiaryConfig?.retentionHours ?? 72;
+      this.diary.pruneOldEntries(retentionHours);
+      if (entry == null) {
+        this.log('TL日記: 生成をスキップしました');
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        this.log(`TL日記生成エラー: ${err.name} ${err.message}`);
+      }
+    }
+  }
+
+  /**
+   * 定期ジョブ: エピソード記憶（重要度3以上）をLLMに見せて、
+   * 気遣いのフォローアップを送るべきか判断し、送るならチャットDMで送る。
+   * 失敗しても他機能に影響しないよう、runProactiveFollowUp 内部で例外は吸収される。
+   */
+  @bindThis
+  private async periodicProactiveFollowUp() {
+    if (config.aichat?.proactiveFollowup?.enabled === false) return;
+
+    try {
+      const api = createOpenaiLlmCall((m) => this.log(m));
+      // 全ユーザーの有効な記憶（重要度3以上・アーカイブ/置換済み除外）を渡す
+      const memories = this.memoryCollection
+        .find({ importance: { $gte: 3 } })
+        .filter((m) => m.archivedAt == null && m.supersededBy == null);
+
+      const followupConfig = config.aichat?.proactiveFollowup;
+      const throttleMs =
+        (followupConfig?.userThrottleHours ?? 72) * HOURS_TO_MS;
+      const cooldownMs = (followupConfig?.cooldownDays ?? 7) * 24 * HOURS_TO_MS;
+
+      await runProactiveFollowUp(
+        {
+          memories,
+          api,
+          state: this.followupState,
+          // フレンド（相互フォロー相当）でない相手には送らない
+          isFriend: (userId) => this.ai.lookupFriend(userId) != null,
+          isMasterUser: async (userId) => {
+            try {
+              const user = await this.ai.api<{
+                username?: string;
+                host?: string | null;
+              } | null>('users/show', { userId });
+              return this.ai.relationship.isMaster(user as never);
+            } catch {
+              return false;
+            }
+          },
+          send: (userId, message) =>
+            this.ai.sendMessage(userId, { text: message }),
+          // フォローアップ後に会話が始まっていれば「反応あり」とみなす
+          hasInteractedSince: async (userId, since) => {
+            const exist = this.history.findChat(userId);
+            return exist != null && exist.createdAt > since;
+          },
+          userThrottleMs: throttleMs,
+          cooldownMs,
+        },
+        (m) => this.log(m)
+      );
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        this.log(
+          `プロアクティブフォローアップエラー: ${err.name} ${err.message}`
+        );
+      }
+    }
   }
 
   @bindThis
@@ -489,6 +767,142 @@ export default class extends Module {
 
     if (exist != null) {
       this.history.remove(exist);
+      // 会話の終了地点で長期記憶を抽出する（fire-and-forget）
+      if (exist.history != null) {
+        this.extractAndStoreMemories(exist.history, userId);
+        // 同じ会話履歴テキストを再利用して気分も更新する（一体化フロー）
+        this.updateMoodFromConversation(exist.history);
+      }
     }
+  }
+
+  /** 気分状態を moduleData から読み出す（未初期化なら既定値を作る）。 */
+  private loadMoodState(): MoodState {
+    const data = this.getData() as { mood?: MoodState } | undefined;
+    const state = data?.mood;
+    if (state == null || typeof state.mood !== 'string') {
+      return createDefaultMoodState();
+    }
+    // 読み出し時に前回からの自然減衰を適用する
+    return decayMood(state);
+  }
+
+  private saveMoodState(state: MoodState): void {
+    this.setData({ mood: state });
+  }
+
+  /**
+   * 会話終了時の気分更新（fire-and-forget）。
+   * 失敗しても会話終了処理に影響しないよう、エラーはログのみ。
+   */
+  @bindThis
+  private updateMoodFromConversation(
+    history: { role: string; content: string }[]
+  ): void {
+    if (config.aichat?.moodEngine?.enabled === false) return;
+
+    void (async () => {
+      try {
+        const api = createOpenaiLlmCall((m) => this.log(m));
+        const current = this.loadMoodState();
+        const next = await updateMood(
+          current,
+          {
+            recentConversation: JSON.stringify(history),
+            hour: new Date().getHours(),
+          },
+          api,
+          (m) => this.log(m)
+        );
+        this.saveMoodState(next);
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          this.log(`気分更新エラー: ${err.name} ${err.message}`);
+        }
+      }
+    })();
+  }
+
+  /**
+   * 定期ジョブ: タイムラインの流れを見て気分を更新する。
+   * 会話がない時間帯でも気分が放置されないための補助。
+   */
+  @bindThis
+  private async periodicMoodUpdate() {
+    if (config.aichat?.moodEngine?.enabled === false) return;
+
+    try {
+      const tl = await this.ai.api<Note[]>('notes/timeline', { limit: 30 });
+      const interested = this.filterInterestedNotes(tl ?? []);
+      const timelineSummary = interested
+        .map((note) => note.text ?? '')
+        .join('\n');
+
+      const api = createOpenaiLlmCall((m) => this.log(m));
+      const current = this.loadMoodState();
+      const next = await updateMood(
+        current,
+        { timelineSummary, hour: new Date().getHours() },
+        api,
+        (m) => this.log(m)
+      );
+      this.saveMoodState(next);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        this.log(`定期気分更新エラー: ${err.name} ${err.message}`);
+      }
+    }
+  }
+
+  /**
+   * 会話履歴からエピソード記憶を抽出して保存する。
+   * 抽出LLMの失敗が会話終了処理を壊さないよう、非同期で実行し
+   * エラーはログに記録するだけにする。
+   */
+  @bindThis
+  private extractAndStoreMemories(
+    history: { role: string; content: string }[],
+    userId: string
+  ): void {
+    const episodeConfig = config.aichat?.episodeMemory;
+    if (episodeConfig?.enabled === false) return;
+
+    void (async () => {
+      try {
+        const api = createOpenaiLlmCall((m) => this.log(m));
+        const log = (m: string) => this.log(m);
+        const newMemories = await extractEpisodes(history, userId, api, log);
+        if (newMemories.length === 0) return;
+
+        const existing = this.memory.findByUserId(userId);
+        const supersedeMap = await resolveContradictions(
+          newMemories,
+          existing,
+          api,
+          log
+        );
+
+        const maxMemories = episodeConfig?.maxMemoriesPerUser ?? 50;
+        let insertedCount = 0;
+        for (const [index, memory] of newMemories.entries()) {
+          if (this.memory.countByUserId(userId) >= maxMemories) {
+            this.log(
+              `記憶件数が上限(${maxMemories})に達したため挿入をスキップします`
+            );
+            break;
+          }
+          const inserted = this.memory.insert(memory);
+          insertedCount++;
+          for (const oldId of supersedeMap.get(index) ?? []) {
+            this.memory.markSuperseded(oldId, inserted.id);
+          }
+        }
+        this.log(`エピソード記憶を${insertedCount}件保存しました`);
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          this.log(`エピソード記憶の抽出エラー: ${err.name} ${err.message}`);
+        }
+      }
+    })();
   }
 }

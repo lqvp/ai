@@ -1,6 +1,7 @@
 import config from '@/config/index.js';
 import { nowHour } from '@/services/clock.js';
 import { getGeminiApiUrl } from './constants.js';
+import { resolveOpenaiSettings } from './openai-settings.js';
 import type { AiChat, Base64File } from './types.js';
 
 export type AutoNoteDeps = {
@@ -15,6 +16,8 @@ export type AutoNoteDeps = {
     | null
   >;
   post: (options: { text: string }) => Promise<unknown>;
+  /** TL日記のコンテキスト組み立て（無効時は未指定 or 空文字を返す） */
+  buildDiaryContext?: () => string;
 };
 
 /**
@@ -52,16 +55,14 @@ export async function postAutoNote(deps: AutoNoteDeps): Promise<void> {
   log('Gemini自動ノート投稿開始');
 
   const provider = deps.getProvider();
-  const apiKey =
-    provider === 'openai'
-      ? config.aiProvider?.openai?.apiKey
-      : config.gemini?.apiKey;
-  const apiUrl =
-    provider === 'openai'
-      ? `${config.aiProvider?.openai?.baseUrl || 'https://api.openai.com'}/v1/chat/completions`
-      : getGeminiApiUrl();
+  // OpenAI 互換 API はキー不要のエンドポイントがあり得るため apiKey は任意
+  const openaiSettings = provider === 'openai' ? resolveOpenaiSettings() : null;
+  const apiKey = openaiSettings
+    ? openaiSettings.apiKey || ''
+    : config.gemini?.apiKey || '';
+  const apiUrl = openaiSettings ? openaiSettings.apiUrl : getGeminiApiUrl();
 
-  if (!apiKey || !config.gemini.autoNote.prompt) {
+  if ((!apiKey && !openaiSettings) || !config.gemini.autoNote.prompt) {
     log('APIキーまたは自動ノート用プロンプトが設定されていません。');
     return;
   }
@@ -73,6 +74,15 @@ export async function postAutoNote(deps: AutoNoteDeps): Promise<void> {
     key: apiKey || '',
     fromMention: false,
   };
+
+  // TL日記を独り言の材料として注入する（会話プロンプトには入れない。
+  // 会話の回想はエピソード記憶の担当で、日記は自然発話の側に回す）
+  if (deps.buildDiaryContext != null) {
+    const diaryContext = deps.buildDiaryContext();
+    if (diaryContext !== '') {
+      aiChat.prompt += diaryContext;
+    }
+  }
 
   try {
     const text = await deps.genText(aiChat, []);

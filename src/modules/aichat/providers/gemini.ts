@@ -5,6 +5,7 @@ import {
   buildBaseInstruction,
   buildGeminiContents,
 } from '../prompt-builder.js';
+import { REACTION_MARKER_INSTRUCTION } from '../reaction-marker.js';
 import type {
   AiChat,
   Base64File,
@@ -51,6 +52,15 @@ export async function genTextByGemini(
 
   // ユーザー投稿履歴文脈情報を追加
   systemInstructionText += ctx.formatTimelineContext(aiChat.timelineContext);
+
+  // エピソード記憶の回想コンテキスト（会話相手に関する長期記憶）
+  systemInstructionText += aiChat.memoryRecallContext ?? '';
+
+  // 気分コンテキストとパーソナライズドリアクション指示（メイン生成に同居）
+  systemInstructionText += aiChat.moodContext ?? '';
+  systemInstructionText += aiChat.reactionMarkerEnabled
+    ? REACTION_MARKER_INSTRUCTION
+    : '';
 
   // URL 情報の収集（YouTube とフォールバック用プレビュー）は OpenAI 経路と共通
   const urlInfo = await ctx.collectUrlInfo(aiChat);

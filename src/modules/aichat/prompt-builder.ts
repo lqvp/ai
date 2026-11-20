@@ -1,3 +1,4 @@
+import type { EpisodeMemory } from './episode-memory.js';
 import type {
   AiChat,
   Base64File,
@@ -156,4 +157,32 @@ export function buildOpenaiMessages(
   }
 
   return messages;
+}
+
+/**
+ * エピソード記憶を回想コンテキストとして整形する。
+ * 重要度4以上のみを対象とし、合計文字数は maxChars（デフォルト2000）で打ち切る。
+ * プロンプト肥大化を防ぐための上限であり、記憶自体は消失しない。
+ */
+export function buildMemoryRecallContext(
+  memories: EpisodeMemory[],
+  maxChars = 2000
+): string {
+  const eligible = memories.filter(
+    (memory) =>
+      memory.importance >= 4 &&
+      memory.supersededBy == null &&
+      memory.archivedAt == null
+  );
+  if (eligible.length === 0) return '';
+
+  let text = '\n\n【回想】\nこれまでの会話で知った相手の情報:\n';
+  for (const memory of eligible) {
+    const line = `・${memory.content}\n`;
+    // 上限を超える行はスキップする（continue）。break すると
+    // 長い1件のせいで後続の短い記憶まで失われるため。
+    if (text.length + line.length > maxChars) continue;
+    text += line;
+  }
+  return text;
 }
