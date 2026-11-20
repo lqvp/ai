@@ -24,6 +24,8 @@ export const BASELINE_MOOD_LEVEL = MOOD_LEVELS.indexOf('calm');
 
 /** エネルギー減衰の半減期（24時間）。 */
 export const HALF_LIFE_MS = 24 * 60 * 60 * 1000;
+/** 気分レベルが1ステップ動くのに必要な最小の経過時間 */
+export const MOOD_STEP_INTERVAL_MS = 60 * 60 * 1000;
 
 /** triggers の保持上限。古い気分イベントは頭から捨てる。 */
 export const MAX_TRIGGERS = 5;
@@ -53,6 +55,9 @@ export function decayMood(state: MoodState, now = Date.now()): MoodState {
   // remaining = 残存率。24時間で1/2、48時間で1/4 …となる
   const remaining = Math.exp((-elapsed * Math.LN2) / HALF_LIFE_MS);
 
+  // 気分レベルのシフトは1時間ごとに最大1ステップ。
+  // しきい値なしでは数msの経過でも必ず1段階動いてしまうため。
+  const moodStepBudget = Math.floor(elapsed / MOOD_STEP_INTERVAL_MS);
   const energy = clampEnergy(
     Math.round(BASELINE_ENERGY + (state.energy - BASELINE_ENERGY) * remaining)
   );
@@ -61,8 +66,9 @@ export function decayMood(state: MoodState, now = Date.now()): MoodState {
   // calm に向かう目標レベル。あくまで減衰の到達点であって即時の値ではない
   const targetLevel =
     BASELINE_MOOD_LEVEL + (currentLevel - BASELINE_MOOD_LEVEL) * remaining;
-  // 1ステップだけ目標へ近づける（切り捨てで方向を決める）
-  const step = Math.sign(targetLevel - currentLevel);
+  // 1ステップだけ目標へ近づける（切り捨てで方向を決める）。
+  // 1時間未満の経過ではステップを消費しない
+  const step = moodStepBudget > 0 ? Math.sign(targetLevel - currentLevel) : 0;
   const nextLevel = clampLevel(Math.round(currentLevel + step));
 
   return {

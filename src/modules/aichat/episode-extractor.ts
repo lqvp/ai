@@ -127,7 +127,9 @@ function validateExtractedMemory(item: unknown): ExtractedMemory | null {
   }
   if (
     (kind !== 'fact' && kind !== 'episode' && kind !== 'preference') ||
+    typeof content !== 'string' ||
     content.length === 0 ||
+    typeof importance !== 'number' ||
     !Number.isInteger(importance) ||
     importance < 1 ||
     importance > 5 ||

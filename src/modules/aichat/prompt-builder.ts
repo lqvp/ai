@@ -177,12 +177,17 @@ export function buildMemoryRecallContext(
   if (eligible.length === 0) return '';
 
   let text = '\n\n【回想】\nこれまでの会話で知った相手の情報:\n';
+  let addedLines = 0;
   for (const memory of eligible) {
     const line = `・${memory.content}\n`;
     // 上限を超える行はスキップする（continue）。break すると
     // 長い1件のせいで後続の短い記憶まで失われるため。
     if (text.length + line.length > maxChars) continue;
     text += line;
+    addedLines++;
   }
+  // 全行が上限超過で本文が1行も追加されなければ、見出しだけの
+  // 意味のないテキストになるため回想なしとする
+  if (addedLines === 0) return '';
   return text;
 }

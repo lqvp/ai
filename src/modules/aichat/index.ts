@@ -59,6 +59,8 @@ export default class extends Module {
 
   /** この生成ラウンドでLLMツールがリアクションを付けたノートIDと記録時刻 */
   private toolReactedNoteIds = new Map<string, number>();
+  /** 記憶抽出処理を実行中のユーザーID（並走防止） */
+  private memoryExtractionInFlight = new Set<string>();
 
   /** LLMが [[REACTION: ...]] マーカーで選んだリアクション（noteId → 絵文字 or null） */
   private personalizedReactionChoices = new Map<
@@ -149,6 +151,10 @@ export default class extends Module {
           : buildMoodContextText(this.loadMoodState()),
       // LLMが選んだリアクションの受け取り口（パーソナライズ有効時のみ記録）
       registerReactionChoice: (noteId, reaction) => {
+        // 気分エンジン全体が無効なら個別設定に関係なく記録しない
+        if (config.aichat?.moodEngine?.enabled === false) {
+          return;
+        }
         if (config.aichat?.moodEngine?.reactionPersonalization === false) {
           return;
         }
@@ -654,10 +660,15 @@ export default class extends Module {
       genText: (aiChat, files) => this.genText(aiChat, files),
       post: (options) => this.ai.post(options),
       // TL日記を独り言のネタとして渡す（最新2件・合計1000字まで）
+      // 保持期間は設定値を反映する（既定72時間）
       buildDiaryContext: () =>
         config.aichat?.tlDiary?.enabled === false
           ? ''
-          : buildDiaryContext(this.diary.findRecent()),
+          : buildDiaryContext(
+              this.diary.findRecent({
+                retentionHours: config.aichat?.tlDiary?.retentionHours ?? 72,
+              })
+            ),
     });
   }
 
@@ -691,6 +702,8 @@ export default class extends Module {
       // 保持期間切れの日記をこのタイミングで掃除する
       const retentionHours = tlDiaryConfig?.retentionHours ?? 72;
       this.diary.pruneOldEntries(retentionHours);
+      // 古い低重要度のエピソード記憶も同じ周期でアーカイブする
+      this.memory.pruneOldMemories();
       if (entry == null) {
         this.log('TL日記: 生成をスキップしました');
       }
@@ -802,7 +815,14 @@ export default class extends Module {
   }
 
   private saveMoodState(state: MoodState): void {
-    this.setData({ mood: state });
+    // LLM待ちの間に別の更新が保存されていると変化量制限を突破しうるため、
+    // 保存直前の最新状態と比較して energy を再クランプする
+    const latest = this.loadMoodState();
+    const clampedEnergy = Math.max(
+      latest.energy - 20,
+      Math.min(latest.energy + 20, state.energy)
+    );
+    this.setData({ mood: { ...state, energy: clampedEnergy } });
   }
 
   /**
@@ -881,6 +901,11 @@ export default class extends Module {
     const episodeConfig = config.aichat?.episodeMemory;
     if (episodeConfig?.enabled === false) return;
 
+    // 同一ユーザーの抽出が並走すると、両方が同じ既存記憶を読んで
+    // 矛盾解消を壊すため、処理中のユーザーはスキップする
+    if (this.memoryExtractionInFlight.has(userId)) return;
+    this.memoryExtractionInFlight.add(userId);
+
     void (async () => {
       try {
         const api = createAuxLlmCall((m) => this.log(m));
@@ -916,6 +941,8 @@ export default class extends Module {
         if (err instanceof Error) {
           this.log(`エピソード記憶の抽出エラー: ${err.name} ${err.message}`);
         }
+      } finally {
+        this.memoryExtractionInFlight.delete(userId);
       }
     })();
   }

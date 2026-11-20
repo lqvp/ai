@@ -232,7 +232,22 @@ export async function executeMisskeyToolCall(
     case MISSKEY_TOOL_SHOW_NOTE: {
       const noteId = requireString(args, 'noteId');
       if (!noteId.ok) return `Error: ${name} ${noteId.error}`;
-      return await callApi(ctx, 'notes/show', { noteId: noteId.value });
+      // 直接メンション限定ノートはボットの視点でも本来見えない可能性が
+      // 高いため、ツール結果として返さない（プライバシー保護）
+      try {
+        const note = await ctx.api('notes/show', { noteId: noteId.value });
+        if (
+          note != null &&
+          typeof note === 'object' &&
+          (note as { visibility?: string }).visibility === 'specified'
+        ) {
+          return 'Error: このノートはダイレクトノートのため参照できません。';
+        }
+        return stringifyResult(note);
+      } catch (err: unknown) {
+        const detail = err instanceof Error ? err.message : String(err);
+        return `Error: notes/show failed: ${detail}`;
+      }
     }
     case MISSKEY_TOOL_SEARCH_USERS: {
       const query = requireString(args, 'query');

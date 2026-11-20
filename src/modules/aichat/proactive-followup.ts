@@ -65,27 +65,45 @@ export async function decideFollowUps(
   );
   if (eligible.length === 0) return [];
 
-  let text: string;
-  try {
-    text = await api(
-      DECIDE_SYSTEM_PROMPT,
-      JSON.stringify(
-        eligible.map((memory) => ({
-          userId: memory.userId,
-          content: memory.content,
-          importance: memory.importance,
-          createdAt: memory.createdAt,
-        }))
-      )
-    );
-  } catch (err: unknown) {
-    if (err instanceof Error) {
-      log(`フォローアップ判断LLM呼び出しエラー: ${err.name} ${err.message}`);
-    }
-    return [];
+  // ユーザーごとにLLM入力を分離する。複数ユーザーの記憶を1つの入力に
+  // 混ぜると、LLMがAの記憶をBへの本文に使う漏えいが起きうるため。
+  const byUser = new Map<string, EpisodeMemory[]>();
+  for (const memory of eligible) {
+    const list = byUser.get(memory.userId) ?? [];
+    list.push(memory);
+    byUser.set(memory.userId, list);
   }
 
-  return parseFollowUps(text, log);
+  const candidates: FollowUpCandidate[] = [];
+  for (const [userId, userMemories] of byUser) {
+    let text: string;
+    try {
+      text = await api(
+        DECIDE_SYSTEM_PROMPT,
+        JSON.stringify(
+          userMemories.map((memory) => ({
+            userId: memory.userId,
+            content: memory.content,
+            importance: memory.importance,
+            createdAt: memory.createdAt,
+          }))
+        )
+      );
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        log(
+          `フォローアップ判断LLM呼び出しエラー(${userId}): ${err.name} ${err.message}`
+        );
+      }
+      continue;
+    }
+
+    // 送信先は入力側のユーザーに固定する（LLMの出力userIdは信用しない）
+    for (const candidate of parseFollowUps(text, log)) {
+      if (candidate.userId === userId) candidates.push(candidate);
+    }
+  }
+  return candidates;
 }
 
 /** LLM応答テキストから候補を取り出す。JSON部分を抽出して検証する。 */

@@ -140,7 +140,9 @@ export class ChatHandler {
       // 現在の気分の演技コンテキスト（気分エンジン有効時のみ）
       moodContext: this.deps.buildMoodContext?.(),
       // パーソナライズドリアクション: メイン生成にマーカー出力を同居させる
+      // （気分エンジン全体が無効なら個別設定に関係なくオフ）
       reactionMarkerEnabled:
+        config.aichat?.moodEngine?.enabled !== false &&
         config.aichat?.moodEngine?.reactionPersonalization !== false,
     };
 
@@ -187,6 +189,15 @@ export class ChatHandler {
     // マーカーが無い応答は「未選択」として扱い、既定の like へフォールバックさせる
     if (markerFound) {
       this.deps.registerReactionChoice?.(msg.id, reaction);
+    }
+    // マーカーだけで本文が空になった場合、空ノートを投稿しないため
+    // エラー応答として扱う
+    if (responseText.trim() === '') {
+      log('応答本文が空のため、エラー応答として扱います');
+      msg.reply(
+        serifs.aichat.error('generation', null, 'empty response after marker')
+      );
+      return false;
     }
 
     // friendName が含まれている場合、plain を適用したものに置換
