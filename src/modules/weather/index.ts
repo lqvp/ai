@@ -69,7 +69,7 @@ export default class WeatherModule extends Module {
 
       const today = forecasts[0];
       const text = formatWeatherToMfm(
-        { place: location.name, forecasts },
+        location.name,
         today,
         serifs.weather.autoNote[today.weather.serifKey]
       );
@@ -114,11 +114,7 @@ export default class WeatherModule extends Module {
       return { reaction: '❌' };
     }
 
-    const text = formatWeatherToMfm(
-      { place: location.name, forecasts },
-      forecast,
-      ''
-    );
+    const text = formatWeatherToMfm(location.name, forecast, '');
     await msg.reply(text);
     return { reaction: forecast.weather.emoji };
   }

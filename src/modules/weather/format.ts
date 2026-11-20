@@ -1,5 +1,6 @@
+import serifs from '@/serifs.js';
 import * as mfm from '@/utils/mfm.js';
-import type { WeatherForecast, WeatherInfo } from './types.js';
+import type { RainChance, WeatherForecast } from './types.js';
 
 const CLOSING_MESSAGES = [
   '今日も素敵な一日になりますように♪ ✨',
@@ -26,7 +27,7 @@ function formatTempBlock(forecast: WeatherForecast): string {
 最低: ${mfm.color(min, '4169e1')}`;
 }
 
-function formatRainBlock(rain: NonNullable<WeatherForecast['rain']>): string {
+function formatRainBlock(rain: RainChance): string {
   const rows: string[] = [];
   for (const [label, value] of [
     ['0-6時', rain.T00_06],
@@ -34,23 +35,24 @@ function formatRainBlock(rain: NonNullable<WeatherForecast['rain']>): string {
     ['12-18時', rain.T12_18],
     ['18-24時', rain.T18_24],
   ] as const) {
-    rows.push(
-      `${label}:${mfm.color(`${value}%`, getRainProbabilityColor(value))}`
-    );
+    // データがない区間は 0% と区別するため「-」で表示する
+    const text = value === null ? '-' : `${value}%`;
+    const color = value === null ? '777777' : getRainProbabilityColor(value);
+    rows.push(`${label}:${mfm.color(text, color)}`);
   }
   return `☔ ${mfm.bold('降水確率')}
 ${rows.join('\n')}`;
 }
 
 /**
- * 天気情報を Misskey の MFM 文字列へ整形する。
+ * 天気予報を Misskey の MFM 文字列へ整形する。
  */
 export function formatWeatherToMfm(
-  info: WeatherInfo,
+  place: string,
   forecast: WeatherForecast,
   greeting: string
 ): string {
-  const title = `${info.place}の${forecast.dateLabel}の天気`;
+  const title = `${place}の${forecast.dateLabel}の天気`;
 
   let body = `<center>
 ${mfm.bold(title)} ${forecast.weather.emoji}
@@ -61,6 +63,10 @@ ${forecast.dateLabel}の天気は「${mfm.bold(forecast.weather.description)}」
 
   if (forecast.tempMax !== null || forecast.tempMin !== null) {
     body += `${formatTempBlock(forecast)}
+
+`;
+  } else {
+    body += `${serifs.weather.noTemp}
 
 `;
   }

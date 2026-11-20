@@ -49,12 +49,12 @@ export const UNKNOWN_WMO_CODE: WmoCodeInfo = {
   serifKey: 'other',
 };
 
-/** 6時間ごとの降水確率（%）。キーは時刻帯。 */
+/** 6時間ごとの降水確率（%）。キーは時刻帯。データがない区間は null。 */
 export interface RainChance {
-  T00_06: number;
-  T06_12: number;
-  T12_18: number;
-  T18_24: number;
+  T00_06: number | null;
+  T06_12: number | null;
+  T12_18: number | null;
+  T18_24: number | null;
 }
 
 export interface WeatherForecast {
@@ -65,11 +65,6 @@ export interface WeatherForecast {
   tempMax: number | null;
   tempMin: number | null;
   rain: RainChance | null;
-}
-
-export interface WeatherInfo {
-  place: string;
-  forecasts: WeatherForecast[];
 }
 
 export interface GeocodingResult {
