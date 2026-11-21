@@ -1,4 +1,5 @@
 import type Message from '@/message.js';
+import type { MisskeyToolContext } from '../misskey-tools.js';
 import type { AiChat, TimelineContext } from '../types.js';
 
 /**
@@ -15,4 +16,6 @@ export type ProviderContext = {
     fallbackUrlInfo: string;
   }>;
   formatTimelineContext: (context?: TimelineContext | null) => string;
+  /** OpenAI 互換経路で Misskey 操作ツールを使う場合にコンテキストを返す。 */
+  getMisskeyTools?: () => MisskeyToolContext | null;
 };

@@ -1,19 +1,22 @@
 import got from 'got';
 import config from '@/config/index.js';
 import type Message from '@/message.js';
-import { EXA_TOOL_SEARCH, JINA_TOOL_READ } from '../constants.js';
+import {
+  type OpenaiSettings,
+  resolveOpenaiSettings,
+} from '../openai-settings.js';
 import {
   buildBaseInstruction,
   buildOpenaiMessages,
 } from '../prompt-builder.js';
+import { REACTION_MARKER_INSTRUCTION } from '../reaction-marker.js';
 import { parseToolCallsFromContent } from '../tool-call-parser.js';
-import { executeToolCall } from '../tools.js';
+import { buildOpenaiTools, executeToolCall } from '../tools.js';
 import type {
   AiChat,
   Base64File,
   GeminiApiResponse,
   OpenaiAssistantMessage,
-  OpenaiFunctionTool,
   OpenaiMessage,
   OpenaiOptions,
   OpenaiToolCall,
@@ -30,6 +33,50 @@ type OpenaiChatCompletion = {
   }[];
 };
 
+/** 設定から解決した共通ヘッダとタイムアウトで chat/completions を呼ぶ。 */
+async function postChatCompletion(
+  settings: OpenaiSettings,
+  body: OpenaiOptions
+): Promise<OpenaiChatCompletion> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  // キー不要のエンドポイント（vLLM など）では Authorization を送らない
+  if (settings.apiKey) {
+    headers.Authorization = `Bearer ${settings.apiKey}`;
+  }
+
+  return got
+    .post(settings.apiUrl, {
+      headers,
+      json: body,
+      responseType: 'json',
+      timeout: { request: settings.timeoutMs },
+    })
+    .json<OpenaiChatCompletion>();
+}
+
+/** got のエラーから HTTP ステータスとメッセージを取り出す。 */
+function toHttpError(err: unknown): {
+  errorCode: number | null;
+  errorMessage: string | null;
+} {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const httpError = err as {
+      response?: { statusCode?: number; statusMessage?: string };
+      message?: string;
+    };
+    if (typeof httpError.response?.statusCode === 'number') {
+      return {
+        errorCode: httpError.response.statusCode,
+        errorMessage:
+          httpError.response?.statusMessage || httpError.message || null,
+      };
+    }
+  }
+  return { errorCode: null, errorMessage: null };
+}
+
 export async function genTextByOpenai(
   aiChat: AiChat,
   files: Base64File[],
@@ -37,6 +84,8 @@ export async function genTextByOpenai(
   ctx: ProviderContext
 ): Promise<GeminiApiResponse> {
   ctx.log('Generate Text By OpenAI Compatible API...');
+
+  const settings = resolveOpenaiSettings();
 
   let systemInstructionText = buildBaseInstruction(aiChat, {
     isMaster: msg != null && ctx.isMasterUser(msg),
@@ -52,148 +101,121 @@ export async function genTextByOpenai(
   // ユーザー投稿履歴文脈情報を追加
   systemInstructionText += ctx.formatTimelineContext(aiChat.timelineContext);
 
+  // エピソード記憶の回想コンテキスト（会話相手に関する長期記憶）
+  systemInstructionText += aiChat.memoryRecallContext ?? '';
+
+  // 気分コンテキストとパーソナライズドリアクション指示（メイン生成に同居）
+  systemInstructionText += aiChat.moodContext ?? '';
+  systemInstructionText += aiChat.reactionMarkerEnabled
+    ? REACTION_MARKER_INSTRUCTION
+    : '';
+
   const messages: OpenaiMessage[] = buildOpenaiMessages(
     aiChat,
     files,
     systemInstructionText
   );
 
-  // OpenAI APIリクエストを構築
-  const model = config.aiProvider?.openai?.model || 'gpt-4o-mini';
-  const baseUrl =
-    config.aiProvider?.openai?.baseUrl || 'https://api.openai.com';
-  const apiUrl = `${baseUrl}/v1/chat/completions`;
-  const apiKey = config.aiProvider?.openai?.apiKey;
-
-  if (!apiKey) {
-    ctx.log('OpenAI API key is not configured');
-    return {
-      error: true,
-      errorCode: null,
-      errorMessage: 'OpenAI API key is not configured',
-    };
-  }
-
-  // Exa / Jina ツールの構築
+  // Exa / Jina / Misskey ツールの構築
   const exaConfig = config.exa;
-  const exaEnabled = exaConfig?.enabled === true;
-  const exaApiKey = exaConfig?.apiKey;
-  const exaSearchEnabled = exaConfig?.search?.enabled !== false;
   const jinaConfig = config.jina;
-  const jinaEnabled = jinaConfig?.enabled === true;
-  const readEnabled = jinaConfig?.read?.enabled !== false;
-  const includeExaSearchTool = exaEnabled && exaSearchEnabled && !!exaApiKey;
-  const includeReadTool = jinaEnabled && readEnabled;
-  const includeAnyTool = includeExaSearchTool || includeReadTool;
+  const misskeyTools = ctx.getMisskeyTools?.() ?? null;
+  const toolRuntime = buildOpenaiTools(exaConfig, jinaConfig, misskeyTools);
 
-  if (exaEnabled || jinaEnabled) {
+  if (exaConfig?.enabled || jinaConfig?.enabled) {
     ctx.log(
-      `OpenAI互換プロバイダーツール設定: exa_search=${includeExaSearchTool}, jina_read=${includeReadTool}`
+      `OpenAI互換プロバイダーツール設定: exa_search=${toolRuntime.tools.some((t) => t.function.name === 'exa_search')}, jina_read=${toolRuntime.tools.some((t) => t.function.name === 'jina_read')}`
     );
   }
 
-  const tools: OpenaiFunctionTool[] = [];
-  if (includeExaSearchTool) {
-    tools.push({
-      type: 'function',
-      function: {
-        name: EXA_TOOL_SEARCH,
-        description:
-          'Exa でWeb検索を行い、上位の結果（タイトル/URL/ハイライト本文）を取得します。最新の話題や外部情報を参照したいときに使ってください。',
-        parameters: {
-          type: 'object',
-          properties: {
-            query: {
-              type: 'string',
-              description: '検索クエリ（自然文）',
-            },
-          },
-          required: ['query'],
-        },
-      },
-    });
-  }
-  if (includeReadTool) {
-    tools.push({
-      type: 'function',
-      function: {
-        name: JINA_TOOL_READ,
-        description:
-          '指定したURLの本文をJina AI Readerで抽出します。記事やドキュメント本文を読みたいときに使ってください。',
-        parameters: {
-          type: 'object',
-          properties: {
-            url: {
-              type: 'string',
-              description: '読み取り対象のhttp/https URL',
-            },
-          },
-          required: ['url'],
-        },
-      },
-    });
-  }
+  const maxRounds = toolRuntime.maxRounds;
 
-  const maxRoundsRaw =
-    exaConfig?.tool?.maxRounds ?? jinaConfig?.tool?.maxRounds;
-  const parsedMaxRounds =
-    typeof maxRoundsRaw === 'number' && !Number.isNaN(maxRoundsRaw)
-      ? Math.floor(maxRoundsRaw)
-      : 3;
-  const maxRounds = Math.max(1, parsedMaxRounds);
+  /** 生成パラメータ（temperature / max_tokens は設定があれば付与する）。 */
+  const baseOptions: OpenaiOptions = {
+    model: settings.model,
+    messages,
+    ...(settings.temperature !== undefined
+      ? { temperature: settings.temperature }
+      : {}),
+    ...(settings.maxTokens !== undefined
+      ? { max_tokens: settings.maxTokens }
+      : {}),
+  };
 
   let responseText = '';
 
+  /**
+   * ツール呼び出しを禁止して最終アシスタント本文を取得する。
+   * 空で返ってきた場合は文章での応答を明示して1回だけ再試行する。
+   */
+  const requestFinalText = async (): Promise<string> => {
+    const fetchText = async (extraUserMessage?: string): Promise<string> => {
+      // 共有している messages は汚さない（再試行時のみ末尾に指示を足す）
+      const finalMessages = extraUserMessage
+        ? ([
+            ...messages,
+            { role: 'user', content: extraUserMessage },
+          ] as OpenaiMessage[])
+        : messages;
+      const res = await postChatCompletion(settings, {
+        ...baseOptions,
+        messages: finalMessages,
+        ...(toolRuntime.hasAnyTool
+          ? {
+              tools: toolRuntime.tools,
+              tool_choice: 'none' as const,
+            }
+          : {}),
+      });
+      const finalMessage = res.choices?.[0]?.message;
+      return typeof finalMessage?.content === 'string'
+        ? finalMessage.content
+        : '';
+    };
+
+    try {
+      let text = await fetchText();
+      if (text === '') {
+        ctx.log('最終応答が空のため、文章での応答を明示して再試行します');
+        text = await fetchText(
+          '（システム通知: このリクエストではツール呼び出しを使用できません。必ず通常の文章で応答してください。）'
+        );
+      }
+      return text;
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        ctx.log(`最終応答取得エラー: ${err.name} ${err.message}`);
+      }
+      return '';
+    }
+  };
+
   for (let round = 0; round < maxRounds; round++) {
     const isLastRound = round === maxRounds - 1;
-    const sendTools = includeAnyTool && !isLastRound;
 
     const openaiOptions: OpenaiOptions = {
-      model,
+      ...baseOptions,
       messages,
     };
-    if (sendTools) {
-      openaiOptions.tools = tools;
+    if (toolRuntime.hasAnyTool) {
+      openaiOptions.tools = toolRuntime.tools;
       openaiOptions.tool_choice = 'auto';
     }
 
     let resData: OpenaiChatCompletion;
     try {
-      resData = await got
-        .post(apiUrl, {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          json: openaiOptions,
-          responseType: 'json',
-        })
-        .json<OpenaiChatCompletion>();
+      resData = await postChatCompletion(settings, openaiOptions);
 
       ctx.log(
         `OpenAI互換APIレスポンス(round=${round}): ${JSON.stringify(resData).slice(0, 1000)}`
       );
     } catch (err: unknown) {
       ctx.log('Error By Call OpenAI Compatible API');
-      let errorCode: number | null = null;
-      let errorMessage: string | null = null;
-
-      if (err && typeof err === 'object' && 'response' in err) {
-        const httpError = err as {
-          response?: { statusCode?: number; statusMessage?: string };
-          message?: string;
-        };
-        if (typeof httpError.response?.statusCode === 'number') {
-          errorCode = httpError.response.statusCode;
-        }
-        errorMessage =
-          httpError.response?.statusMessage || httpError.message || null;
-      }
-
       if (err instanceof Error) {
         ctx.log(`${err.name}\n${err.message}\n${err.stack}`);
       }
 
+      const { errorCode, errorMessage } = toHttpError(err);
       return { error: true, errorCode, errorMessage };
     }
 
@@ -241,7 +263,13 @@ export async function genTextByOpenai(
     messages.push(assistantEntry);
 
     if (effectiveToolCalls.length === 0) {
-      responseText = contentText;
+      if (contentText !== '') {
+        responseText = contentText;
+        break;
+      }
+      // 本文が空のまま終了しそうな場合は、ツール禁止で最終応答を取得する
+      ctx.log('応答本文が空のため、ツール呼び出しを禁止して再取得します');
+      responseText = await requestFinalText();
       break;
     }
 
@@ -254,7 +282,12 @@ export async function genTextByOpenai(
 
     const results = await Promise.all(
       effectiveToolCalls.map(async (call) => {
-        const toolResult = await executeToolCall(call, exaConfig, jinaConfig);
+        const toolResult = await executeToolCall(
+          call,
+          exaConfig,
+          jinaConfig,
+          misskeyTools
+        );
         ctx.log(
           `ツール結果(${call.function.name}, id=${call.id}): ${toolResult.slice(0, 200)}`
         );
@@ -270,36 +303,10 @@ export async function genTextByOpenai(
       });
     }
 
-    // 最終ラウンドの場合はツールを送らず、最終アシスタント本文を強制
+    // 最終ラウンドの場合はツール結果を反映した上で本文を強制
     if (isLastRound) {
       ctx.log('最終ラウンドに到達したため、ツールなしで最終応答を取得します');
-      try {
-        const finalRes = await got
-          .post(apiUrl, {
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            json: {
-              model,
-              messages,
-              ...(includeAnyTool
-                ? { tools, tool_choice: 'none' as const }
-                : {}),
-            },
-            responseType: 'json',
-          })
-          .json<OpenaiChatCompletion>();
-        const finalMessage = finalRes.choices?.[0]?.message;
-        const finalContent =
-          typeof finalMessage?.content === 'string' ? finalMessage.content : '';
-        responseText = finalContent;
-      } catch (err: unknown) {
-        if (err instanceof Error) {
-          ctx.log(`最終ラウンド取得エラー: ${err.name} ${err.message}`);
-        }
-        responseText = contentText;
-      }
+      responseText = await requestFinalText();
       break;
     }
   }

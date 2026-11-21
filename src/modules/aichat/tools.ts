@@ -2,18 +2,126 @@ import type { Config } from '@/config/index.js';
 import { exaSearch } from '@/utils/exa.js';
 import { jinaRead } from '@/utils/jina.js';
 import { EXA_TOOL_SEARCH, JINA_TOOL_READ } from './constants.js';
-import type { OpenaiToolCall } from './types.js';
+import {
+  buildMisskeyToolSpecs,
+  executeMisskeyToolCall,
+  MISSKEY_TOOL_CREATE_REACTION,
+  MISSKEY_TOOL_SEARCH_NOTES,
+  MISSKEY_TOOL_SEARCH_USERS,
+  MISSKEY_TOOL_SHOW_NOTE,
+  MISSKEY_TOOL_USER_NOTES,
+  type MisskeyToolContext,
+} from './misskey-tools.js';
+import type { OpenaiFunctionTool, OpenaiToolCall } from './types.js';
+
+/** OpenAI 互換 API に送るツール定義と実行条件。 */
+export type OpenaiToolRuntime = {
+  tools: OpenaiFunctionTool[];
+  hasAnyTool: boolean;
+  maxRounds: number;
+};
+
+/**
+ * Exa / Jina / Misskey の設定から OpenAI 互換 API 用のツール定義を組み立てる。
+ * ツールが1つも有効でない場合は `tools` が空配列になる。
+ */
+export function buildOpenaiTools(
+  exaConfig: Config['exa'],
+  jinaConfig: Config['jina'],
+  misskeyTools?: MisskeyToolContext | null
+): OpenaiToolRuntime {
+  const exaEnabled = exaConfig?.enabled === true;
+  const exaApiKey = exaConfig?.apiKey;
+  const exaSearchEnabled = exaConfig?.search?.enabled !== false;
+  const jinaEnabled = jinaConfig?.enabled === true;
+  const readEnabled = jinaConfig?.read?.enabled !== false;
+  const includeExaSearchTool = exaEnabled && exaSearchEnabled && !!exaApiKey;
+  const includeReadTool = jinaEnabled && readEnabled;
+
+  const tools: OpenaiFunctionTool[] = [];
+  if (includeExaSearchTool) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: EXA_TOOL_SEARCH,
+        description:
+          'Exa でWeb検索を行い、上位の結果（タイトル/URL/ハイライト本文）を取得します。最新の話題や外部情報を参照したいときに使ってください。',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: '検索クエリ（自然文）',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    });
+  }
+  if (includeReadTool) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: JINA_TOOL_READ,
+        description:
+          '指定したURLの本文をJina AI Readerで抽出します。記事やドキュメント本文を読みたいときに使ってください。',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: '読み取り対象のhttp/https URL',
+            },
+          },
+          required: ['url'],
+        },
+      },
+    });
+  }
+
+  // Misskey 操作ツール（読み取り系 + リアクション）
+  if (misskeyTools) {
+    tools.push(...buildMisskeyToolSpecs(misskeyTools));
+  }
+
+  const maxRoundsRaw =
+    exaConfig?.tool?.maxRounds ?? jinaConfig?.tool?.maxRounds;
+  const parsedMaxRounds =
+    typeof maxRoundsRaw === 'number' && !Number.isNaN(maxRoundsRaw)
+      ? Math.floor(maxRoundsRaw)
+      : 3;
+
+  return {
+    tools,
+    hasAnyTool: tools.length > 0,
+    maxRounds: Math.max(1, parsedMaxRounds),
+  };
+}
 
 export async function executeToolCall(
   call: OpenaiToolCall,
   exaConfig: Config['exa'],
-  jinaConfig: Config['jina']
+  jinaConfig: Config['jina'],
+  misskeyTools?: MisskeyToolContext | null
 ): Promise<string> {
   if (call.function.name === EXA_TOOL_SEARCH) {
     return executeExaSearchCall(call, exaConfig);
   }
   if (call.function.name === JINA_TOOL_READ) {
     return executeJinaReadCall(call, jinaConfig?.apiKey, jinaConfig);
+  }
+  // 無効化されたリアクションツールへの呼び出しもルーティングできるよう
+  // 定義からではなく静的な名前一覧で判定する
+  const misskeyToolNames = [
+    MISSKEY_TOOL_SEARCH_NOTES,
+    MISSKEY_TOOL_SHOW_NOTE,
+    MISSKEY_TOOL_SEARCH_USERS,
+    MISSKEY_TOOL_USER_NOTES,
+    MISSKEY_TOOL_CREATE_REACTION,
+  ];
+  if (misskeyTools && misskeyToolNames.includes(call.function.name)) {
+    return executeMisskeyToolCall(call.function.name, call, misskeyTools);
   }
   return `Error: unknown tool "${call.function.name}".`;
 }

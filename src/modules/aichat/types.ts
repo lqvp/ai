@@ -31,6 +31,12 @@ export type AiChat = {
   grounding?: boolean;
   history?: ChatHistoryItem[];
   timelineContext?: TimelineContext;
+  /** エピソード記憶の回想コンテキスト（chat-handler で組み立てる） */
+  memoryRecallContext?: string;
+  /** 現在の気分を演技として反映するためのコンテキスト（chat-handler で組み立てる） */
+  moodContext?: string;
+  /** パーソナライズドリアクションのマーカー出力を要求するか */
+  reactionMarkerEnabled?: boolean;
 };
 
 export type GeminiPart = {

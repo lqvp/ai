@@ -15,6 +15,8 @@ import type {
   AiChatHist,
   ChatHistoryRepository,
 } from './history-repository.js';
+import { resolveOpenaiSettings } from './openai-settings.js';
+import { stripReactionMarker } from './reaction-marker.js';
 import type { AiChat, Base64File } from './types.js';
 import {
   extractUrls,
@@ -41,6 +43,12 @@ export type ChatHandlerDeps = {
   subscribeReply: (postId: string, isChat: boolean, userId: string) => void;
   setTimeoutWithPersistence: (delay: number, data: unknown) => void;
   later: (ms: number, task: () => unknown) => void;
+  /** エピソード記憶の回想コンテキストを組み立てる（無効時は未指定） */
+  buildMemoryRecallContext?: (userId: string) => string;
+  /** 現在の気分を演技コンテキストとして組み立てる（無効時は未指定） */
+  buildMoodContext?: () => string;
+  /** LLMが選んだリアクションをコアへ伝える（無効時は未指定） */
+  registerReactionChoice?: (noteId: string, reaction: string | null) => void;
 };
 
 /**
@@ -102,20 +110,20 @@ export class ChatHandler {
     }
 
     const provider = config.aiProvider?.provider || 'gemini';
-    const apiKey =
-      provider === 'openai'
-        ? config.aiProvider?.openai?.apiKey
-        : config.gemini?.apiKey;
+    // OpenAI 互換 API はキー不要のエンドポイントがあり得るため、
+    // apiKey は任意扱いで設定を解決する
+    const openaiSettings =
+      provider === 'openai' ? resolveOpenaiSettings() : null;
+    const apiKey = openaiSettings
+      ? openaiSettings.apiKey || ''
+      : config.gemini?.apiKey || '';
 
-    if (!apiKey) {
+    if (!openaiSettings && !apiKey) {
       msg.reply(serifs.aichat.nothing(exist.type));
       return false;
     }
 
-    const apiUrl =
-      provider === 'openai'
-        ? `${config.aiProvider?.openai?.baseUrl || 'https://api.openai.com'}/v1/chat/completions`
-        : getGeminiApiUrl();
+    const apiUrl = openaiSettings ? openaiSettings.apiUrl : getGeminiApiUrl();
 
     const aiChat: AiChat = {
       question,
@@ -127,6 +135,15 @@ export class ChatHandler {
       fromMention: exist.fromMention,
       grounding: exist.grounding,
       timelineContext: exist.timelineContext,
+      // エピソード記憶の回想コンテキスト（重要度4以上のみ・上限2000字）
+      memoryRecallContext: this.deps.buildMemoryRecallContext?.(msg.userId),
+      // 現在の気分の演技コンテキスト（気分エンジン有効時のみ）
+      moodContext: this.deps.buildMoodContext?.(),
+      // パーソナライズドリアクション: メイン生成にマーカー出力を同居させる
+      // （気分エンジン全体が無効なら個別設定に関係なくオフ）
+      reactionMarkerEnabled:
+        config.aichat?.moodEngine?.enabled !== false &&
+        config.aichat?.moodEngine?.reactionPersonalization !== false,
     };
 
     const base64Files: Base64File[] = msg.isChat
@@ -162,6 +179,26 @@ export class ChatHandler {
     }
 
     let responseText: string = text;
+
+    // パーソナライズドリアクション: 応答末尾の [[REACTION: ...]] を
+    // 投稿前に剥がし、リアクション選択としてコアへ渡す。
+    // 無効時もマーカーが紛れ込んだ場合に備えて常に剥がす。
+    const { reaction, markerFound, cleaned } =
+      stripReactionMarker(responseText);
+    responseText = cleaned;
+    // マーカーが無い応答は「未選択」として扱い、既定の like へフォールバックさせる
+    if (markerFound) {
+      this.deps.registerReactionChoice?.(msg.id, reaction);
+    }
+    // マーカーだけで本文が空になった場合、空ノートを投稿しないため
+    // エラー応答として扱う
+    if (responseText.trim() === '') {
+      log('応答本文が空のため、エラー応答として扱います');
+      msg.reply(
+        serifs.aichat.error('generation', null, 'empty response after marker')
+      );
+      return false;
+    }
 
     // friendName が含まれている場合、plain を適用したものに置換
     if (friendName) {

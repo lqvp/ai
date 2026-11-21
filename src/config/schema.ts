@@ -30,6 +30,9 @@ export type Config = {
       apiKey?: string;
       baseUrl?: string;
       model?: string;
+      temperature?: number;
+      maxTokens?: number;
+      timeoutMs?: number;
     };
   };
   gemini?: {
@@ -56,11 +59,46 @@ export type Config = {
       contextRange?: number;
       contextUsageCount?: number;
       enableContext?: boolean;
+      /** LLMによるランダムトーク対象ノートの選択（OpenAI互換プロバイダーのみ） */
+      llmSelection?: boolean;
     };
     chat?: {
       enabled?: boolean;
       prompt?: string;
       groundingWithGoogleSearch?: boolean;
+    };
+  };
+  aichat?: {
+    /** Misskey操作ツール（ノート検索・ユーザー検索・リアクション等） */
+    misskeyTools?: {
+      enabled?: boolean;
+      allowReaction?: boolean;
+    };
+    /** エピソード記憶（会話終了時にLLMで長期記憶を抽出・保存） */
+    episodeMemory?: {
+      enabled?: boolean;
+      maxMemoriesPerUser?: number;
+    };
+    /** 気分エンジン（会話・タイムラインから藍の気分を更新し、演技とリアクションに反映） */
+    moodEngine?: {
+      enabled?: boolean;
+      reactionPersonalization?: boolean;
+      updateIntervalHours?: number;
+    };
+    /** TL日記（タイムラインを見て藍の主観日記を生成し、独り言に反映） */
+    tlDiary?: {
+      enabled?: boolean;
+      intervalHours?: number;
+      retentionHours?: number;
+      maxEntries?: number;
+    };
+    /** プロアクティブ発話（エピソード記憶に基づき藍からフォローアップを送る） */
+    proactiveFollowup?: {
+      enabled?: boolean;
+      intervalHours?: number;
+      maxPerDay?: number;
+      cooldownDays?: number;
+      userThrottleHours?: number;
     };
   };
   jina?: {
