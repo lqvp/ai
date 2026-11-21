@@ -169,4 +169,39 @@ describe('custom emoji announcements', () => {
       text: 'このサーバーに2件の絵文字が追加されました！',
     });
   });
+
+  it('resumes separate posts after a posting limit without duplicating emojis', async () => {
+    const { post, check, cursor } = setup({
+      emojis: makeEmojis(3),
+      atOnce: false,
+    });
+    const note = { id: 'note-1', visibility: 'home' };
+    post
+      .mockResolvedValueOnce(note)
+      .mockResolvedValueOnce(note)
+      .mockRejectedValueOnce(new Error('Rate limit exceeded'));
+
+    await expect(check()).rejects.toThrow('Rate limit exceeded');
+    expect(cursor()).toEqual(['001']);
+
+    post.mockClear();
+    await check();
+
+    expect(post).toHaveBeenCalledTimes(3);
+    expect(post.mock.calls.map(([note]) => note.text)).toEqual([
+      'このサーバーに2件の絵文字が追加されました！',
+      ':emoji_002:\n(`emoji_002`) #AddCustomEmojis',
+      ':emoji_003:\n(`emoji_003`) #AddCustomEmojis',
+    ]);
+    expect(cursor()).toEqual(['003']);
+  });
+
+  it('shares the work between overlapping checks', async () => {
+    const { post, check, cursor } = setup({ emojis: makeEmojis(31) });
+
+    await Promise.all([check(), check()]);
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(cursor()).toEqual(['031']);
+  });
 });

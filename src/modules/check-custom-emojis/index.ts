@@ -52,6 +52,7 @@ export default class extends Module {
     id: string;
     updatedAt: number;
   }>;
+  private posting?: Promise<void>;
 
   @bindThis
   public install() {
@@ -81,11 +82,16 @@ export default class extends Module {
   }
 
   @bindThis
-  private async post() {
-    this.log('Start to Check CustomEmojis.');
-    const lastEmoji = this.lastEmoji.find({});
+  private post() {
+    this.posting ??= this.postNewEmojis().finally(() => {
+      this.posting = undefined;
+    });
+    return this.posting;
+  }
 
-    const lastId = lastEmoji.length != 0 ? lastEmoji[0].id : null;
+  private async postNewEmojis() {
+    this.log('Start to Check CustomEmojis.');
+    const lastId = this.lastEmoji.findOne({})?.id ?? null;
     const emojisData = await this.fetchNewEmojis(lastId);
     if (emojisData.length == 0) {
       this.log('No CustomEmojis Added.');
@@ -110,6 +116,7 @@ export default class extends Module {
         await this.ai.post({
           text: serifs.checkCustomEmojis.emojiPost(emoji.name),
         });
+        this.saveCursor(emoji.id);
         this.log(serifs.checkCustomEmojis.emojiPost(emoji.name));
       }
     } else {
@@ -133,20 +140,22 @@ export default class extends Module {
           visibility: announcement.visibility,
         });
       }
+      this.saveCursor(emojisData[emojiSize - 1].id);
     }
 
-    // データの保存
-    this.log('Last CustomEmojis data saving...');
-    this.log(JSON.stringify(emojisData[emojiSize - 1], null, '\t'));
-    this.lastEmoji.remove(lastEmoji);
-    this.lastEmoji.insertOne({
-      id: emojisData[emojiSize - 1].id,
-      updatedAt: Date.now(),
-    });
     this.log('Check CustomEmojis finished!');
   }
 
-  @bindThis
+  private saveCursor(id: string) {
+    const cursor = this.lastEmoji.findOne({});
+    const updatedAt = Date.now();
+    if (cursor == null) {
+      this.lastEmoji.insertOne({ id, updatedAt });
+    } else {
+      this.lastEmoji.update({ ...cursor, id, updatedAt });
+    }
+  }
+
   private async fetchNewEmojis(lastId: string | null) {
     this.log('CustomEmojis fetching...');
     if (lastId == null) {
