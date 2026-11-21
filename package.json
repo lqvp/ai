@@ -1,5 +1,5 @@
 {
-  "_v": "3.2.5-lqvp",
+  "_v": "3.3.0-lqvp",
   "type": "module",
   "main": "./built/index.js",
   "packageManager": "pnpm@12.21.0",
