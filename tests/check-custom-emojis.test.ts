@@ -19,11 +19,13 @@ function setup({
   lastId = '000',
   maxNoteTextLength = 3000,
   atOnce = true,
+  serverName,
 }: {
   emojis: ReturnType<typeof makeEmojis>;
   lastId?: string | null;
   maxNoteTextLength?: number;
   atOnce?: boolean;
+  serverName?: string;
 }) {
   initConfig(
     resolveConfig({
@@ -32,6 +34,7 @@ function setup({
       master: 'admin',
       checkEmojisEnabled: true,
       checkEmojisAtOnce: atOnce,
+      serverName,
     })
   );
 
@@ -54,7 +57,7 @@ function setup({
     }
   );
   const post = vi.fn(async ({ text }: PostParam) => {
-    if (text != null && text.length > maxNoteTextLength) {
+    if (text != null && [...text].length > maxNoteTextLength) {
       throw new Error('Note text exceeds server limit');
     }
     return { id: `note-${post.mock.calls.length}`, visibility: 'home' };
@@ -131,6 +134,20 @@ describe('custom emoji announcements', () => {
     );
     expect(announced).toEqual(emojis.map(({ name }) => name));
     expect(cursor()).toEqual(['012']);
+  });
+
+  it('counts Unicode code points at the note text limit', async () => {
+    const text =
+      '🍵に1件の絵文字が追加されました！\n:emoji_001:(`emoji_001`) #AddCustomEmojis';
+    const { post, check } = setup({
+      emojis: makeEmojis(1),
+      maxNoteTextLength: [...text].length,
+      serverName: '🍵',
+    });
+
+    await check();
+
+    expect(post).toHaveBeenCalledExactlyOnceWith({ text });
   });
 
   it('keeps the previous cursor when posting a reply fails', async () => {

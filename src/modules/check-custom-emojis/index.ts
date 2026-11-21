@@ -20,8 +20,9 @@ function groupEmojiTexts(
   const entries = emojis.map((emoji) => emojiOnce(emoji.name));
   const announcement = (text: string) =>
     postOnce(serverName, emojis.length, text);
+  const fits = (text: string) => [...text].length <= maxLength;
   const fullText = announcement(entries.join(' '));
-  if (fullText.length <= maxLength) return [fullText];
+  if (fits(fullText)) return [fullText];
 
   const notes: string[] = [];
   let text = '';
@@ -29,11 +30,11 @@ function groupEmojiTexts(
     `${announcement(chunk)}\n続きは返信にあります。`;
   for (const entry of entries) {
     const nextText = text ? `${text} ${entry}` : entry;
-    if (format(nextText).length <= maxLength) {
+    if (fits(format(nextText))) {
       text = nextText;
     } else {
       const note = format(text);
-      if (note.length > maxLength || entry.length > maxLength) {
+      if (!fits(note) || !fits(entry)) {
         throw new Error('Emoji announcement exceeds the note text limit');
       }
       notes.push(note);
