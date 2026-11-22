@@ -66,6 +66,72 @@ describe('executeMisskeyToolCall', () => {
     expect(JSON.parse(result).endpoint).toBe('notes/show');
   });
 
+  it('drops restricted notes from search and user note results', async () => {
+    const notes = [
+      {
+        id: 'pub',
+        visibility: 'public',
+        renote: { id: 'dm', visibility: 'specified' },
+      },
+      { id: 'dm2', visibility: 'specified', text: 'secret' },
+      { id: 'fo', visibility: 'followers', text: 'secret' },
+      {
+        id: 'home',
+        visibility: 'home',
+        reply: { id: 'fo2', visibility: 'followers' },
+      },
+    ];
+    const listCtx = ctx({ api: async () => notes });
+    for (const [name, args] of [
+      ['misskey_search_notes', { query: 'secret' }],
+      ['misskey_user_notes', { userId: 'u1' }],
+    ] as const) {
+      const result = await executeMisskeyToolCall(
+        name,
+        call(name, args),
+        listCtx
+      );
+      expect(result).not.toContain('secret');
+      expect(JSON.parse(result)).toEqual([
+        { id: 'pub', visibility: 'public', renote: null },
+        { id: 'home', visibility: 'home', reply: null },
+      ]);
+    }
+  });
+
+  it('refuses followers-only notes and redacts restricted renotes in notes/show', async () => {
+    const followers = await executeMisskeyToolCall(
+      'misskey_show_note',
+      call('misskey_show_note', { noteId: 'n1' }),
+      ctx({
+        api: async () => ({
+          id: 'n1',
+          visibility: 'followers',
+          text: 'secret',
+        }),
+      })
+    );
+    expect(followers).not.toContain('secret');
+    expect(followers).toContain('Error:');
+
+    const quoted = await executeMisskeyToolCall(
+      'misskey_show_note',
+      call('misskey_show_note', { noteId: 'n2' }),
+      ctx({
+        api: async () => ({
+          id: 'n2',
+          visibility: 'public',
+          renote: { id: 'dm', visibility: 'specified', text: 'secret' },
+        }),
+      })
+    );
+    expect(JSON.parse(quoted)).toEqual({
+      id: 'n2',
+      visibility: 'public',
+      renote: null,
+    });
+  });
+
   it('calls users/search with a default limit', async () => {
     const result = await executeMisskeyToolCall(
       'misskey_search_users',
