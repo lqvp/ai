@@ -27,6 +27,40 @@ export const MISSKEY_TOOL_CREATE_REACTION = 'misskey_create_reaction';
 
 const MAX_RESULT_CHARS = 8000;
 
+/**
+ * ボットには見えても会話相手には見えない可能性がある公開範囲。
+ * ツール結果は会話相手への返信に使われるため、LLM に渡さない。
+ */
+const RESTRICTED_VISIBILITIES = new Set(['specified', 'followers']);
+
+function isRestrictedNote(note: unknown): boolean {
+  if (note == null || typeof note !== 'object') return false;
+  const visibility = (note as { visibility?: unknown }).visibility;
+  return (
+    typeof visibility === 'string' && RESTRICTED_VISIBILITIES.has(visibility)
+  );
+}
+
+/** 公開範囲が限定されたノート（引用・返信先を含む）を取り除く。 */
+function redactNote(note: unknown): unknown {
+  if (note == null || typeof note !== 'object' || Array.isArray(note)) {
+    return note;
+  }
+  if (isRestrictedNote(note)) return null;
+  const copy: Record<string, unknown> = {
+    ...(note as Record<string, unknown>),
+  };
+  for (const key of ['reply', 'renote']) {
+    if (key in copy) copy[key] = redactNote(copy[key]);
+  }
+  return copy;
+}
+
+function redactNotes(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.filter((note) => !isRestrictedNote(note)).map(redactNote);
+}
+
 /** LLM に渡すツール定義（読み取り系 + リアクション）。 */
 export function buildMisskeyToolSpecs(
   ctx: MisskeyToolContext
@@ -164,11 +198,12 @@ function stringifyResult(value: unknown): string {
 async function callApi(
   ctx: MisskeyToolContext,
   endpoint: string,
-  param: Record<string, unknown>
+  param: Record<string, unknown>,
+  transform: (value: unknown) => unknown = (value) => value
 ): Promise<string> {
   try {
     const result = await ctx.api(endpoint, param);
-    return stringifyResult(result);
+    return stringifyResult(transform(result));
   } catch (err: unknown) {
     const detail = err instanceof Error ? err.message : String(err);
     return `Error: ${endpoint} failed: ${detail}`;
@@ -224,26 +259,27 @@ export async function executeMisskeyToolCall(
     case MISSKEY_TOOL_SEARCH_NOTES: {
       const query = requireString(args, 'query');
       if (!query.ok) return `Error: ${name} ${query.error}`;
-      return await callApi(ctx, 'notes/search', {
-        query: query.value,
-        limit: clampLimit(args.limit, 20, 10),
-      });
+      return await callApi(
+        ctx,
+        'notes/search',
+        {
+          query: query.value,
+          limit: clampLimit(args.limit, 20, 10),
+        },
+        redactNotes
+      );
     }
     case MISSKEY_TOOL_SHOW_NOTE: {
       const noteId = requireString(args, 'noteId');
       if (!noteId.ok) return `Error: ${name} ${noteId.error}`;
-      // 直接メンション限定ノートはボットの視点でも本来見えない可能性が
+      // ダイレクト・フォロワー限定ノートは会話相手には見えない可能性が
       // 高いため、ツール結果として返さない（プライバシー保護）
       try {
         const note = await ctx.api('notes/show', { noteId: noteId.value });
-        if (
-          note != null &&
-          typeof note === 'object' &&
-          (note as { visibility?: string }).visibility === 'specified'
-        ) {
-          return 'Error: このノートはダイレクトノートのため参照できません。';
+        if (isRestrictedNote(note)) {
+          return 'Error: このノートは公開範囲が限定されているため参照できません。';
         }
-        return stringifyResult(note);
+        return stringifyResult(redactNote(note));
       } catch (err: unknown) {
         const detail = err instanceof Error ? err.message : String(err);
         return `Error: notes/show failed: ${detail}`;
@@ -260,10 +296,15 @@ export async function executeMisskeyToolCall(
     case MISSKEY_TOOL_USER_NOTES: {
       const userId = requireString(args, 'userId');
       if (!userId.ok) return `Error: ${name} ${userId.error}`;
-      return await callApi(ctx, 'users/notes', {
-        userId: userId.value,
-        limit: clampLimit(args.limit, 20, 10),
-      });
+      return await callApi(
+        ctx,
+        'users/notes',
+        {
+          userId: userId.value,
+          limit: clampLimit(args.limit, 20, 10),
+        },
+        redactNotes
+      );
     }
     case MISSKEY_TOOL_CREATE_REACTION: {
       if (!ctx.allowReaction) {
