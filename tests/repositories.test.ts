@@ -68,6 +68,12 @@ describe('ContextRepository', () => {
     repo.insert({ isChat: false, noteId: 'n1', module: 'a', key: 'k' });
     repo.insert({ isChat: false, noteId: 'n2', module: 'a', key: 'k2' });
 
+    expect(repo.findByModule('a')).toHaveLength(2);
+
+    repo.removeByNoteId('a', 'n1');
+    expect(repo.findForNote('n1')).toBeNull();
+
+    repo.insert({ isChat: false, noteId: 'n1', module: 'a', key: 'k' });
     repo.removeByKey('a', 'k');
     expect(repo.findForNote('n1')).toBeNull();
 

@@ -135,6 +135,14 @@ export class ContextRepository {
     for (const doc of docs) this.collection.remove(doc);
     return docs.length;
   }
+
+  public findByModule(module: string): ContextDoc[] {
+    return this.collection.find({ module }) as ContextDoc[];
+  }
+
+  public removeByNoteId(module: string, noteId: string): void {
+    this.collection.findAndRemove({ module, isChat: false, noteId });
+  }
 }
 
 export class TimerRepository {

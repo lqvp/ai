@@ -76,6 +76,75 @@ describe('resolveConfig', () => {
     const config = resolveConfig({ ...base, host: 'https://example.com///' });
     expect(config.wsUrl).toBe('wss://example.com');
   });
+
+  it('validates aichat, masterUserId and openai.jsonMode', () => {
+    const config = resolveConfig({
+      ...base,
+      masterUserId: 'uid-1',
+      aiProvider: { provider: 'openai', openai: { jsonMode: 'none' } },
+      aichat: {
+        enabled: true,
+        affinity: { ignoreThreshold: -40 },
+        wander: {
+          enabled: true,
+          timelines: ['home', 'hybrid'],
+          activeHours: { start: 9, end: 23 },
+          replyProbability: 0.35,
+          postProbability: 0.25,
+        },
+        reactionFollowUp: {
+          enabled: true,
+          minAffinity: 30,
+          probability: 0.25,
+          delaySeconds: 10,
+        },
+      },
+    });
+    expect(config.masterUserId).toBe('uid-1');
+    expect(config.aichat?.affinity?.ignoreThreshold).toBe(-40);
+    expect(config.aichat?.wander?.timelines).toEqual(['home', 'hybrid']);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        aiProvider: { openai: { jsonMode: 'invalid' as never } },
+      })
+    ).toThrow(ConfigError);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        aichat: { affinity: { ignoreThreshold: 10 } },
+      })
+    ).toThrow(ConfigError);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        aichat: { wander: { timelines: ['invalid' as never] } },
+      })
+    ).toThrow(ConfigError);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        aichat: { playbookPath: 'bad\0path' },
+      })
+    ).toThrow(ConfigError);
+  });
+
+  it('tolerates legacy PR #511 aichat keys without throwing', () => {
+    const config = resolveConfig({
+      ...base,
+      aichat: {
+        episodeMemory: { enabled: true },
+        moodEngine: { enabled: true },
+        tlDiary: { enabled: true },
+        proactiveFollowup: { enabled: true },
+      } as never,
+    });
+    expect(config.host).toBe('https://example.com');
+  });
 });
 
 describe('loadConfig', () => {

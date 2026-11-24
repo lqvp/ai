@@ -48,6 +48,7 @@ export type HandlerResult = {
 
 export type InstallerResult = {
   mentionHook?: MentionHook;
+  fallbackMentionHook?: MentionHook;
   contextHook?: ContextHook;
   timeoutCallback?: TimeoutCallback;
 };
@@ -72,6 +73,7 @@ export default class 藍 {
   public connection!: Stream;
   public modules: Module[] = [];
   private mentionHooks: RegisteredMentionHook[] = [];
+  private fallbackMentionHooks: RegisteredMentionHook[] = [];
   private contextHooks: { [moduleName: string]: ContextHook } = {};
   private timeoutCallbacks: { [moduleName: string]: TimeoutCallback } = {};
   private dbManager!: DatabaseManager;
@@ -128,7 +130,8 @@ export default class 藍 {
     this.relationship = new RelationshipService(
       this.apiClient,
       account.id,
-      config.master
+      config.master,
+      config.masterUserId
     );
     this.reactions = new ReactionService(this.apiClient, (friend) =>
       this.shouldReaction(friend)
@@ -216,6 +219,12 @@ export default class 藍 {
           this.mentionHooks.push({
             module: m.name,
             handler: res.mentionHook,
+          });
+        }
+        if (res.fallbackMentionHook) {
+          this.fallbackMentionHooks.push({
+            module: m.name,
+            handler: res.fallbackMentionHook,
           });
         }
         if (res.contextHook) this.contextHooks[m.name] = res.contextHook;
@@ -419,7 +428,31 @@ export default class 藍 {
           continue;
         }
 
-        if (res === true || typeof res === 'object') break;
+        if (res === true || (res != null && typeof res === 'object')) {
+          handled = true;
+          break;
+        }
+      }
+
+      if (!handled && context == null) {
+        for (const { module, handler } of this.fallbackMentionHooks) {
+          try {
+            res = await handler(msg);
+          } catch (err) {
+            this.log(
+              chalk.red(
+                `Fallback mention hook of "${module}" failed: ${String(err)}`
+              )
+            );
+            res = false;
+            continue;
+          }
+
+          if (res === true || (res != null && typeof res === 'object')) {
+            handled = true;
+            break;
+          }
+        }
       }
 
       if (res != null) applyResult(res);

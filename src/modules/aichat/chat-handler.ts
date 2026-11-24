@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import type 藍 from '@/ai.js';
 import config from '@/config/index.js';
 import type Friend from '@/friend.js';
 import type Message from '@/message.js';
+import type { User } from '@/misskey/types.js';
 import serifs from '@/serifs.js';
 import { fetchNoteFiles } from '@/services/media.js';
 import { plain } from '@/utils/mfm.js';
@@ -16,248 +18,303 @@ import type {
   ChatHistoryRepository,
 } from './history-repository.js';
 import { resolveOpenaiSettings } from './openai-settings.js';
-import { stripReactionMarker } from './reaction-marker.js';
-import type { AiChat, Base64File } from './types.js';
+import { sanitizeFriendName } from './prompt-builder.js';
+import { resolveProvider } from './structured-llm.js';
+import type { AiChat, Base64File, ProviderDetailedResponse } from './types.js';
 import {
   extractUrls,
   isYoutubeUrl,
   normalizeYoutubeUrl,
 } from './url-context.js';
 
-export type GenerateText = (
+export type GenerateTextDetailed = (
   aiChat: AiChat,
   files: Base64File[],
   msg?: Message
-) => Promise<
-  | string
-  | { error: true; errorCode?: number | null; errorMessage?: string | null }
-  | null
->;
+) => Promise<ProviderDetailedResponse>;
 
 export type ChatHandlerDeps = {
   ai: 藍;
   moduleName: string;
   history: ChatHistoryRepository;
   log: (message: string) => void;
-  genText: GenerateText;
-  subscribeReply: (postId: string, isChat: boolean, userId: string) => void;
-  setTimeoutWithPersistence: (delay: number, data: unknown) => void;
+  genTextDetailed: GenerateTextDetailed;
+  subscribeReply: (
+    key: string,
+    isChat: boolean,
+    id: string,
+    data?: unknown
+  ) => void;
+  removeOldNoteContext?: (noteId: string) => void;
   later: (ms: number, task: () => unknown) => void;
-  /** エピソード記憶の回想コンテキストを組み立てる（無効時は未指定） */
-  buildMemoryRecallContext?: (userId: string) => string;
-  /** 現在の気分を演技コンテキストとして組み立てる（無効時は未指定） */
-  buildMoodContext?: () => string;
-  /** LLMが選んだリアクションをコアへ伝える（無効時は未指定） */
-  registerReactionChoice?: (noteId: string, reaction: string | null) => void;
+  buildPlaybookText?: () => Promise<string>;
+  buildAffinityContext?: (user: User, isMaster: boolean) => Promise<string>;
+  now?: () => number;
 };
 
+export type ChatHandleResult =
+  | { status: 'replied'; userText: string; isMaster: boolean }
+  | { status: 'react_only'; userText: string; isMaster: boolean }
+  | { status: 'ignored'; userText: string; isMaster: boolean }
+  | { status: 'failed' };
+
+const MAX_ACTIVE_POST_IDS = 3;
+
 /**
- * メンション / チャット1件に対する返信生成〜投稿を担当する。
- *
- * もとは `aichat/index.ts` の `handleAiChat`（約190行）で、
- * モジュールのフックやタイマーと混ざっていた。
+ * メンション / リプライ / チャット1件に対する返信生成〜投稿〜履歴コミットを担当する。
  */
 export class ChatHandler {
-  constructor(private readonly deps: ChatHandlerDeps) {}
+  private readonly now: () => number;
 
-  public async handle(exist: AiChatHist, msg: Message): Promise<boolean> {
+  constructor(private readonly deps: ChatHandlerDeps) {
+    this.now = deps.now ?? (() => Date.now());
+  }
+
+  public async handle(
+    exist: AiChatHist,
+    msg: Message
+  ): Promise<ChatHandleResult> {
     const { ai, history, log } = this.deps;
 
-    // チャット機能が無効かつメンションからの場合は早期リターン
-    if (exist.fromMention && !config.gemini?.chat?.enabled) {
+    const explicitlyDisabledChat =
+      config.aichat?.enabled === undefined &&
+      config.gemini?.chat?.enabled === false;
+    if (exist.fromMention && explicitlyDisabledChat) {
       log('チャット機能が無効のためメンションをスキップします');
-      return false;
+      return { status: 'failed' };
     }
 
-    let prompt = '';
-    if (config.gemini?.chat?.prompt) {
-      prompt = config.gemini.chat.prompt;
-    }
+    const isMaster = ai.relationship.isMaster(msg.user);
+    const allowWebTools =
+      isMaster || config.aichat?.allowNonMasterWebTools === true;
 
-    if (msg.includes([GROUNDING_TARGET])) {
+    const prompt = config.gemini?.chat?.prompt ?? '';
+
+    if (allowWebTools && msg.includes([GROUNDING_TARGET])) {
       exist.grounding = true;
     }
-    if (exist.fromMention && config.gemini?.chat?.groundingWithGoogleSearch) {
+    if (
+      allowWebTools &&
+      exist.fromMention &&
+      config.gemini?.chat?.groundingWithGoogleSearch
+    ) {
       exist.grounding = true;
     }
+    if (!allowWebTools) {
+      exist.grounding = false;
+    }
 
-    const extractedText = msg.extractedText;
-    if (extractedText == undefined || extractedText.length == 0) return false;
+    // 先に添付ファイルを取得することで、テキスト無しの画像のみ投稿にも対応する
+    const base64Files: Base64File[] = msg.isChat
+      ? []
+      : await fetchNoteFiles(ai.api, msg.id, { log });
 
-    const question = extractedText
+    if (exist.quotedFiles && exist.quotedFiles.length > 0) {
+      log(`Adding ${exist.quotedFiles.length} quoted files to context`);
+      base64Files.push(...exist.quotedFiles);
+    }
+
+    const rawExtracted = msg.extractedText ?? '';
+    const question = rawExtracted
       .replace(new RegExp(this.deps.moduleName, 'i'), '')
       .replace(GROUNDING_TARGET, '')
       .trim();
 
-    const youtubeUrls: string[] = exist.youtubeUrls || [];
-    for (const url of extractUrls(question)) {
-      if (isYoutubeUrl(url)) {
-        const normalizedUrl = normalizeYoutubeUrl(url, log);
-        if (!youtubeUrls.includes(normalizedUrl)) {
-          youtubeUrls.push(normalizedUrl);
+    if (question.length === 0 && base64Files.length === 0) {
+      return { status: 'failed' };
+    }
+
+    const modelQuestion = question.length > 0 ? question : '(添付画像のみ)';
+
+    const youtubeUrls: string[] = [...(exist.youtubeUrls ?? [])];
+    if (allowWebTools) {
+      for (const url of extractUrls(question)) {
+        if (isYoutubeUrl(url)) {
+          const normalizedUrl = normalizeYoutubeUrl(url, log);
+          if (!youtubeUrls.includes(normalizedUrl)) {
+            youtubeUrls.push(normalizedUrl);
+          }
         }
       }
     }
 
     const friend: Friend | null = ai.lookupFriend(msg.userId);
-    let friendName: string;
+    let rawFriendName: string;
     if (friend != null && friend.name != null) {
-      friendName = friend.name;
+      rawFriendName = friend.name;
     } else if (msg.user.name) {
-      friendName = msg.user.name;
+      rawFriendName = msg.user.name;
     } else {
-      friendName = msg.user.username;
+      rawFriendName = msg.user.username;
     }
+    const safeFriendName = sanitizeFriendName(rawFriendName);
 
-    const provider = config.aiProvider?.provider || 'gemini';
-    // OpenAI 互換 API はキー不要のエンドポイントがあり得るため、
-    // apiKey は任意扱いで設定を解決する
+    const provider = resolveProvider();
     const openaiSettings =
       provider === 'openai' ? resolveOpenaiSettings() : null;
     const apiKey = openaiSettings
       ? openaiSettings.apiKey || ''
       : config.gemini?.apiKey || '';
 
-    if (!openaiSettings && !apiKey) {
-      msg.reply(serifs.aichat.nothing(exist.type));
-      return false;
+    const requiresOpenaiKey =
+      openaiSettings != null &&
+      openaiSettings.apiUrl.startsWith('https://api.openai.com');
+
+    if ((!openaiSettings && !apiKey) || (requiresOpenaiKey && !apiKey)) {
+      await msg
+        .reply(serifs.aichat.nothing(exist.type))
+        .catch((err) => log(`Missing key reply failed: ${String(err)}`));
+      return { status: 'failed' };
     }
 
     const apiUrl = openaiSettings ? openaiSettings.apiUrl : getGeminiApiUrl();
 
+    const [playbookText, affinityContext] = await Promise.all([
+      this.deps.buildPlaybookText?.() ?? Promise.resolve(''),
+      this.deps.buildAffinityContext?.(msg.user, isMaster) ??
+        Promise.resolve(''),
+    ]);
+
     const aiChat: AiChat = {
-      question,
+      question: modelQuestion,
       prompt,
       api: apiUrl,
       key: apiKey || '',
       history: exist.history,
-      friendName,
+      friendName: safeFriendName || undefined,
       fromMention: exist.fromMention,
       grounding: exist.grounding,
       timelineContext: exist.timelineContext,
-      // エピソード記憶の回想コンテキスト（重要度4以上のみ・上限2000字）
-      memoryRecallContext: this.deps.buildMemoryRecallContext?.(msg.userId),
-      // 現在の気分の演技コンテキスト（気分エンジン有効時のみ）
-      moodContext: this.deps.buildMoodContext?.(),
-      // パーソナライズドリアクション: メイン生成にマーカー出力を同居させる
-      // （気分エンジン全体が無効なら個別設定に関係なくオフ）
-      reactionMarkerEnabled:
-        config.aichat?.moodEngine?.enabled !== false &&
-        config.aichat?.moodEngine?.reactionPersonalization !== false,
+      playbookText,
+      affinityContext,
+      allowWebTools,
+      allowSentinels: true,
     };
 
-    const base64Files: Base64File[] = msg.isChat
-      ? []
-      : await fetchNoteFiles(ai.api, msg.id, { log });
+    const result = await this.deps.genTextDetailed(aiChat, base64Files, msg);
 
-    // 引用先ファイルがある場合は統合
-    if (exist.quotedFiles && exist.quotedFiles.length > 0) {
-      log(`Adding ${exist.quotedFiles.length} quoted files to context`);
-      base64Files.push(...exist.quotedFiles);
-    }
-
-    const text = await this.deps.genText(aiChat, base64Files, msg);
-
-    if (text != null && typeof text === 'object') {
+    if (result != null && 'error' in result) {
       log('The result is invalid due to an HTTP error.');
-      msg.reply(
-        serifs.aichat.error(
-          exist.type,
-          typeof text.errorCode === 'number' ? text.errorCode : null,
-          typeof text.errorMessage === 'string' ? text.errorMessage : null
+      await msg
+        .reply(
+          serifs.aichat.error(
+            exist.type,
+            typeof result.errorCode === 'number' ? result.errorCode : null,
+            typeof result.errorMessage === 'string' ? result.errorMessage : null
+          )
         )
-      );
-      return false;
+        .catch((err) => log(`Error reply failed: ${String(err)}`));
+      return { status: 'failed' };
     }
 
-    if (text == null || text === '') {
+    if (result == null || result.text.trim() === '') {
       log(
         'The result is invalid. It seems that tokens and other items need to be reviewed.'
       );
-      msg.reply(serifs.aichat.error(exist.type));
-      return false;
+      await msg
+        .reply(serifs.aichat.error(exist.type))
+        .catch((err) => log(`Empty reply notification failed: ${String(err)}`));
+      return { status: 'failed' };
     }
 
-    let responseText: string = text;
+    const cleanModelText = result.text.trim();
 
-    // パーソナライズドリアクション: 応答末尾の [[REACTION: ...]] を
-    // 投稿前に剥がし、リアクション選択としてコアへ渡す。
-    // 無効時もマーカーが紛れ込んだ場合に備えて常に剥がす。
-    const { reaction, markerFound, cleaned } =
-      stripReactionMarker(responseText);
-    responseText = cleaned;
-    // マーカーが無い応答は「未選択」として扱い、既定の like へフォールバックさせる
-    if (markerFound) {
-      this.deps.registerReactionChoice?.(msg.id, reaction);
+    if (cleanModelText === '[[IGNORE]]') {
+      return { status: 'ignored', userText: question, isMaster };
     }
-    // マーカーだけで本文が空になった場合、空ノートを投稿しないため
-    // エラー応答として扱う
-    if (responseText.trim() === '') {
-      log('応答本文が空のため、エラー応答として扱います');
-      msg.reply(
-        serifs.aichat.error('generation', null, 'empty response after marker')
-      );
-      return false;
+    if (cleanModelText === '[[REACT_ONLY]]') {
+      return { status: 'react_only', userText: question, isMaster };
     }
 
-    // friendName が含まれている場合、plain を適用したものに置換
-    if (friendName) {
-      const safeFriendName = plain(friendName);
-      const escapedFriendName = friendName.replace(
-        /[.*+?^${}()|[\]\\]/g,
-        '\\$&'
-      );
-      responseText = responseText.replace(
-        new RegExp(escapedFriendName, 'g'),
-        safeFriendName
+    let displayText = cleanModelText;
+    if (safeFriendName) {
+      const escaped = safeFriendName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      displayText = displayText.replace(
+        new RegExp(escaped, 'g'),
+        plain(safeFriendName)
       );
     }
 
-    const historyItems = exist.history || [];
+    const shouldAppendHashtag =
+      exist.fromMention && !msg.isChat && !exist.isFallbackMention;
+    let outgoingText = shouldAppendHashtag
+      ? serifs.aichat.post(displayText)
+      : displayText;
 
-    msg.reply(serifs.aichat.post(responseText)).then((reply) => {
-      historyItems.push({ role: 'user', content: question });
-      historyItems.push({ role: 'model', content: text as string });
-      while (historyItems.length > DEFAULTS.MAX_HISTORY_LENGTH) {
-        historyItems.shift();
+    const suffix = result.metadataSuffix.trim();
+    if (suffix !== '') {
+      outgoingText = `${outgoingText}\n${suffix}`;
+    }
+
+    let replyNote: { id: string } | undefined;
+    try {
+      replyNote = (await msg.reply(outgoingText)) as { id: string } | undefined;
+    } catch (err: unknown) {
+      log(
+        `返信投稿に失敗しました（履歴は保持します）: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return { status: 'failed' };
+    }
+
+    const replyId = replyNote?.id ?? randomUUID();
+    const nowMs = this.now();
+    const historyItems = [...(exist.history ?? [])];
+    historyItems.push({ role: 'user', content: modelQuestion });
+    historyItems.push({ role: 'model', content: cleanModelText });
+    while (historyItems.length > DEFAULTS.MAX_HISTORY_LENGTH) {
+      historyItems.shift();
+    }
+
+    const sessionId = exist.sessionId ?? randomUUID();
+    const prevPostIds = exist.postIds ?? (exist.postId ? [exist.postId] : []);
+    const nextPostIds = [...prevPostIds, replyId];
+    while (nextPostIds.length > MAX_ACTIVE_POST_IDS) {
+      const evictedId = nextPostIds.shift();
+      if (evictedId && !msg.isChat) {
+        this.deps.removeOldNoteContext?.(evictedId);
       }
-      exist.history = historyItems;
+    }
 
-      history.insert({
-        postId: reply.id,
-        createdAt: Date.now(),
-        type: exist.type,
-        api: aiChat.api,
-        history: historyItems,
-        grounding: exist.grounding,
-        fromMention: exist.fromMention,
-        originalNoteId: exist.postId,
-        youtubeUrls: youtubeUrls.length > 0 ? youtubeUrls : undefined,
-        isChat: msg.isChat,
-        chatUserId: msg.isChat ? msg.userId : undefined,
-      });
+    exist.sessionId = sessionId;
+    exist.postId = replyId;
+    exist.latestPostId = replyId;
+    exist.postIds = nextPostIds;
+    exist.updatedAt = nowMs;
+    exist.expiresAt = nowMs + TIMEOUT_TIME;
+    exist.api = aiChat.api;
+    exist.history = historyItems;
+    exist.youtubeUrls = youtubeUrls.length > 0 ? youtubeUrls : undefined;
+    exist.isChat = msg.isChat;
+    exist.chatUserId = msg.isChat ? msg.userId : undefined;
+    exist.ownerUserId = exist.ownerUserId ?? msg.userId;
+    exist.quotedFiles = undefined;
 
-      this.deps.subscribeReply(
-        reply.id,
-        msg.isChat,
-        msg.isChat ? msg.userId : reply.id
-      );
-      this.deps.setTimeoutWithPersistence(TIMEOUT_TIME, {
-        id: reply.id,
-        isChat: msg.isChat,
-        userId: msg.userId,
-      });
+    if (history.findBySessionId(sessionId)) {
+      history.update(exist);
+    } else {
+      history.insert(exist);
+    }
 
-      // チャットモードで、かつ最初のメッセージ（履歴が2つしかない）の場合に終了方法を教える
-      if (msg.isChat && historyItems.length <= 2) {
-        this.deps.later(1000, () => {
+    this.deps.subscribeReply(
+      sessionId,
+      msg.isChat,
+      msg.isChat ? msg.userId : replyId,
+      {
+        sessionId,
+        historyLength: historyItems.length,
+      }
+    );
+
+    if (msg.isChat && historyItems.length <= 2) {
+      this.deps.later(1000, () => {
+        void Promise.resolve(
           ai.sendMessage(msg.userId, {
             text: '💡 チャット中に「aichat 終了」「aichat 終わり」「aichat やめる」「aichat 止めて」のいずれかと送信すると会話を終了できます。',
-          });
-        });
-      }
-    });
+          })
+        ).catch((err) => log(`Chat help send failed: ${String(err)}`));
+      });
+    }
 
-    return true;
+    return { status: 'replied', userText: question, isMaster };
   }
 }

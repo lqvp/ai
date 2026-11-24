@@ -55,12 +55,19 @@ export default abstract class Module<
     const hooks: InstallerResult = { ...result };
     const self = this as unknown as {
       mentionHook?: MentionHook;
+      fallbackMentionHook?: MentionHook;
       contextHook?: ContextHook;
       timeoutCallback?: TimeoutCallback;
     };
 
     if (hooks.mentionHook == null && typeof self.mentionHook === 'function') {
       hooks.mentionHook = self.mentionHook.bind(this);
+    }
+    if (
+      hooks.fallbackMentionHook == null &&
+      typeof self.fallbackMentionHook === 'function'
+    ) {
+      hooks.fallbackMentionHook = self.fallbackMentionHook.bind(this);
     }
     if (hooks.contextHook == null && typeof self.contextHook === 'function') {
       hooks.contextHook = self.contextHook.bind(this);
