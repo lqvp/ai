@@ -1215,17 +1215,21 @@ describe('aichat engagement commands and streaming contract', () => {
       }
     ).runStep2Audit = async () => null;
 
-    const mention = createFakeMessage('aichat こんにちは', { id: 'bot-reply-1' }, {
-      id: 'mention-1',
-      userId: 'u-alice',
-      user: {
-        id: 'u-alice',
-        username: 'alice',
-        host: null,
-        isBot: false,
-      } as User,
-      includes: () => true,
-    } as Partial<Message>);
+    const mention = createFakeMessage(
+      'aichat こんにちは',
+      { id: 'bot-reply-1' },
+      {
+        id: 'mention-1',
+        userId: 'u-alice',
+        user: {
+          id: 'u-alice',
+          username: 'alice',
+          host: null,
+          isBot: false,
+        } as User,
+        includes: () => true,
+      } as Partial<Message>
+    );
     await hooks.mentionHook!(mention);
 
     const firstSession = history.findByPostId('bot-reply-1');

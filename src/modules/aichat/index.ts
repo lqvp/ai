@@ -4,12 +4,12 @@ import type * as Misskey from 'misskey-js';
 import type { HandlerResult } from '@/ai.js';
 import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
-import includes from '@/utils/includes.js';
 import type Message from '@/message.js';
 import type { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
 import { fetchNoteFiles } from '@/services/media.js';
 import type Stream from '@/stream.js';
+import includes from '@/utils/includes.js';
 import {
   AffinityStore,
   formatAffinityPromptContext,
