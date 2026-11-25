@@ -82,6 +82,8 @@ describe('renderKiatsuImage', () => {
       },
       {
         maxColumns: 4,
+        locationName:
+          '北海道札幌市中央区北一条西二丁目付近のとても長い地点名テスト',
         startIndex: 3,
         nowLocal: '2026-11-20T00:00',
         fetchedAtLocal: '2026-11-25T03:45',
