@@ -563,4 +563,42 @@ describe('KiatsuModule (index.ts)', () => {
 
     mod.dispose();
   });
+
+  it('現在時刻の予報点欠落は単発なら許容し、連続した場合は失敗として停止バックオフに入る', async () => {
+    const staleSeries: HourlyForecast = {
+      latitude: 36.32,
+      longitude: 139.0,
+      elevationM: 100,
+      hours: [
+        {
+          timeLocal: '2026-11-20T00:00',
+          pressureMsl: 1012.0,
+          temperatureC: 10,
+          weatherCode: 0,
+        },
+      ],
+    };
+    vi.spyOn(openMeteo, 'fetchForecast').mockResolvedValue(staleSeries);
+
+    const { mod, posts } = createHarness({
+      maxErrorRetries: 1,
+      updateIntervalMs: 600_000,
+    });
+    mod.getHooks();
+
+    // 1回目の不一致は単発として許容（errorCount 0）
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toHaveLength(0);
+
+    // 2回目の連続不一致で errorCount=1（まだ maxErrorRetries=1 以下）
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(posts).toHaveLength(0);
+
+    // 3回目の連続不一致で errorCount=2 > maxErrorRetries(1) → 一時停止へ移行
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain('一時停止しました');
+
+    mod.dispose();
+  });
 });

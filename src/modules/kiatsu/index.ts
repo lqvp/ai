@@ -203,6 +203,9 @@ export default class extends Module<KiatsuData> {
 
   private errorCount = 0;
 
+  /** 現在時刻の予報点が見つからない状態が連続した回数。単発は許容し、連続時は障害扱いする。 */
+  private consecutiveMissingHours = 0;
+
   /** 一時停止中は定期評価を素通りさせる。クールダウン中の再試行を防ぐ。 */
   private suspended = false;
 
@@ -338,16 +341,22 @@ export default class extends Module<KiatsuData> {
     const currentIndex = this.findCurrentIndex(forecast, now);
 
     if (currentIndex < 0) {
-      // 時刻キーの不一致は「取得失敗」ではない。ここでエラー回数を増やすと、
-      // API の時刻書式が変わっただけで停止・再開の通知ループに入る。
+      // 単発の時刻ずれ（1回分）はネットワーク失敗と区別して様子を見るが、
+      // API の書式変更や配信停止で連続して該当時刻が無い場合は、無限に空振りし続けないよう
+      // 通常の失敗カウントに乗せて指数バックオフへ移行させる。
       this.log(
         `現在時刻 (${formatLocalHourKey(now)}) 付近の気圧データがありません。`
       );
       if (countErrors) {
-        this.errorCount = 0;
+        this.consecutiveMissingHours++;
+        if (this.consecutiveMissingHours >= 2) {
+          await this.handleError();
+        }
       }
       return;
     }
+
+    this.consecutiveMissingHours = 0;
 
     // 使える時刻が見つかってから差し替える。先に保持すると、開始位置だけ
     // 古いまま新しい予報を描き、過去の列を「今」として出すことになる。

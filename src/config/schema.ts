@@ -663,18 +663,29 @@ function validateAndResolve(input: RawConfig): Config {
     const isNumber = (value: unknown): value is number =>
       typeof value === 'number' && Number.isFinite(value);
 
-    // open-meteo.ts は models=jma_msm かつ timezone=Asia/Tokyo に固定しているため、
-    // 気象庁 MSM の提供領域（北緯 22.4〜47.6°・東経 120〜150°）外の座標は API が恒久的に
-    // HTTP 400 を返す。起動時の検証で弾き、運用中の停止ループを防ぐ。
-    for (const [key, min, max] of [
-      ['latitude', 22.4, 47.6],
-      ['longitude', 120, 150],
+    const isExplicitlyDisabled = kiatsu.enabled === false;
+
+    // open-meteo.ts は models=jma_msm（格子間隔: 緯度 0.05°・経度 0.0625°、格子中心:
+    // 北緯 22.4〜47.6°・東経 120〜150°）に固定している。Open-Meteo が受理する
+    // 外縁境界 [22.35, 47.65) × [119.9375, 150.0625) に合わせ、境界付近で HTTP 200 に
+    // なる座標（例: 47.61°N）を誤拒否せず、HTTP 400 になる領域外座標だけを起動時に弾く。
+    // なお enabled = false で明示的に無効化されている場合は WGS84 範囲と型だけを見る。
+    for (const [key, wgsMin, wgsMax, msmMin, msmMaxExclusive] of [
+      ['latitude', -90, 90, 22.35, 47.65],
+      ['longitude', -180, 180, 119.9375, 150.0625],
     ] as const) {
       const value = kiatsu[key];
       if (value === undefined) continue;
-      if (!isNumber(value) || value < min || value > max) {
+      if (!isNumber(value) || value < wgsMin || value > wgsMax) {
         issues.push(
-          `kiatsu.${key} は JMA MSM の提供範囲（${min}〜${max}）の数値で指定してください`
+          `kiatsu.${key} は ${wgsMin}〜${wgsMax} の数値で指定してください`
+        );
+      } else if (
+        !isExplicitlyDisabled &&
+        (value < msmMin || value >= msmMaxExclusive)
+      ) {
+        issues.push(
+          `kiatsu.${key} は JMA MSM の提供範囲（${msmMin} 以上 ${msmMaxExclusive} 未満）で指定してください`
         );
       }
     }
@@ -737,13 +748,14 @@ function validateAndResolve(input: RawConfig): Config {
     }
 
     // *Ms は正の数値（32-bit タイマー上限以下）として扱う。
-    // updateIntervalMs は Open-Meteo 無料枠（10,000 calls/日）を枯渇させないよう
-    // 最小 60,000ms（1分＝最大 1,440 calls/日）を下限とする。
+    // 稼働時（enabled !== false）の updateIntervalMs は Open-Meteo 無料枠（10,000 calls/日）を
+    // 枯渇させないよう最小 60,000ms（1分＝最大 1,440 calls/日）を下限とする。
     // 検証するのは現行スキーマのキーだけ。廃止キー（postIntervalMs など）は
     // 無視するのが約束なので、型や値を理由に起動を止めてはいけない。
+    const minUpdateIntervalMs = isExplicitlyDisabled ? 1 : 60_000;
     for (const [key, minMs] of [
       ['requestTimeoutMs', 1],
-      ['updateIntervalMs', 60_000],
+      ['updateIntervalMs', minUpdateIntervalMs],
       ['errorCooldownMs', 1],
     ] as const) {
       const value = kiatsu[key];

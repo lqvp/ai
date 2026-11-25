@@ -190,14 +190,14 @@ describe('resolveConfig', () => {
     expect(config.kiatsu).toEqual({ enabled: true });
   });
 
-  it('rejects kiatsu coordinates outside JMA MSM coverage (22.4..47.6N, 120..150E)', () => {
+  it('rejects kiatsu coordinates outside JMA MSM outer grid coverage ([22.35, 47.65) × [119.9375, 150.0625))', () => {
     for (const coords of [
       { latitude: 90.1, longitude: 139 },
       { latitude: -90.1, longitude: 139 },
-      { latitude: 22.3, longitude: 139 },
-      { latitude: 47.7, longitude: 139 },
-      { latitude: 35.6, longitude: 119.9 },
-      { latitude: 35.6, longitude: 150.1 },
+      { latitude: 22.34, longitude: 139 },
+      { latitude: 47.65, longitude: 139 },
+      { latitude: 35.6, longitude: 119.937 },
+      { latitude: 35.6, longitude: 150.063 },
       { latitude: 0, longitude: 0 },
       { latitude: '36.3' as never, longitude: 139 },
     ]) {
@@ -206,9 +206,11 @@ describe('resolveConfig', () => {
       );
     }
 
+    // 格子外縁付近で Open-Meteo が HTTP 200 を返す座標（47.61°N 等）は許可する
     for (const coords of [
-      { latitude: 22.4, longitude: 120 },
-      { latitude: 47.6, longitude: 150 },
+      { latitude: 22.35, longitude: 119.9375 },
+      { latitude: 47.61, longitude: 139 },
+      { latitude: 47.649, longitude: 150.062 },
     ]) {
       const config = resolveConfig({
         ...base,
@@ -433,6 +435,14 @@ describe('kiatsu の追加型・範囲検証', () => {
       resolveConfig({ ...base, kiatsu: { updateIntervalMs: 60_000 } }).kiatsu
         ?.updateIntervalMs
     ).toBe(60_000);
+
+    // enabled = false で明示的に無効化されているときは無料枠下限で起動を止めない
+    expect(
+      resolveConfig({
+        ...base,
+        kiatsu: { enabled: false, updateIntervalMs: 30_000 },
+      }).kiatsu?.updateIntervalMs
+    ).toBe(30_000);
 
     try {
       resolveConfig({
