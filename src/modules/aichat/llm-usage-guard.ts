@@ -203,8 +203,7 @@ export class LlmUsageGuard {
         return {
           next: {
             ...current,
-            consecutiveErrors:
-              failureKind === 'general' ? 0 : current.consecutiveErrors,
+            consecutiveErrors: 0,
             structuredConsecutiveErrors:
               failureKind === 'structured'
                 ? 0

@@ -323,7 +323,7 @@ export async function genTextByOpenaiDetailed(
         messages.some((message) => message.role === 'tool')
       ) {
         return {
-          text: 'ツール実行は完了しましたが、LLM予算上限のため結果の要約を生成できませんでした。',
+          text: 'LLM予算上限のため、追加のツール操作は実行せず、結果の要約も生成できませんでした。',
           metadataSuffix: '',
         };
       }
