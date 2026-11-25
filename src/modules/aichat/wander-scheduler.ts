@@ -3,6 +3,7 @@ import { getZonedParts } from '@/services/clock.js';
 export type WanderScheduleState = {
   hour?: string;
   slots?: number[];
+  executedSlots?: number[];
   boundsKey?: string;
   lastRunAt?: number;
 };
@@ -176,9 +177,11 @@ function selectDisjointSlots(
 
 /**
  * 開始ティック以降で lastRunAt との最短間隔を満たす候補時刻（分）を昇順で返す。
+ * 各候補の予定評価時刻は実際の呼び出し基準時刻（nowMs）から 5 分刻みで算出する。
  */
 function buildRemainingTickCandidates(
-  hourStartMs: number,
+  nowMs: number,
+  currentTickMinute: number,
   startTickMinute: number,
   lastRunAt: number | undefined,
   minGapMinutes: number
@@ -190,16 +193,49 @@ function buildRemainingTickCandidates(
   if (lastRunAt != null) {
     const minGapMs = minGapMinutes * 60_000;
     return candidates.filter(
-      (m) => hourStartMs + m * 60_000 - lastRunAt >= minGapMs
+      (m) => nowMs + (m - currentTickMinute) * 60_000 - lastRunAt >= minGapMs
     );
   }
   return candidates;
 }
 
+/**
+ * 同一時間帯における実行済みスロット一覧を返す。
+ * executedSlots が永続化されていない旧データでは、途中の未実行枠を誤って実行済み扱いしないよう lastRunAt に対応する1枠のみを実績とする。
+ */
+function resolveExecutedSlotsInHour(
+  state: WanderScheduleState,
+  hourStartMs: number,
+  nowMs: number,
+  tickMinute: number
+): number[] {
+  if (Array.isArray(state.executedSlots)) {
+    const unique = new Set<number>();
+    for (const s of state.executedSlots) {
+      if (Number.isInteger(s) && s >= 0 && s <= tickMinute) {
+        unique.add(s);
+      }
+    }
+    return [...unique].sort((a, b) => a - b);
+  }
+  if (
+    state.lastRunAt != null &&
+    state.lastRunAt >= hourStartMs &&
+    state.lastRunAt <= nowMs
+  ) {
+    const lastRunMin = Math.floor((state.lastRunAt - hourStartMs) / 60_000);
+    const lastRunSlot = Math.floor(lastRunMin / TICK_MINUTES) * TICK_MINUTES;
+    if (Array.isArray(state.slots) && state.slots.includes(lastRunSlot)) {
+      return [lastRunSlot];
+    }
+  }
+  return [];
+}
+
 export function drawHourlySlots(
   nowMs: number,
   currentMinute: number,
-  currentSecond: number,
+  _currentSecond: number,
   lastRunAt: number | undefined,
   minGapMinutes: number,
   rng: () => number,
@@ -213,14 +249,10 @@ export function drawHourlySlots(
   if (k <= 0) return [];
 
   const tickMinute = Math.floor(currentMinute / TICK_MINUTES) * TICK_MINUTES;
-  const msWithinHour =
-    currentMinute * 60_000 +
-    currentSecond * 1000 +
-    new Date(nowMs).getMilliseconds();
-  const hourStartMs = nowMs - msWithinHour;
 
   const candidates = buildRemainingTickCandidates(
-    hourStartMs,
+    nowMs,
+    tickMinute,
     tickMinute,
     lastRunAt,
     minGapMinutes
@@ -283,6 +315,7 @@ export function decideWanderTick(
           maxRunsPerHour: options.maxRunsPerHour,
         }
       ),
+      executedSlots: [],
       ...(currentBoundsKey !== undefined
         ? { boundsKey: currentBoundsKey }
         : {}),
@@ -290,12 +323,12 @@ export function decideWanderTick(
     };
   } else if ((state.boundsKey ?? undefined) !== currentBoundsKey) {
     // 設定変更を伴う同一時間帯の再起動時は、実行済みスロットを保持しつつ残余枠を再計算する
-    const completedSlots =
-      lastRunAt != null && lastRunAt >= hourStartMs
-        ? state.slots.filter(
-            (s) => s <= tickMinute && hourStartMs + s * 60_000 <= lastRunAt
-          )
-        : [];
+    const completedSlots = resolveExecutedSlotsInHour(
+      state,
+      hourStartMs,
+      nowMs,
+      tickMinute
+    );
     completedThisTick = completedSlots.includes(tickMinute);
 
     const totalTarget = pickSlotCount(
@@ -310,7 +343,8 @@ export function decideWanderTick(
         ? tickMinute + TICK_MINUTES
         : tickMinute;
       const futureCandidates = buildRemainingTickCandidates(
-        hourStartMs,
+        nowMs,
+        tickMinute,
         startTick,
         lastRunAt,
         minGapMinutes
@@ -326,15 +360,24 @@ export function decideWanderTick(
     nextState = {
       hour: hourKey,
       slots: [...completedSlots, ...futureSlots].sort((a, b) => a - b),
+      executedSlots: completedSlots,
       ...(currentBoundsKey !== undefined
         ? { boundsKey: currentBoundsKey }
         : {}),
       lastRunAt,
     };
   } else {
+    const completedSlots = resolveExecutedSlotsInHour(
+      state,
+      hourStartMs,
+      nowMs,
+      tickMinute
+    );
+    completedThisTick = completedSlots.includes(tickMinute);
     nextState = {
       hour: state.hour,
       slots: [...state.slots],
+      executedSlots: completedSlots,
       ...(currentBoundsKey !== undefined
         ? { boundsKey: currentBoundsKey }
         : {}),
@@ -351,6 +394,9 @@ export function decideWanderTick(
       };
     }
     nextState.lastRunAt = nowMs;
+    nextState.executedSlots = [
+      ...new Set([...(nextState.executedSlots ?? []), tickMinute]),
+    ].sort((a, b) => a - b);
     return {
       run: true,
       reason: 'slot',

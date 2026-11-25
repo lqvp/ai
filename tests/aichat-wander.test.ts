@@ -427,8 +427,169 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       expect((await store3.load()).schedule).toEqual({
         hour: '2026-11-24T12',
         slots: [15],
+        executedSlots: [15],
         boundsKey: '0..0',
       });
+    }
+  });
+
+  it('tracks executedSlots accurately across skipped min_gap ticks and handles sub-tick offsets on mid-hour restarts', async () => {
+    // 1. min_gap で見送られた途中の枠を実行済みと数えない + executedSlots 無しの旧データ移行でも過大計上しない
+    {
+      const t1200_01 = Date.parse('2026-11-24T12:00:01+09:00');
+      const t1210_009 = Date.parse('2026-11-24T12:10:00.900+09:00');
+      const t1220_01 = Date.parse('2026-11-24T12:20:01+09:00');
+      const t1235_00 = Date.parse('2026-11-24T12:35:00+09:00');
+
+      const initialState = {
+        hour: '2026-11-24T12',
+        slots: [0, 10, 20],
+        executedSlots: [],
+        boundsKey: '3..3',
+      };
+      const d0 = decideWanderTick(
+        t1200_01,
+        initialState,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 3,
+          maxRunsPerHour: 3,
+        },
+        () => 0.5
+      );
+      expect(d0.run).toBe(true);
+      expect(d0.state.executedSlots).toEqual([0]);
+
+      const d10 = decideWanderTick(
+        t1210_009,
+        d0.state,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 3,
+          maxRunsPerHour: 3,
+        },
+        () => 0.5
+      );
+      expect(d10.run).toBe(false);
+      expect(d10.reason).toBe('min_gap');
+      expect(d10.state.executedSlots).toEqual([0]);
+
+      const d20 = decideWanderTick(
+        t1220_01,
+        d10.state,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 3,
+          maxRunsPerHour: 3,
+        },
+        () => 0.5
+      );
+      expect(d20.run).toBe(true);
+      expect(d20.state.executedSlots).toEqual([0, 20]);
+
+      // 12:35 再起動で固定 4 回へ増やすと、実績 2 回を差し引いて残り 2 枠が追加される
+      const d35 = decideWanderTick(
+        t1235_00,
+        d20.state,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 4,
+          maxRunsPerHour: 4,
+        },
+        () => 0.5
+      );
+      expect(d35.state.slots).toHaveLength(4);
+      expect(d35.state.slots!.slice(0, 2)).toEqual([0, 20]);
+      expect(d35.state.slots!.slice(2).every((s) => s >= 35 && s <= 55)).toBe(
+        true
+      );
+      expect(d35.state.executedSlots).toEqual(d35.run ? [0, 20, 35] : [0, 20]);
+
+      // executedSlots が無い旧データでも、途中の 0 や 10 を実行済み扱いせず lastRunAt の 20 のみを実績とみなす
+      const legacyDec = decideWanderTick(
+        t1235_00,
+        {
+          hour: '2026-11-24T12',
+          slots: [0, 10, 20],
+          boundsKey: '3..3',
+          lastRunAt: t1220_01,
+        },
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 4,
+          maxRunsPerHour: 4,
+        },
+        () => 0.5
+      );
+      expect(legacyDec.run).toBe(true);
+      expect(legacyDec.state.slots).toEqual([20, 35, 45, 55]);
+      expect(legacyDec.state.executedSlots).toEqual([20, 35]);
+    }
+
+    // 2. 枠の開始から +40s ずれて再起動しても、nowMs 基準で最短間隔を満たせば即座に2枠追加実行できる
+    {
+      const dir = createTempDir();
+      const filePath = join(dir, 'aichat-wander.json');
+      const t1235_20 = Date.parse('2026-11-24T12:35:20+09:00');
+      const t1245_40 = Date.parse('2026-11-24T12:45:40+09:00');
+      const t1255_40 = Date.parse('2026-11-24T12:55:40+09:00');
+
+      const store1 = new WanderStore({ filePath, now: () => t1235_20 });
+      const d35 = await store1.checkAndCommitScheduleTick(
+        t1235_20,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 1,
+          maxRunsPerHour: 1,
+        },
+        () => 0.999
+      );
+      expect(d35.run).toBe(true);
+      expect(d35.state.slots).toEqual([35]);
+      expect(d35.state.executedSlots).toEqual([35]);
+
+      const store2 = new WanderStore({ filePath, now: () => t1245_40 });
+      const d45 = await store2.checkAndCommitScheduleTick(
+        t1245_40,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 3,
+          maxRunsPerHour: 3,
+        },
+        () => 0.5
+      );
+      expect(d45.run).toBe(true);
+      expect(d45.state.slots).toEqual([35, 45, 55]);
+      expect(d45.state.executedSlots).toEqual([35, 45]);
+
+      const store3 = new WanderStore({ filePath, now: () => t1255_40 });
+      const d55 = await store3.checkAndCommitScheduleTick(
+        t1255_40,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 3,
+          maxRunsPerHour: 3,
+        },
+        () => 0.5
+      );
+      expect(d55.run).toBe(true);
+      expect(d55.state.executedSlots).toEqual([35, 45, 55]);
     }
   });
 
