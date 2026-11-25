@@ -35,6 +35,8 @@ export type WanderConfig = {
   activeHoursStart?: number;
   activeHoursEnd?: number;
   minGapMinutes?: number;
+  minRunsPerHour?: number;
+  maxRunsPerHour?: number;
   postCooldownMinutes?: number;
   maxReactionsPerRun?: number;
   replyProbability?: number;
@@ -245,6 +247,8 @@ export class WanderRunner {
         activeHoursStart: cfg.activeHoursStart ?? 9,
         activeHoursEnd: cfg.activeHoursEnd ?? 23,
         minGapMinutes: cfg.minGapMinutes ?? 10,
+        minRunsPerHour: cfg.minRunsPerHour,
+        maxRunsPerHour: cfg.maxRunsPerHour,
       },
       this.rng
     );
