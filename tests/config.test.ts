@@ -326,7 +326,7 @@ describe('kiatsu の数値型', () => {
     expect(() =>
       resolveConfig({
         ...base,
-        kiatsu: { errorCooldownMs: '3600000' },
+        kiatsu: { errorCooldownMs: '3600000' as unknown as number },
       } as Parameters<typeof resolveConfig>[0])
     ).toThrow(/数値で指定してください/);
   });
