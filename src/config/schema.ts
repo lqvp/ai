@@ -193,13 +193,19 @@ export type Config = {
     p2pWebSocketUrl?: string;
   };
   kiatsu?: {
-    locationCode?: string;
+    enabled?: boolean;
+    latitude?: number;
+    longitude?: number;
+    locationName?: string;
     requestTimeoutMs?: number;
-    maxErrorRetries?: number;
     updateIntervalMs?: number;
-    postIntervalMs?: number;
+    /** 3時間気圧変化 ΔP がこの値以下（より深い負値）になったら投稿する */
+    alertThresholdHpa?: number;
+    /** 投稿解除までの幅。閾値ちかくでの投稿の往復（チャタリング）を防ぐ */
+    hysteresisHpa?: number;
+    maxPostsPerDay?: number;
+    maxErrorRetries?: number;
     errorCooldownMs?: number;
-    minPostLevel?: number;
   };
   weatherAutoNotePref?: string;
   weatherAutoNoteHour?: number;
@@ -663,7 +669,6 @@ function validateAndResolve(input: RawConfig): Config {
   }
 
   for (const [name, section] of [
-    ['kiatsu', raw.kiatsu],
     ['earthquakeWarning', raw.earthquakeWarning],
   ] as const) {
     if (!isObject(section)) continue;
@@ -673,6 +678,147 @@ function validateAndResolve(input: RawConfig): Config {
         if (!Number.isFinite(Number(value)) || Number(value) <= 0) {
           issues.push(`${name}.${key} は正の数で指定してください`);
         }
+      }
+    }
+  }
+
+  // kiatsu は既定値をモジュール側（src/modules/kiatsu/index.ts）が持つため、
+  // ここでは範囲検査だけを行う（値の書き換えはしない）。
+  if (raw.kiatsu !== undefined && !isObject(raw.kiatsu)) {
+    issues.push('kiatsu はテーブル（[kiatsu]）として指定してください');
+  } else if (isObject(raw.kiatsu)) {
+    const kiatsu = raw.kiatsu;
+    // Node.js のタイマー上限（32-bit 符号付き整数）。これを超えると 1ms に丸められて
+    // 高頻度ループになるか、HTTP クライアントのタイムアウトが無効化される。
+    const maxTimerMs = 2_147_483_647;
+    // TOML で数値は数値型として書かれるため、文字列などは設定ミスとして弾く
+    const isNumber = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isFinite(value);
+
+    const isExplicitlyDisabled = kiatsu.enabled === false;
+
+    // open-meteo.ts は models=jma_msm（格子中心: 北緯 22.4〜47.6° [0.05°刻み・505点]、
+    // 東経 120〜150° [0.0625°刻み・481点]）に固定している。Open-Meteo（Swift Float32 実装）は
+    // 格子添字 `(Float32(coord) - Float32(origin)) / Float32(step)` が開区間 `(-1, count)` に
+    // 入るときだけ HTTP 200 を返し、等号境界（例: 119.9375° や Float32 丸めで 150.0625° に
+    // 落ちる 150.062499°）は HTTP 400 にする。同じ Float32 演算で正確に一致させる。
+    // なお enabled = false で明示的に無効化されている場合は WGS84 範囲と型だけを見る。
+    const f32 = Math.fround;
+    for (const [key, wgsMin, wgsMax, origin, step, count, labelRange] of [
+      ['latitude', -90, 90, 22.4, 0.05, 505, '北緯約 22.35〜47.65°'],
+      ['longitude', -180, 180, 120, 0.0625, 481, '東経約 119.9375〜150.0625°'],
+    ] as const) {
+      const value = kiatsu[key];
+      if (value === undefined) continue;
+      if (!isNumber(value) || value < wgsMin || value > wgsMax) {
+        issues.push(
+          `kiatsu.${key} は ${wgsMin}〜${wgsMax} の数値で指定してください`
+        );
+      } else if (!isExplicitlyDisabled) {
+        const gridIndex = f32(f32(f32(value) - f32(origin)) / f32(step));
+        if (!(gridIndex > -1 && gridIndex < count)) {
+          issues.push(
+            `kiatsu.${key} は JMA MSM の提供範囲（${labelRange}）で指定してください`
+          );
+        }
+      }
+    }
+
+    // 片側だけの座標指定は拒否する。片方だけだと既定値と組み合わされ、
+    // 利用者が意図していない地点の予報を投稿してしまう。
+    if ((kiatsu.latitude === undefined) !== (kiatsu.longitude === undefined)) {
+      issues.push(
+        'kiatsu.latitude と kiatsu.longitude は両方そろえて指定してください'
+      );
+    }
+
+    if (
+      kiatsu.locationName !== undefined &&
+      typeof kiatsu.locationName !== 'string'
+    ) {
+      issues.push('kiatsu.locationName は文字列で指定してください');
+    }
+
+    if (kiatsu.alertThresholdHpa !== undefined) {
+      const value = kiatsu.alertThresholdHpa;
+      // 気圧の低下を負値で表す。0 は「常時警報」になり判定が成立しないため弾く
+      // （pressure-trend.ts の evaluateAlert が 0 以上を実行時例外にしている）。
+      if (!isNumber(value) || value >= 0 || value < -10) {
+        issues.push(
+          'kiatsu.alertThresholdHpa は 0 より小さい負値（-10 以上）で指定してください（例: -2.0）'
+        );
+      }
+    }
+
+    if (kiatsu.enabled !== undefined && typeof kiatsu.enabled !== 'boolean') {
+      // "false" のような文字列は enabled === false 比較をすり抜けて
+      // 有効扱いになるため、型の段階で弾く。
+      issues.push('kiatsu.enabled は true または false で指定してください');
+    }
+
+    if (kiatsu.hysteresisHpa !== undefined) {
+      const value = kiatsu.hysteresisHpa;
+      if (!isNumber(value) || value < 0 || value > 5) {
+        issues.push('kiatsu.hysteresisHpa は 0〜5 で指定してください');
+      }
+    }
+
+    // 解除の境界（しきい値 + 幅）が 0 を超えると、気圧が横ばい〜上昇でも
+    // 警報が解除されず「下がってきています」と上昇量を投稿しうる。
+    // 片方だけ指定された場合も、既定値と組み合わせた実効値で検証する。
+    {
+      const threshold = isNumber(kiatsu.alertThresholdHpa)
+        ? kiatsu.alertThresholdHpa
+        : -2;
+      const hysteresis = isNumber(kiatsu.hysteresisHpa)
+        ? kiatsu.hysteresisHpa
+        : 0.5;
+
+      if (threshold + hysteresis > 0) {
+        issues.push(
+          'kiatsu.hysteresisHpa は警報しきい値の絶対値以下にしてください（例: しきい値 -2.0 なら 2.0 以下）'
+        );
+      }
+    }
+
+    // *Ms は正の数値（32-bit タイマー上限以下）として扱う。
+    // 稼働時（enabled !== false）の updateIntervalMs は Open-Meteo 無料枠（10,000 calls/日）を
+    // 枯渇させないよう最小 60,000ms（1分＝最大 1,440 calls/日）を下限とする。
+    // 検証するのは現行スキーマのキーだけ。廃止キー（postIntervalMs など）は
+    // 無視するのが約束なので、型や値を理由に起動を止めてはいけない。
+    const minUpdateIntervalMs = isExplicitlyDisabled ? 1 : 60_000;
+    for (const [key, minMs] of [
+      ['requestTimeoutMs', 1],
+      ['updateIntervalMs', minUpdateIntervalMs],
+      ['errorCooldownMs', 1],
+    ] as const) {
+      const value = kiatsu[key];
+      if (value === undefined) continue;
+      if (!isNumber(value) || value < minMs || value > maxTimerMs) {
+        issues.push(
+          `kiatsu.${key} は ${minMs}〜${maxTimerMs} の正の数値で指定してください（クォートで囲まない）`
+        );
+      }
+    }
+
+    if (kiatsu.maxPostsPerDay !== undefined) {
+      const value = kiatsu.maxPostsPerDay;
+      if (!isNumber(value) || !Number.isInteger(value) || value < 1) {
+        issues.push('kiatsu.maxPostsPerDay は 1 以上の整数で指定してください');
+      }
+    }
+
+    if (kiatsu.maxErrorRetries !== undefined) {
+      const value = kiatsu.maxErrorRetries;
+      if (
+        !isNumber(value) ||
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value > 100
+      ) {
+        issues.push(
+          'kiatsu.maxErrorRetries は 0〜100 の整数で指定してください'
+        );
       }
     }
   }

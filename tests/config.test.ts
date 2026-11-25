@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, resolveConfig } from '../src/config/index.js';
+import {
+  ConfigError,
+  initConfig,
+  loadConfig,
+  resolveConfig,
+} from '../src/config/index.js';
+import { formatPressureSettings } from '../src/modules/info/format.js';
 
 const base = {
   host: 'https://example.com/',
@@ -182,6 +188,139 @@ describe('resolveConfig', () => {
     });
     expect(config.host).toBe('https://example.com');
   });
+
+  it('keeps kiatsu settings as written (defaults live in the module)', () => {
+    const config = resolveConfig({
+      ...base,
+      kiatsu: {
+        enabled: true,
+        latitude: 36.3219,
+        longitude: 139.0033,
+        locationName: '高崎市',
+        requestTimeoutMs: 10000,
+        updateIntervalMs: 600000,
+        alertThresholdHpa: -2.0,
+        hysteresisHpa: 0.5,
+        maxPostsPerDay: 1,
+        maxErrorRetries: 5,
+        errorCooldownMs: 3600000,
+      },
+    });
+
+    expect(config.kiatsu?.latitude).toBe(36.3219);
+    expect(config.kiatsu?.longitude).toBe(139.0033);
+    expect(config.kiatsu?.locationName).toBe('高崎市');
+    expect(config.kiatsu?.alertThresholdHpa).toBe(-2.0);
+    expect(config.kiatsu?.hysteresisHpa).toBe(0.5);
+    expect(config.kiatsu?.maxPostsPerDay).toBe(1);
+  });
+
+  it('leaves kiatsu keys unset instead of injecting defaults', () => {
+    const config = resolveConfig({ ...base, kiatsu: { enabled: true } });
+    expect(config.kiatsu).toEqual({ enabled: true });
+  });
+
+  it('rejects kiatsu coordinates outside Open-Meteo JMA MSM Float32 grid acceptance', () => {
+    // 実 API で HTTP 400 になる境界値（Float32 等号境界の 119.9375, 119.937501, 150.062499 等を含む）を弾く
+    for (const coords of [
+      { latitude: 90.1, longitude: 139 },
+      { latitude: -90.1, longitude: 139 },
+      { latitude: 22.349999, longitude: 139 },
+      { latitude: 47.65, longitude: 139 },
+      { latitude: 35.6, longitude: 119.9375 },
+      { latitude: 35.6, longitude: 119.937501 },
+      { latitude: 35.6, longitude: 150.062499 },
+      { latitude: 35.6, longitude: 150.0625 },
+      { latitude: 0, longitude: 0 },
+      { latitude: '36.3' as never, longitude: 139 },
+    ]) {
+      expect(() => resolveConfig({ ...base, kiatsu: { ...coords } })).toThrow(
+        ConfigError
+      );
+    }
+
+    // 実 API で HTTP 200 になる境界すぐ内側の座標は許可する
+    for (const coords of [
+      { latitude: 22.35, longitude: 119.93751 },
+      { latitude: 47.61, longitude: 139 },
+      { latitude: 47.649998, longitude: 150.06249 },
+    ]) {
+      const config = resolveConfig({
+        ...base,
+        kiatsu: coords,
+      });
+      expect(config.kiatsu?.latitude).toBe(coords.latitude);
+      expect(config.kiatsu?.longitude).toBe(coords.longitude);
+    }
+  });
+
+  it('rejects a kiatsu alert threshold that is zero or outside -10..0', () => {
+    // 0 は「常時警報」で意味を持たず evaluateAlert が例外にするため弾く
+    for (const alertThresholdHpa of [0, 0.1, 2, -10.1]) {
+      expect(() =>
+        resolveConfig({ ...base, kiatsu: { alertThresholdHpa } })
+      ).toThrow(ConfigError);
+    }
+
+    // -10 以上 0 未満（開区間）は許可
+    for (const alertThresholdHpa of [-0.5, -10, -2.0]) {
+      const config = resolveConfig({ ...base, kiatsu: { alertThresholdHpa } });
+      expect(config.kiatsu?.alertThresholdHpa).toBe(alertThresholdHpa);
+    }
+  });
+
+  it('rejects a non-boolean kiatsu.enabled', () => {
+    // 文字列 "false" は enabled === false 比較をすり抜けて有効扱いになる
+    expect(() =>
+      resolveConfig({ ...base, kiatsu: { enabled: 'false' as never } })
+    ).toThrow(ConfigError);
+
+    const config = resolveConfig({ ...base, kiatsu: { enabled: false } });
+    expect(config.kiatsu?.enabled).toBe(false);
+  });
+
+  it('shows kiatsu as running when enabled is unset', () => {
+    // モジュールは enabled === false のときだけ停止する（未設定は稼働）。
+    // 表示側も同じ扱いにしないと、既存利用者が全員「停止」と誤表示される。
+    initConfig(resolveConfig({ ...base, kiatsu: {} }));
+    expect(formatPressureSettings()).toContain('✅');
+  });
+
+  it('rejects out-of-range kiatsu hysteresis and maxPostsPerDay', () => {
+    for (const kiatsu of [
+      { hysteresisHpa: -0.1 },
+      { hysteresisHpa: 5.1 },
+      { maxPostsPerDay: 0 },
+      { maxPostsPerDay: 1.5 },
+      { maxPostsPerDay: '1' as never },
+    ]) {
+      expect(() => resolveConfig({ ...base, kiatsu })).toThrow(ConfigError);
+    }
+
+    const config = resolveConfig({
+      ...base,
+      kiatsu: { hysteresisHpa: 0, maxPostsPerDay: 24 },
+    });
+    expect(config.kiatsu?.hysteresisHpa).toBe(0);
+    expect(config.kiatsu?.maxPostsPerDay).toBe(24);
+  });
+
+  it('ignores legacy kiatsu keys left in a local config.toml', () => {
+    // 移行前の config.toml をそのまま使っても起動できること
+    const config = resolveConfig({
+      ...base,
+      kiatsu: {
+        enabled: true,
+        latitude: 36.3219,
+        longitude: 139.0033,
+        locationCode: '13102',
+        postIntervalMs: 43200000,
+        minPostLevel: 2,
+      } as never,
+    });
+    expect(config.host).toBe('https://example.com');
+    expect(config.kiatsu?.latitude).toBe(36.3219);
+  });
 });
 
 describe('loadConfig', () => {
@@ -220,5 +359,172 @@ describe('loadConfig', () => {
     writeFileSync(file, 'host = ', 'utf8');
 
     expect(() => loadConfig(file)).toThrow(ConfigError);
+  });
+});
+
+describe('kiatsu の数値型', () => {
+  it('クォートされたミリ秒指定を拒否する', () => {
+    // TOML で errorCooldownMs = "3600000" と書くと文字列になり、
+    // タイマー計算で例外になって監視が再開できなくなる。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { errorCooldownMs: '3600000' as unknown as number },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/数値で指定してください/);
+  });
+});
+
+describe('kiatsu の座標指定', () => {
+  it('片側だけの座標指定を拒否する', () => {
+    // longitude が未指定だと既定値と組み合わされ、意図しない地点になる。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { latitude: 36.3219 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/両方そろえて/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { longitude: 139.0033 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/両方そろえて/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { latitude: 36.3219, longitude: 139.0033 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).not.toThrow();
+  });
+});
+
+describe('廃止キーの後方互換', () => {
+  it('旧 postIntervalMs が文字列や 0 でも起動を止めない', () => {
+    // 旧設定では postIntervalMs = "43200000" や 0 のように書かれていた。
+    // 廃止キーは無視するのが約束なので、型や値を理由に起動を失敗させない。
+    for (const postIntervalMs of ['43200000', '', 0, -1, false]) {
+      const config = resolveConfig({
+        ...base,
+        kiatsu: { postIntervalMs, locationCode: '13102' },
+      } as unknown as Parameters<typeof resolveConfig>[0]);
+
+      expect(config.kiatsu?.latitude).toBeUndefined();
+    }
+  });
+});
+
+describe('kiatsu の追加型・範囲検証', () => {
+  it('kiatsu がテーブル以外（boolean 等）なら拒否する', () => {
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: false,
+      } as unknown as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/テーブル/);
+  });
+
+  it('locationName が文字列以外なら拒否する', () => {
+    for (const locationName of [13102, true, ['高崎市']]) {
+      expect(() =>
+        resolveConfig({
+          ...base,
+          kiatsu: { locationName },
+        } as unknown as Parameters<typeof resolveConfig>[0])
+      ).toThrow(/locationName は文字列/);
+    }
+  });
+
+  it('maxErrorRetries が 0〜100 の整数以外なら拒否する', () => {
+    for (const maxErrorRetries of [-1, 1.5, 101, '5', false]) {
+      expect(() =>
+        resolveConfig({
+          ...base,
+          kiatsu: { maxErrorRetries },
+        } as unknown as Parameters<typeof resolveConfig>[0])
+      ).toThrow(/maxErrorRetries/);
+    }
+
+    const ok = resolveConfig({
+      ...base,
+      kiatsu: { maxErrorRetries: 0 },
+    });
+    expect(ok.kiatsu?.maxErrorRetries).toBe(0);
+  });
+
+  it('*Ms が下限未満や 32-bit タイマー上限超えなら拒否し、重複エラーを出さない', () => {
+    for (const updateIntervalMs of [0, -100, 1000, 59_999, 2_147_483_648]) {
+      expect(() =>
+        resolveConfig({
+          ...base,
+          kiatsu: { updateIntervalMs },
+        })
+      ).toThrow(ConfigError);
+    }
+
+    expect(
+      resolveConfig({ ...base, kiatsu: { updateIntervalMs: 60_000 } }).kiatsu
+        ?.updateIntervalMs
+    ).toBe(60_000);
+
+    // enabled = false で明示的に無効化されているときは無料枠下限で起動を止めない
+    expect(
+      resolveConfig({
+        ...base,
+        kiatsu: { enabled: false, updateIntervalMs: 30_000 },
+      }).kiatsu?.updateIntervalMs
+    ).toBe(30_000);
+
+    try {
+      resolveConfig({
+        ...base,
+        kiatsu: { requestTimeoutMs: 'abc' as unknown as number },
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).issues).toHaveLength(1);
+    }
+  });
+});
+
+describe('kiatsu のヒステリシス', () => {
+  it('解除の境界が 0 以上になる幅を拒否する', () => {
+    // しきい値 -2.0 に幅 3.0 を足すと +1.0 になり、気圧が上昇しても
+    // 解除されず「下がってきています」と上昇量を投稿しうる。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -2, hysteresisHpa: 3 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/絶対値以下/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -2, hysteresisHpa: 2 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).not.toThrow();
+  });
+});
+
+describe('kiatsu の解除境界（既定値を含む）', () => {
+  it('しきい値だけを浅く指定しても、既定の幅で境界が 0 を超えたら拒否する', () => {
+    // しきい値 -0.2 に既定の幅 0.5 を足すと +0.3 になり、横ばいでも解除されない。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -0.2 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/絶対値以下/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -0.2, hysteresisHpa: 0.2 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).not.toThrow();
   });
 });

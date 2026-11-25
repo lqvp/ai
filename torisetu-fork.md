@@ -13,7 +13,7 @@
 
 #### 情報取得機能 (メンションで応答)
 - **天気予報**: `@(bot名) てんき [地名]` のようにメンションすると、その場所の天気予報を返します。(データソース: [tsukumijima.net](https://weather.tsukumijima.net/))
-- **気圧情報**: `@(bot名) 気圧` のようにメンションすると、`config.toml` で設定された場所の気圧情報を返します。(データソース: zutool)
+- **気圧情報**: `@(bot名) 気圧` のようにメンションすると、`config.toml` の `[kiatsu]` で指定した緯度経度（`latitude` / `longitude`、未設定時は東京都中央区）の気圧予報と3時間変化を返し、急激な気圧低下時には自動でノートを投稿します（`enabled = false` で無効化可）。(データソース: [Open-Meteo](https://open-meteo.com/) の気象庁MSM)
 - **地震速報**: [wolfx](https://github.com/wolf-dog) と連携し、地震速報をノートに投稿する機能を追加しました。
 
 #### その他の変更

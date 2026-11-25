@@ -87,7 +87,9 @@ export const CONFIG_LABELS = {
     minMagnitude: '弱震時の最小規模',
   },
   pressure: {
-    minPostLevel: '最小投稿レベル',
+    enabled: '気圧監視',
+    locationName: '地点名',
+    alertThreshold: '投稿閾値 (3時間気圧変化)',
     updateInterval: '更新間隔',
   },
   others: {
@@ -280,14 +282,32 @@ export function formatPressureSettings(): string {
   if (!config.kiatsu) return '';
 
   const updateIntervalMinutes = config.kiatsu.updateIntervalMs
-    ? Math.floor(config.kiatsu.updateIntervalMs / 60000) + '分'
+    ? config.kiatsu.updateIntervalMs >= 60_000
+      ? `${Math.floor(config.kiatsu.updateIntervalMs / 60000)}分`
+      : `${Math.max(1, Math.round(config.kiatsu.updateIntervalMs / 1000))}秒`
     : FORMAT_DEFAULTS.notSet;
+
+  const alertThreshold =
+    config.kiatsu.alertThresholdHpa !== undefined
+      ? `${config.kiatsu.alertThresholdHpa} hPa`
+      : FORMAT_DEFAULTS.notSet;
+
+  const locationName =
+    typeof config.kiatsu.locationName === 'string'
+      ? config.kiatsu.locationName.trim() || undefined
+      : undefined;
 
   const lines: string[] = [
     CONFIG_LABELS.sections.pressure,
-    `- ${CONFIG_LABELS.pressure.minPostLevel}: ${safeConfigValue(
-      config.kiatsu.minPostLevel
+    // kiatsu モジュールは enabled === false のときだけ停止する（未設定は稼働）。
+    // 既定値の true をここで補い、表示と実行状態を一致させる。
+    `- ${CONFIG_LABELS.pressure.enabled}: ${formatBooleanSetting(
+      config.kiatsu.enabled ?? true
     )}`,
+    // 座標は出さない。公開ノートへの返信に設定値が載ると、監視地点が
+    // 第三者に特定されてしまう（locationName は利用者が自分で決めた表示名）。
+    `- ${CONFIG_LABELS.pressure.locationName}: ${safeConfigValue(locationName)}`,
+    `- ${CONFIG_LABELS.pressure.alertThreshold}: ${alertThreshold}`,
     `- ${CONFIG_LABELS.pressure.updateInterval}: ${updateIntervalMinutes}`,
   ];
 
