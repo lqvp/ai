@@ -146,8 +146,8 @@ export default class extends Module<KiatsuData> {
   /** 直近で予報取得に成功した時刻（ミリ秒）。キャッシュの鮮度判定に使う。 */
   private latestForecastFetchedAtMs: number | null = null;
 
-  /** 直近で予報取得を試行した時刻（ミリ秒）。失敗・時刻不一致時を含むメンション再試行の間隔制限に使う。 */
-  private lastFetchAttemptAtMs: number | null = null;
+  /** 直近で予報取得または現在時刻照合に失敗した試行時刻（ミリ秒）。連続メンション時の再試行抑制に使う。 */
+  private lastFailedFetchAtMs: number | null = null;
 
   /** 直近の ΔP3h。計算できないときは null。 */
   private latestDelta3h: number | null = null;
@@ -324,7 +324,7 @@ export default class extends Module<KiatsuData> {
     this.syncPostDay();
 
     let forecast: HourlyForecast;
-    this.lastFetchAttemptAtMs = Date.now();
+    const attemptAtMs = Date.now();
 
     try {
       forecast = await fetchForecast({
@@ -333,6 +333,7 @@ export default class extends Module<KiatsuData> {
         timeoutMs: config.kiatsu?.requestTimeoutMs ?? DEFAULTS.requestTimeoutMs,
       });
     } catch (error) {
+      this.lastFailedFetchAtMs = attemptAtMs;
       this.log('気圧データの取得に失敗しました。');
       console.warn(error);
       if (countErrors) {
@@ -346,6 +347,7 @@ export default class extends Module<KiatsuData> {
     const currentIndex = this.findCurrentIndex(forecast, now);
 
     if (currentIndex < 0) {
+      this.lastFailedFetchAtMs = attemptAtMs;
       // 単発の時刻ずれ（1回分）はネットワーク失敗と区別して様子を見るが、
       // API の書式変更や配信停止で連続して該当時刻が無い場合は、無限に空振りし続けないよう
       // 通常の失敗カウントに乗せて指数バックオフへ移行させる。
@@ -361,6 +363,7 @@ export default class extends Module<KiatsuData> {
       return;
     }
 
+    this.lastFailedFetchAtMs = null;
     this.consecutiveMissingHours = 0;
 
     // 使える時刻が見つかってから差し替える。先に保持すると、開始位置だけ
@@ -751,9 +754,9 @@ export default class extends Module<KiatsuData> {
    * メンション応答の前に、必要なら予報を更新する。
    *
    * - 進行中の評価があればそれに相乗りする。
-   * - 成否を問わず直近 `updateIntervalMs` 以内に取得を試行済みなら再取得しない
-   *   （取得失敗中や時刻不一致中に連続メンションが来ても外部 API を叩き続けないようにする）。
-   * - キャッシュ自体の鮮度判定には引き続き取得成功時刻を使う。
+   * - 直近の失敗（通信失敗・時刻不一致）から `updateIntervalMs` 未満なら再試行しない。
+   * - 直近 `updateIntervalMs` 以内に取得成功しており現在時刻のスナップショットも鮮度内なら
+   *   キャッシュをそのまま使い、`updateIntervalMs > STALE_MS` で鮮度切れになった場合は再取得を許可する。
    */
   private async ensureFreshForMention(): Promise<void> {
     if (this.inFlightEvaluation) {
@@ -765,11 +768,19 @@ export default class extends Module<KiatsuData> {
       config.kiatsu?.updateIntervalMs ?? DEFAULTS.updateIntervalMs;
     const nowMs = Date.now();
     if (
-      this.lastFetchAttemptAtMs !== null &&
-      nowMs - this.lastFetchAttemptAtMs < updateIntervalMs
+      this.lastFailedFetchAtMs !== null &&
+      nowMs - this.lastFailedFetchAtMs < updateIntervalMs
     ) {
       return;
     }
+
+    const snapshot = this.captureSnapshot(new Date(nowMs));
+    const recentlyFetched =
+      this.latestForecastFetchedAtMs !== null &&
+      nowMs - this.latestForecastFetchedAtMs < updateIntervalMs &&
+      this.isSnapshotFresh(snapshot, nowMs);
+
+    if (recentlyFetched) return;
 
     await this.enqueueEvaluation({ allowPost: false, countErrors: false });
   }

@@ -468,7 +468,7 @@ describe('KiatsuModule (index.ts)', () => {
     const fetchSpy = vi.spyOn(openMeteo, 'fetchForecast');
     fetchSpy.mockResolvedValueOnce(buildForecastAt(new Date(), -1.4));
 
-    const { mod, api, upload } = createHarness({
+    const { mod, api, upload, logs } = createHarness({
       locationName: '高崎市',
       updateIntervalMs: 10_800_000, // 3時間（キャッシュ有効だが鮮度境界手前を作る）
     });
@@ -505,6 +505,11 @@ describe('KiatsuModule (index.ts)', () => {
     // 遅延して削除が失敗しても UnhandledRejection にならずログに記録されること
     rejectDelete(new Error('delete timeout'));
     await Promise.resolve();
+    expect(
+      logs.some((l) =>
+        l.includes('不要になった予報画像の削除に失敗しました: file-late')
+      )
+    ).toBe(true);
     mod.dispose();
   });
 
@@ -720,6 +725,42 @@ describe('KiatsuModule (index.ts)', () => {
     const afterInterval2 = makeMentionMessage();
     await hooks.mentionHook!(afterInterval2.message);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    mod.dispose();
+  });
+
+  it('updateIntervalMs が 2 時間を超える設定（3時間）でも取得成功から 2 時間経過後のメンションは再取得して新しい予報を返す', async () => {
+    // 20:00 JST (11:00Z) に初回取得成功
+    const fetchSpy = vi
+      .spyOn(openMeteo, 'fetchForecast')
+      .mockResolvedValueOnce(
+        buildForecastAt(new Date('2026-11-25T11:00:00Z'), -0.8)
+      );
+
+    const { mod } = createHarness({
+      locationName: '高崎市',
+      updateIntervalMs: 10_800_000, // 3時間間隔（> STALE_MS 2時間）
+    });
+    const hooks = mod.getHooks();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // 22:15 JST (13:15Z): 定期取得前（2時間15分経過）でキャッシュは期限切れだが、前回成功なのでメンションで再取得できる
+    vi.setSystemTime(new Date('2026-11-25T13:15:00Z'));
+    fetchSpy.mockResolvedValueOnce(
+      buildForecastAt(new Date('2026-11-25T13:15:00Z'), -1.9)
+    );
+    const mention = makeMentionMessage();
+    await hooks.mentionHook!(mention.message);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const [replyText, replyOpts] = mention.reply.mock.calls[0] as [
+      string,
+      { file?: unknown },
+    ];
+    expect(replyText).toContain('-1.9 hPa');
+    expect(replyText).toContain('22:00時点');
+    expect(replyOpts.file).toBeDefined();
 
     mod.dispose();
   });
