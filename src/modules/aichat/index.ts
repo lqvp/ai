@@ -232,6 +232,8 @@ export default class extends Module {
         activeHoursStart: config.aichat?.wander?.activeHours?.start,
         activeHoursEnd: config.aichat?.wander?.activeHours?.end,
         minGapMinutes: config.aichat?.wander?.minGapMinutes,
+        minRunsPerHour: config.aichat?.wander?.minRunsPerHour,
+        maxRunsPerHour: config.aichat?.wander?.maxRunsPerHour,
         postCooldownMinutes: config.aichat?.wander?.postCooldownMinutes,
         maxReactionsPerRun: config.aichat?.wander?.maxReactionsPerRun,
         replyProbability: config.aichat?.wander?.replyProbability,

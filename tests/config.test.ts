@@ -89,6 +89,8 @@ describe('resolveConfig', () => {
           enabled: true,
           timelines: ['home', 'hybrid'],
           activeHours: { start: 9, end: 23 },
+          minRunsPerHour: 2,
+          maxRunsPerHour: 4,
           replyProbability: 0.35,
           postProbability: 0.25,
         },
@@ -103,6 +105,34 @@ describe('resolveConfig', () => {
     expect(config.masterUserId).toBe('uid-1');
     expect(config.aichat?.affinity?.ignoreThreshold).toBe(-40);
     expect(config.aichat?.wander?.timelines).toEqual(['home', 'hybrid']);
+    expect(config.aichat?.wander?.minRunsPerHour).toBe(2);
+    expect(config.aichat?.wander?.maxRunsPerHour).toBe(4);
+
+    // 境界値（0, 12）や片側のみ指定・同値も許可される
+    for (const wander of [
+      { minRunsPerHour: 0, maxRunsPerHour: 12 },
+      { minRunsPerHour: 3, maxRunsPerHour: 3 },
+      { minRunsPerHour: 2 },
+      { maxRunsPerHour: 5 },
+    ]) {
+      expect(() =>
+        resolveConfig({ ...base, aichat: { wander } })
+      ).not.toThrow();
+    }
+
+    for (const invalidWander of [
+      { minRunsPerHour: -1 },
+      { maxRunsPerHour: -1 },
+      { minRunsPerHour: 13 },
+      { maxRunsPerHour: 13 },
+      { minRunsPerHour: 1.5 },
+      { maxRunsPerHour: 2.5 },
+      { minRunsPerHour: 4, maxRunsPerHour: 2 },
+    ]) {
+      expect(() =>
+        resolveConfig({ ...base, aichat: { wander: invalidWander } })
+      ).toThrow(ConfigError);
+    }
 
     expect(() =>
       resolveConfig({

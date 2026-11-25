@@ -124,6 +124,8 @@ export type Config = {
         end?: number;
       };
       minGapMinutes?: number;
+      minRunsPerHour?: number;
+      maxRunsPerHour?: number;
       postCooldownMinutes?: number;
       maxReactionsPerRun?: number;
       replyProbability?: number;
@@ -558,6 +560,36 @@ function validateAndResolve(input: RawConfig): Config {
             'aichat.wander.maxReactionsPerRun は 0〜10 の整数で指定してください'
           );
         }
+      }
+      let minRunsValid = false;
+      let maxRunsValid = false;
+      for (const key of ['minRunsPerHour', 'maxRunsPerHour'] as const) {
+        const rawVal = wander[key];
+        if (rawVal !== undefined) {
+          const valid =
+            typeof rawVal === 'number' &&
+            Number.isInteger(rawVal) &&
+            rawVal >= 0 &&
+            rawVal <= 12;
+          if (!valid) {
+            issues.push(
+              `aichat.wander.${key} は 0〜12 の整数で指定してください`
+            );
+          } else if (key === 'minRunsPerHour') {
+            minRunsValid = true;
+          } else {
+            maxRunsValid = true;
+          }
+        }
+      }
+      if (
+        minRunsValid &&
+        maxRunsValid &&
+        Number(wander.minRunsPerHour) > Number(wander.maxRunsPerHour)
+      ) {
+        issues.push(
+          'aichat.wander.minRunsPerHour は maxRunsPerHour 以下で指定してください'
+        );
       }
     }
 

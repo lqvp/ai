@@ -10,6 +10,8 @@ export type WanderSchedulerOptions = {
   activeHoursStart?: number;
   activeHoursEnd?: number;
   minGapMinutes?: number;
+  minRunsPerHour?: number;
+  maxRunsPerHour?: number;
 };
 
 export type WanderScheduleDecision = {
@@ -19,6 +21,8 @@ export type WanderScheduleDecision = {
 };
 
 const TICK_MINUTES = 5;
+const MAX_RUNS_PER_HOUR = 60 / TICK_MINUTES;
+const DEFAULT_MAX_RUNS_PER_HOUR = 3;
 const HOUR_WEIGHTS: readonly [number, number][] = [
   [0, 20],
   [1, 40],
@@ -51,6 +55,32 @@ function pickWeightedCount(rng: () => number): number {
   return 1;
 }
 
+/**
+ * 1時間あたりの巡回回数を抽選する。
+ * min/max 両方未指定時は従来の重み付き確率（0〜3回）を維持し、片側または両側指定時は範囲内で一様抽選する。
+ */
+function pickSlotCount(
+  rng: () => number,
+  minRunsPerHour?: number,
+  maxRunsPerHour?: number
+): number {
+  if (minRunsPerHour === undefined && maxRunsPerHour === undefined) {
+    return pickWeightedCount(rng);
+  }
+  const rawMin =
+    minRunsPerHour !== undefined && Number.isFinite(minRunsPerHour)
+      ? Math.trunc(minRunsPerHour)
+      : 0;
+  const min = Math.max(0, Math.min(MAX_RUNS_PER_HOUR, rawMin));
+  const rawMax =
+    maxRunsPerHour !== undefined && Number.isFinite(maxRunsPerHour)
+      ? Math.trunc(maxRunsPerHour)
+      : Math.max(DEFAULT_MAX_RUNS_PER_HOUR, min);
+  const max = Math.max(min, Math.min(MAX_RUNS_PER_HOUR, rawMax));
+  if (min === max) return min;
+  return Math.min(max, min + Math.floor(rng() * (max - min + 1)));
+}
+
 function shuffle<T>(items: T[], rng: () => number): T[] {
   for (let i = items.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
@@ -65,9 +95,14 @@ export function drawHourlySlots(
   currentSecond: number,
   lastRunAt: number | undefined,
   minGapMinutes: number,
-  rng: () => number
+  rng: () => number,
+  runsBounds?: { minRunsPerHour?: number; maxRunsPerHour?: number }
 ): number[] {
-  const k = pickWeightedCount(rng);
+  const k = pickSlotCount(
+    rng,
+    runsBounds?.minRunsPerHour,
+    runsBounds?.maxRunsPerHour
+  );
   if (k <= 0) return [];
 
   const tickMinute = Math.floor(currentMinute / TICK_MINUTES) * TICK_MINUTES;
@@ -102,7 +137,7 @@ export function drawHourlySlots(
 
 /**
  * mugi-misskey ADR 0002 に準拠したランダム時刻 TL 巡回スケジューラ。
- * 毎時最初のティックでその時間のスロット(0〜3回)を抽選し、最短間隔を保証する。
+ * 毎時最初のティックでその時間のスロット(既定は 0〜3 回の重み付き抽選、minRunsPerHour / maxRunsPerHour 指定時はその範囲で一様抽選)を抽選し、最短間隔を保証する。
  */
 export function decideWanderTick(
   nowMs: number,
@@ -137,7 +172,11 @@ export function decideWanderTick(
         parts.second,
         lastRunAt,
         minGapMinutes,
-        rng
+        rng,
+        {
+          minRunsPerHour: options.minRunsPerHour,
+          maxRunsPerHour: options.maxRunsPerHour,
+        }
       ),
       lastRunAt,
     };

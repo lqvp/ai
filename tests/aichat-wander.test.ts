@@ -13,7 +13,10 @@ import {
 } from '../src/modules/aichat/history-repository.js';
 import { PlaybookLoader } from '../src/modules/aichat/playbook.js';
 import { WanderRunner } from '../src/modules/aichat/wander.js';
-import { decideWanderTick } from '../src/modules/aichat/wander-scheduler.js';
+import {
+  decideWanderTick,
+  drawHourlySlots,
+} from '../src/modules/aichat/wander-scheduler.js';
 import { WanderStore } from '../src/modules/aichat/wander-store.js';
 
 const dirs: string[] = [];
@@ -82,6 +85,99 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       ).toBeGreaterThanOrEqual(10);
     }
     expect(drawn.state.slots).not.toContain(0);
+  });
+
+  it('draws fixed slot counts and zero slots when minRunsPerHour/maxRunsPerHour match', () => {
+    const noon = Date.parse('2026-11-24T12:00:00+09:00');
+
+    const fixed = decideWanderTick(
+      noon,
+      {},
+      {
+        activeHoursStart: 9,
+        activeHoursEnd: 23,
+        minGapMinutes: 10,
+        minRunsPerHour: 4,
+        maxRunsPerHour: 4,
+      },
+      () => 0.5
+    );
+    expect(fixed.state.slots).toHaveLength(4);
+    for (let i = 1; i < (fixed.state.slots ?? []).length; i++) {
+      expect(
+        fixed.state.slots![i] - fixed.state.slots![i - 1]
+      ).toBeGreaterThanOrEqual(10);
+    }
+
+    const zero = decideWanderTick(
+      noon,
+      {},
+      {
+        activeHoursStart: 9,
+        activeHoursEnd: 23,
+        minGapMinutes: 10,
+        minRunsPerHour: 0,
+        maxRunsPerHour: 0,
+      },
+      () => 0.5
+    );
+    expect(zero.run).toBe(false);
+    expect(zero.reason).toBe('not_slot');
+    expect(zero.state.slots).toEqual([]);
+  });
+
+  it('draws counts uniformly within custom [minRunsPerHour, maxRunsPerHour] and supports single-sided bounds', () => {
+    const noon = Date.parse('2026-11-24T12:00:00+09:00');
+
+    for (const [r, expected] of [
+      [0, 2],
+      [0.5, 4],
+      [0.999, 5],
+    ] as const) {
+      const slots = drawHourlySlots(noon, 0, 0, undefined, 5, () => r, {
+        minRunsPerHour: 2,
+        maxRunsPerHour: 5,
+      });
+      expect(slots).toHaveLength(expected);
+    }
+
+    expect(
+      drawHourlySlots(noon, 0, 0, undefined, 5, () => 0, {
+        minRunsPerHour: 2,
+      })
+    ).toHaveLength(2);
+    expect(
+      drawHourlySlots(noon, 0, 0, undefined, 5, () => 0.999, {
+        minRunsPerHour: 2,
+      })
+    ).toHaveLength(3);
+    expect(
+      drawHourlySlots(noon, 0, 0, undefined, 5, () => 0.5, {
+        minRunsPerHour: 5,
+      })
+    ).toHaveLength(5);
+    expect(
+      drawHourlySlots(noon, 0, 0, undefined, 5, () => 0, {
+        maxRunsPerHour: 5,
+      })
+    ).toHaveLength(0);
+    expect(
+      drawHourlySlots(noon, 0, 0, undefined, 5, () => 0.999, {
+        maxRunsPerHour: 5,
+      })
+    ).toHaveLength(5);
+  });
+
+  it('caps drawn slots cleanly when minGapMinutes physically limits available slots', () => {
+    const noon = Date.parse('2026-11-24T12:00:00+09:00');
+    const slots = drawHourlySlots(noon, 0, 0, undefined, 25, () => 0.5, {
+      minRunsPerHour: 6,
+      maxRunsPerHour: 8,
+    });
+    expect(slots.length).toBeLessThanOrEqual(3);
+    for (let i = 1; i < slots.length; i++) {
+      expect(slots[i] - slots[i - 1]).toBeGreaterThanOrEqual(25);
+    }
   });
 
   it('persists no-response backoff across store restart', async () => {
@@ -254,5 +350,87 @@ describe('WanderRunner', () => {
     );
     expect(carolAffinity.score).toBe(1);
     expect(carolAffinity.notes).toBe('');
+  });
+
+  it('forwards minRunsPerHour and maxRunsPerHour from WanderRunner.runTick()', async () => {
+    const nowMs = Date.parse('2026-11-24T12:00:00+09:00');
+    const makeRunner = (
+      dir: string,
+      wanderCfg: {
+        minGapMinutes?: number;
+        minRunsPerHour?: number;
+        maxRunsPerHour?: number;
+      },
+      onCall: () => void
+    ) => {
+      const db = new loki('wander-tick-test');
+      const history = new ChatHistoryRepository(
+        db.addCollection<AiChatHist>('aichatHist', {
+          indices: ['sessionId', 'postId', 'originalNoteId', 'chatUserId'],
+        })
+      );
+      return new WanderRunner({
+        api: async <T>(): Promise<T> => {
+          onCall();
+          return [] as unknown as T;
+        },
+        post: async () => ({ id: 'posted-1' }) as Note,
+        react: async () => true,
+        lookupFriend: () => null,
+        isFollowing: async () => true,
+        isMasterUser: () => false,
+        affinityStore: new AffinityStore({
+          filePath: join(dir, 'aichat-affinity.json'),
+          now: () => nowMs,
+        }),
+        emojiCatalog: new EmojiCatalog({
+          cacheFilePath: join(dir, 'aichat-emojis-cache.json'),
+          fetchEmojis: async () => [],
+          now: () => nowMs,
+        }),
+        playbookLoader: new PlaybookLoader({
+          filePath: join(dir, 'PLAYBOOK.md'),
+        }),
+        wanderStore: new WanderStore({
+          filePath: join(dir, 'aichat-wander.json'),
+          now: () => nowMs,
+        }),
+        history,
+        subscribeReply: () => {},
+        selfUserId: 'self-ai',
+        config: {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          replyProbability: 0,
+          postProbability: 0,
+          maxReactionsPerRun: 0,
+          ...wanderCfg,
+        },
+        now: () => nowMs,
+        rng: () => 0.5,
+      });
+    };
+
+    let skippedCalls = 0;
+    const skipRunner = makeRunner(
+      createTempDir(),
+      { minGapMinutes: 10, minRunsPerHour: 0, maxRunsPerHour: 0 },
+      () => {
+        skippedCalls++;
+      }
+    );
+    await skipRunner.runTick();
+    expect(skippedCalls).toBe(0);
+
+    let executedCalls = 0;
+    const execRunner = makeRunner(
+      createTempDir(),
+      { minGapMinutes: 5, minRunsPerHour: 12, maxRunsPerHour: 12 },
+      () => {
+        executedCalls++;
+      }
+    );
+    await execRunner.runTick();
+    expect(executedCalls).toBe(1);
   });
 });
