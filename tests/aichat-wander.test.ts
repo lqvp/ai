@@ -425,7 +425,9 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       );
       expect(decSuppressed.run).toBe(false);
       expect(decSuppressed.state.slots).toEqual([15]);
-      expect((await store3.load()).schedule).toEqual({
+      expect(
+        (await new WanderStore({ filePath, now: () => t1220 }).load()).schedule
+      ).toEqual({
         hour: '2026-11-24T12',
         slots: [15],
         executedSlots: [15],
@@ -577,7 +579,12 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       expect(unscheduledMigrated.state.slots).toHaveLength(2);
       expect(unscheduledMigrated.state.slots![0]).toBe(10);
       expect(unscheduledMigrated.state.slots![1]).toBeGreaterThanOrEqual(25);
-      const persistedUnscheduled = (await unscheduledStore.load()).schedule;
+      const persistedUnscheduled = (
+        await new WanderStore({
+          filePath: unscheduledPath,
+          now: () => t1225_00,
+        }).load()
+      ).schedule;
       expect(persistedUnscheduled?.executedSlots).toBeUndefined();
       expect(persistedUnscheduled?.slots).toEqual(
         unscheduledMigrated.state.slots
@@ -613,7 +620,14 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       );
       expect(legacyUnchanged.run).toBe(false);
       expect(legacyUnchanged.state.executedSlots).toBeUndefined();
-      expect((await legacyStore1.load()).schedule).toEqual({
+      expect(
+        (
+          await new WanderStore({
+            filePath: legacyPath,
+            now: () => t1220_00,
+          }).load()
+        ).schedule
+      ).toEqual({
         hour: '2026-11-24T12',
         slots: [0, 10, 45],
       });
@@ -636,7 +650,14 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       expect(legacyMigrated.run).toBe(false);
       expect(legacyMigrated.state.slots).toEqual([0, 10]);
       expect(legacyMigrated.state.executedSlots).toBeUndefined();
-      expect((await legacyStore2.load()).schedule).toEqual({
+      expect(
+        (
+          await new WanderStore({
+            filePath: legacyPath,
+            now: () => t1225_00,
+          }).load()
+        ).schedule
+      ).toEqual({
         hour: '2026-11-24T12',
         slots: [0, 10],
         boundsKey: '2..2',
@@ -678,7 +699,14 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       expect(zeroSkip.run).toBe(false);
       expect(zeroSkip.reason).toBe('min_gap');
       expect(zeroSkip.state.executedSlots).toEqual([]);
-      expect((await zeroStore1.load()).schedule?.executedSlots).toEqual([]);
+      expect(
+        (
+          await new WanderStore({
+            filePath: zeroRunPath,
+            now: () => t1210_zero,
+          }).load()
+        ).schedule?.executedSlots
+      ).toEqual([]);
 
       const zeroRun = await zeroStore1.checkAndCommitScheduleTick(
         t1230_zero,
