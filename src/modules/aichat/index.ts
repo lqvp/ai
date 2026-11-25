@@ -12,6 +12,7 @@ import type Stream from '@/stream.js';
 import {
   AffinityStore,
   formatAffinityPromptContext,
+  normalizeAcct,
 } from './affinity-store.js';
 import { postAutoNote } from './auto-note.js';
 import { ChatHandler } from './chat-handler.js';
@@ -23,6 +24,7 @@ import {
   TYPE_GEMINI,
 } from './constants.js';
 import { EmojiCatalog, type EmojiCatalogItem } from './emoji-catalog.js';
+import { isBlockedAichatUser } from './engagement.js';
 import {
   type AiChatHist,
   ChatHistoryRepository,
@@ -53,6 +55,13 @@ const CHAT_END_COMMANDS = new Set([
   'aichatやめる',
   'aichat止めて',
 ]);
+
+const OPT_OUT_COMMANDS = new Set([
+  'aichatオプトアウト',
+  'aichat拒否',
+  'aichatミュート',
+]);
+const OPT_IN_COMMANDS = new Set(['aichatオプトイン', 'aichat再開']);
 
 export default class extends Module {
   public readonly name = 'aichat';
@@ -194,6 +203,7 @@ export default class extends Module {
       lookupFriend: (userId) => this.ai.lookupFriend(userId),
       isFollowing: (userId) => this.isFollowing(userId),
       isMasterUser: (user) => this.ai.relationship.isMaster(user),
+      isBlockedUser: (user) => isBlockedAichatUser(user),
       hasExistingConversationInChain: async (noteId) => {
         const inChildren = await this.findExistingHistoryInChain(
           noteId,
@@ -242,6 +252,7 @@ export default class extends Module {
       affinityStore: this.affinityStore,
       playbookLoader: this.playbookLoader,
       isMasterUser: (user) => this.ai.relationship.isMaster(user),
+      isBlockedUser: (user) => isBlockedAichatUser(user),
       post: (param) => this.ai.post(param),
       subscribeReply: (key, isChat, noteId, data) =>
         this.subscribeReply(key, isChat, noteId, data),
@@ -363,8 +374,26 @@ export default class extends Module {
 
   @bindThis
   private sweepExpiredSessions(): void {
-    const expired = this.history.findExpired(Date.now());
+    const nowMs = Date.now();
+    const expired = this.history.findExpired(nowMs);
     for (const doc of expired) {
+      if (
+        !doc.fromMention &&
+        doc.ownerAcct &&
+        doc.ownerResponded !== true &&
+        (doc.history?.length ?? 0) <= 2
+      ) {
+        const backoffMs =
+          (config.aichat?.engagement?.noResponseBackoffMinutes ?? 720) *
+          MINUTES_TO_MS;
+        void this.wanderStore
+          .recordNoResponse(doc.ownerAcct, nowMs + backoffMs, nowMs)
+          .catch((err: unknown) => {
+            this.log(
+              `無反応バックオフ保存エラー: ${err instanceof Error ? err.message : String(err)}`
+            );
+          });
+      }
       const key = doc.sessionId ?? doc.postId;
       this.unsubscribeReply(key);
       if (doc.postIds) {
@@ -409,13 +438,49 @@ export default class extends Module {
     return this.ai.relationship.isMaster(msg.user);
   }
 
-  private isChatEndCommand(msg: Message): boolean {
-    if (!msg.isChat || msg.text == null) return false;
-    const normalized = (msg.extractedText ?? msg.text)
+  private normalizedCommandText(msg: Message): string {
+    if (msg.text == null) return '';
+    return (msg.extractedText ?? msg.text)
       .trim()
       .replace(/\s+/g, '')
       .toLowerCase();
-    return CHAT_END_COMMANDS.has(normalized);
+  }
+
+  private isChatEndCommand(msg: Message): boolean {
+    if (!msg.isChat) return false;
+    return CHAT_END_COMMANDS.has(this.normalizedCommandText(msg));
+  }
+
+  /** LLMを介さないユーザー自身の応答可否コマンド。 */
+  private async handleEngagementCommand(
+    msg: Message
+  ): Promise<HandlerResult | null> {
+    const normalized = this.normalizedCommandText(msg);
+    const optOut = OPT_OUT_COMMANDS.has(normalized);
+    const optIn = OPT_IN_COMMANDS.has(normalized);
+    if (!optOut && !optIn) return null;
+
+    try {
+      const friend = this.ai.lookupFriend(msg.userId);
+      await this.affinityStore.setOptedOut(msg.user, optOut, {
+        initialLoveSeed: friend?.love,
+      });
+      await msg
+        .reply(
+          optOut
+            ? '藍チャットからの応答を停止しました。再開する場合は「aichat再開」と送ってください。'
+            : '藍チャットからの応答を再開しました。'
+        )
+        .catch(() => {});
+    } catch (err: unknown) {
+      this.log(
+        `応答可否設定の保存に失敗しました: ${err instanceof Error ? err.message : String(err)}`
+      );
+      await msg
+        .reply('応答設定の保存に失敗しました。時間をおいて再度お試しください。')
+        .catch(() => {});
+    }
+    return { reaction: null, immediate: true };
   }
 
   private async runWithSessionLock<T>(
@@ -444,14 +509,16 @@ export default class extends Module {
   }
 
   private async checkPreLlmIgnore(msg: Message): Promise<boolean> {
-    if (config.aichat?.affinity?.enabled === false) return false;
     const isMaster = this.isMasterUser(msg);
     if (isMaster) return false;
+    if (isBlockedAichatUser(msg.user)) return true;
     const friend = this.ai.lookupFriend(msg.userId);
     const entry = await this.affinityStore.getEntry(msg.user, {
       isMaster: false,
       initialLoveSeed: friend?.love,
     });
+    if (entry.optedOut) return true;
+    if (config.aichat?.affinity?.enabled === false) return false;
     return this.affinityStore.getTier(entry.score, false) === 'ignore';
   }
 
@@ -624,6 +691,9 @@ export default class extends Module {
     this.inFlightNoteIds.add(msg.id);
 
     try {
+      const engagementResult = await this.handleEngagementCommand(msg);
+      if (engagementResult) return engagementResult;
+
       const requireFollowing = config.aichat?.followingOnly !== false;
       if (
         requireFollowing &&
@@ -760,6 +830,9 @@ export default class extends Module {
       const lockKey = sessionId ?? (msg.isChat ? `chat:${msg.userId}` : msg.id);
 
       return await this.runWithSessionLock(lockKey, async () => {
+        const engagementResult = await this.handleEngagementCommand(msg);
+        if (engagementResult) return engagementResult;
+
         // チャットモードで終了コマンドが送られた場合。
         // 進行中ターンと同じセッションロックを取ってから履歴を削除する。
         if (this.isChatEndCommand(msg)) {
@@ -877,12 +950,20 @@ export default class extends Module {
             sessionId: randomUUID(),
             postIds: [],
             ownerUserId: msg.userId,
+            ownerAcct: normalizeAcct(msg.user),
+            ownerResponded: false,
             followUpUsed: false,
             history: baseHistory.map((item) => ({ ...item })),
             historySnapshots: {},
           };
         }
 
+        if (
+          !targetSession.fromMention &&
+          targetSession.ownerUserId === msg.userId
+        ) {
+          targetSession.ownerResponded = true;
+        }
         return await this.executeChatTurn(targetSession, msg);
       });
     } finally {

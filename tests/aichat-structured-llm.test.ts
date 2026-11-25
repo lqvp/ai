@@ -1,16 +1,21 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { initConfig, resolveConfig } from '../src/config/index.js';
 import {
   callStructuredJson,
   extractJsonObject,
+  extractOpenaiContentText,
   stripThinkingTags,
 } from '../src/modules/aichat/structured-llm.js';
 
 let server: Server;
 let baseUrl = '';
 let nextResponse: unknown = {};
+let memoryDir = '';
 let lastRequest: {
   url: string;
   headers: Record<string, string | string[] | undefined>;
@@ -40,14 +45,27 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${port}`;
-  initConfig(resolveConfig({ host: baseUrl, i: 'token' }));
+  memoryDir = mkdtempSync(join(tmpdir(), 'ai-structured-llm-'));
+  initConfig(resolveConfig({ host: baseUrl, i: 'token', memoryDir }));
 });
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  rmSync(memoryDir, { recursive: true, force: true });
 });
 
 describe('stripThinkingTags & extractJsonObject', () => {
+  it('normalizes OpenAI content arrays into text', () => {
+    expect(
+      extractOpenaiContentText([
+        { type: 'text', text: '{"ok":' },
+        { type: 'output_text', text: 'true}' },
+        { type: 'image_url', image_url: { url: 'ignored' } },
+      ])
+    ).toBe('{"ok":true}');
+    expect(extractOpenaiContentText('plain')).toBe('plain');
+    expect(extractOpenaiContentText(null)).toBe('');
+  });
   it('strips matched <think>, orphan closing </think>, and unclosed <think>', () => {
     expect(stripThinkingTags('<think>secret</think>{"ok":true}')).toBe(
       '{"ok":true}'
@@ -141,5 +159,31 @@ describe('callStructuredJson', () => {
       parse: (obj) => obj,
     });
     expect(lastRequest?.body?.response_format).toEqual({ type: 'json_object' });
+  });
+
+  it('parses OpenAI-compatible content arrays from structured responses', async () => {
+    nextResponse = {
+      choices: [
+        {
+          message: {
+            content: [
+              { type: 'text', text: '{"ok":' },
+              { type: 'output_text', text: 'true}' },
+            ],
+          },
+        },
+      ],
+    };
+
+    const res = await callStructuredJson<{ ok: boolean }>({
+      provider: 'openai',
+      openaiConfig: { baseUrl, model: 'local-glm' },
+      system: 'sys',
+      user: 'usr',
+      maxTokens: 256,
+      parse: (obj) => (typeof obj.ok === 'boolean' ? { ok: obj.ok } : null),
+    });
+
+    expect(res).toEqual({ ok: true });
   });
 });

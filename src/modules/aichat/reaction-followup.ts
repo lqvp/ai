@@ -9,6 +9,7 @@ import type {
   ChatHistoryRepository,
 } from './history-repository.js';
 import { JsonFileStore } from './json-file-store.js';
+import { formatOperationalEvent } from './operational-log.js';
 import type { PlaybookLoader } from './playbook.js';
 import {
   MISSKEY_FORMAT_CONSTRAINTS,
@@ -73,6 +74,7 @@ export type ReactionFollowUpDeps = {
   affinityStore: AffinityStore;
   playbookLoader: PlaybookLoader;
   isMasterUser: (user: User) => boolean;
+  isBlockedUser?: (user: User) => boolean;
   post: (param: PostParam) => Promise<Note>;
   subscribeReply: (
     key: string,
@@ -165,6 +167,10 @@ export class ReactionFollowUpHandler {
     if (RESTRICTED_VISIBILITIES.has(note.visibility)) return false;
 
     const isMaster = this.deps.isMasterUser(reactor);
+    if (this.deps.isBlockedUser?.(reactor) === true) return false;
+    const entry = await this.deps.affinityStore.getEntry(reactor, { isMaster });
+    if (entry.optedOut) return false;
+
     if (this.deps.affinityEnabled !== false) {
       try {
         await this.deps.affinityStore.applyReactionBump(
@@ -203,7 +209,6 @@ export class ReactionFollowUpHandler {
     const refTs = session.updatedAt ?? session.createdAt;
     if (nowMs - refTs > noteMaxAgeMs) return false;
 
-    const entry = await this.deps.affinityStore.getEntry(reactor, { isMaster });
     const minAffinity = cfg.minAffinity ?? 30;
     if (!isMaster && entry.score < minAffinity) return false;
 
@@ -408,7 +413,28 @@ export class ReactionFollowUpHandler {
     });
 
     const nowMs = this.now();
-    await this.recordFollowUpAt(reactor.id, nowMs);
+    try {
+      await this.recordFollowUpAt(reactor.id, nowMs);
+    } catch (err: unknown) {
+      // 投稿自体は成功しているため、永続化失敗で履歴コミットだけ
+      // 欠落させると重複追いリプの原因になる。冷却時間の保存だけ諦める。
+      this.log(
+        formatOperationalEvent('reaction_followup', {
+          result: 'cooldown_persist_failed',
+          userId: reactor.id,
+          noteId: note.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+    }
+    this.log(
+      formatOperationalEvent('reaction_followup', {
+        result: 'posted',
+        userId: reactor.id,
+        noteId: note.id,
+        reaction,
+      })
+    );
     const nextHistory = [
       ...(fresh.history ?? []),
       { role: 'model', content: body },

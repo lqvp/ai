@@ -18,7 +18,10 @@ import {
 } from '../src/modules/aichat/history-repository.js';
 import AiChatModule from '../src/modules/aichat/index.js';
 import { PlaybookLoader } from '../src/modules/aichat/playbook.js';
-import { ReactionFollowUpHandler } from '../src/modules/aichat/reaction-followup.js';
+import {
+  createReactionFollowUpStateStore,
+  ReactionFollowUpHandler,
+} from '../src/modules/aichat/reaction-followup.js';
 
 const dirs: string[] = [];
 
@@ -134,7 +137,10 @@ function installModuleForContextTest(dir: string, db: loki) {
     connection: {
       useSharedConnection: () => ({ on: () => {}, dispose: () => {} }),
     },
-    api: async () => ({ files: [] }),
+    api: async (endpoint: string) =>
+      endpoint === 'notes/conversation' || endpoint === 'notes/children'
+        ? []
+        : { files: [] },
     post: async () => ({ id: 'unused-post' }),
     sendMessage: async () => undefined,
   } as unknown as 藍;
@@ -908,6 +914,98 @@ describe('ReactionFollowUpHandler', () => {
   });
 });
 
+describe('ReactionFollowUpHandler persistence', () => {
+  it('persists user cooldown across handler restart', async () => {
+    const dir = createTempDir();
+    const nowMs = Date.parse('2026-11-24T12:00:00Z');
+    const db = new loki('followup-persistence-test');
+    const history = new ChatHistoryRepository(
+      db.addCollection<AiChatHist>('aichatHist', {
+        indices: ['sessionId', 'postId'],
+      })
+    );
+    const statePath = join(dir, 'aichat-reaction-followup.json');
+    const reactor = {
+      id: 'u-persist',
+      username: 'persist',
+      host: null,
+      isBot: false,
+    } as User;
+    const note = {
+      id: 'bot-note-persist',
+      userId: 'bot-id',
+      visibility: 'public',
+      text: '元気ですか？',
+    } as Note;
+    history.insert({
+      sessionId: 'sess-persist',
+      postId: note.id,
+      latestPostId: note.id,
+      postIds: [note.id],
+      createdAt: nowMs - 60_000,
+      updatedAt: nowMs - 60_000,
+      expiresAt: nowMs + 1_800_000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: reactor.id,
+      history: [{ role: 'model', content: '元気ですか？' }],
+    });
+
+    const makeHandler = (posts: unknown[]) =>
+      new ReactionFollowUpHandler({
+        selfUserId: 'bot-id',
+        history,
+        affinityStore: new AffinityStore({
+          filePath: join(dir, 'aichat-affinity.json'),
+          now: () => nowMs,
+        }),
+        playbookLoader: new PlaybookLoader({
+          filePath: join(dir, 'PLAYBOOK.md'),
+        }),
+        isMasterUser: () => false,
+        post: async (param) => {
+          posts.push(param);
+          return { id: `followup-${posts.length}` } as Note;
+        },
+        subscribeReply: () => {},
+        stateStore: createReactionFollowUpStateStore(statePath, {
+          now: () => nowMs,
+        }),
+        config: { userCooldownMinutes: 360 },
+        now: () => nowMs,
+        callLlm: async () => ({ shouldReply: true, text: 'ありがとう！' }),
+      });
+
+    const posts: unknown[] = [];
+    expect(
+      await makeHandler(posts).executeFollowUp(
+        'sess-persist',
+        note,
+        reactor,
+        '🎉'
+      )
+    ).toBe(true);
+    expect(posts).toHaveLength(1);
+
+    // 永続クールダウンだけを検証するため、会話側の1回限りフラグは巻き戻す
+    const doc = history.findBySessionId('sess-persist')!;
+    doc.followUpUsed = false;
+    doc.postId = note.id;
+    doc.latestPostId = note.id;
+    history.update(doc);
+
+    expect(
+      await makeHandler(posts).executeFollowUp(
+        'sess-persist',
+        note,
+        reactor,
+        '🎉'
+      )
+    ).toBe(false);
+    expect(posts).toHaveLength(1);
+  });
+});
+
 describe('ReactionFollowUpHandler concurrency', () => {
   it('serializes simultaneous follow-up executions for the same user', async () => {
     const dir = createTempDir();
@@ -980,5 +1078,181 @@ describe('ReactionFollowUpHandler concurrency', () => {
     expect(await first).toBe(true);
     expect(await second).toBe(false);
     expect(posts).toHaveLength(1);
+  });
+});
+
+describe('aichat engagement commands and streaming contract', () => {
+  it('treats chat termination as an exact command, not a substring', async () => {
+    const dir = createTempDir();
+    const db = new loki('chat-end-command-test');
+    const { mod, hooks } = installModuleForContextTest(dir, db);
+    const history = (mod as unknown as { history: ChatHistoryRepository })
+      .history;
+    history.insert({
+      sessionId: 'sess-chat-end',
+      postId: 'chat-root',
+      latestPostId: 'chat-root',
+      createdAt: Date.now() - 1000,
+      updatedAt: Date.now() - 1000,
+      expiresAt: Date.now() + TIMEOUT_TIME,
+      type: 'gemini',
+      fromMention: true,
+      isChat: true,
+      chatUserId: 'u-alice',
+      ownerUserId: 'u-alice',
+      history: [{ role: 'model', content: 'こんにちは' }],
+    });
+
+    let handleCalls = 0;
+    (mod as unknown as { chatHandler: ChatHandler }).chatHandler = {
+      handle: async () => {
+        handleCalls++;
+        return { status: 'ignored', userText: 'x', isMaster: false };
+      },
+    } as unknown as ChatHandler;
+    (
+      mod as unknown as {
+        runStep2Audit: () => Promise<null>;
+      }
+    ).runStep2Audit = async () => null;
+
+    const nonCommand = createReplyMessage({
+      id: 'chat-noncommand',
+      text: 'aichat終了したいです',
+      extractedText: 'aichat終了したいです',
+      isChat: true,
+      replyId: undefined,
+    });
+    await hooks.contextHook!('sess-chat-end', nonCommand, {
+      sessionId: 'sess-chat-end',
+    });
+    expect(handleCalls).toBe(1);
+    expect(history.findBySessionId('sess-chat-end')).not.toBeNull();
+
+    let endReply = '';
+    const exactCommand = createReplyMessage({
+      id: 'chat-end-command',
+      text: 'aichat 終了',
+      extractedText: 'aichat 終了',
+      isChat: true,
+      replyId: undefined,
+      reply: async (text: string | null) => {
+        endReply = text ?? '';
+        return { id: 'end-reply' };
+      },
+    });
+    await hooks.contextHook!('sess-chat-end', exactCommand, {
+      sessionId: 'sess-chat-end',
+    });
+    expect(handleCalls).toBe(1);
+    expect(history.findBySessionId('sess-chat-end')).toBeNull();
+    expect(endReply).toContain('終了しました');
+    mod.dispose();
+  });
+
+  it('honors self-service opt-out and opt-in before invoking the LLM path', async () => {
+    const dir = createTempDir();
+    const db = new loki('engagement-command-test');
+    const { mod, hooks } = installModuleForContextTest(dir, db);
+    let handleCalls = 0;
+    (mod as unknown as { chatHandler: ChatHandler }).chatHandler = {
+      handle: async () => {
+        handleCalls++;
+        return { status: 'ignored', userText: 'x', isMaster: false };
+      },
+    } as unknown as ChatHandler;
+    (
+      mod as unknown as {
+        runStep2Audit: () => Promise<null>;
+      }
+    ).runStep2Audit = async () => null;
+
+    const replies: string[] = [];
+    const makeMention = (id: string, text: string) =>
+      createFakeMessage(text, { id: `${id}-reply` }, {
+        id,
+        includes: () => true,
+        reply: async (replyText: string | null) => {
+          replies.push(replyText ?? '');
+          return { id: `${id}-reply` };
+        },
+      } as Partial<Message>);
+
+    await hooks.mentionHook!(makeMention('m-optout', 'aichatオプトアウト'));
+    expect(replies.at(-1)).toContain('応答を停止しました');
+
+    await hooks.mentionHook!(makeMention('m-normal', 'こんにちは'));
+    expect(handleCalls).toBe(0);
+
+    await hooks.mentionHook!(makeMention('m-optin', 'aichat再開'));
+    expect(replies.at(-1)).toContain('応答を再開しました');
+    await hooks.mentionHook!(makeMention('m-normal-2', 'こんにちは'));
+    expect(handleCalls).toBe(1);
+    mod.dispose();
+  });
+
+  it('contracts the standalone harness mention -> bot reply -> user reply flow', async () => {
+    const dir = createTempDir();
+    const db = new loki('standalone-contract-test');
+    const { mod, hooks } = installModuleForContextTest(dir, db);
+    const history = (mod as unknown as { history: ChatHistoryRepository })
+      .history;
+
+    (
+      mod as unknown as {
+        genTextDetailed: () => Promise<{
+          text: string;
+          metadataSuffix: string;
+        }>;
+      }
+    ).genTextDetailed = async () => ({
+      text: '了解です！',
+      metadataSuffix: '',
+    });
+    (
+      mod as unknown as {
+        runStep2Audit: () => Promise<null>;
+      }
+    ).runStep2Audit = async () => null;
+
+    const mention = createFakeMessage('こんにちは', { id: 'bot-reply-1' }, {
+      id: 'mention-1',
+      userId: 'u-alice',
+      user: {
+        id: 'u-alice',
+        username: 'alice',
+        host: null,
+        isBot: false,
+      } as User,
+      includes: () => true,
+    } as Partial<Message>);
+    await hooks.mentionHook!(mention);
+
+    const firstSession = history.findByPostId('bot-reply-1');
+    expect(firstSession).not.toBeNull();
+    expect(firstSession?.history).toHaveLength(2);
+
+    const userReply = createReplyMessage({
+      id: 'user-reply-1',
+      replyId: 'bot-reply-1',
+      text: '次の質問です',
+      extractedText: '次の質問です',
+      reply: async () => ({ id: 'bot-reply-2' }),
+    });
+    await hooks.contextHook!(firstSession!.sessionId!, userReply, {
+      sessionId: firstSession!.sessionId,
+    });
+
+    const continued = history.findBySessionId(firstSession!.sessionId!);
+    expect(continued?.postId).toBe('bot-reply-2');
+    expect(continued?.latestPostId).toBe('bot-reply-2');
+    expect(continued?.history).toHaveLength(4);
+    expect(continued?.history?.map((item) => item.role)).toEqual([
+      'user',
+      'model',
+      'user',
+      'model',
+    ]);
+    mod.dispose();
   });
 });

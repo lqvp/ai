@@ -108,6 +108,18 @@ respondToAllMentions = false # aichat キーワード無しの通常メンショ
 allowNonMasterWebTools = false # 非マスターユーザーに Web 検索・URL 読み取りツールを許可するか
 # playbookPath = "data/PLAYBOOK.md" # 省略時は memoryDir/PLAYBOOK.md を使用・初回自動生成
 
+# ユーザー単位の応答制御（ユーザー自身は「aichatオプトアウト」「aichat再開」でも切替可能）
+[aichat.engagement]
+blockedUsers = [] # 応答しないユーザーIDまたは acct（例: "@user@example.host"）
+noResponseBackoffMinutes = 720 # 巡回リプライに無反応だった相手への一時停止時間（分）
+
+# LLM呼び出し全体の保護（メンション・wander・監査を含む。aichat-llm-usage.json に保存）
+[aichat.llmBudget]
+enabled = true
+maxCallsPerDay = 1000       # 1日のLLM呼び出し上限
+maxConsecutiveErrors = 5    # この回数連続失敗でバックオフ
+errorBackoffMinutes = 10    # 連続失敗後の停止時間（分）
+
 # Misskey操作ツール - LLMがノート検索・ユーザー検索・リアクションを自律的に使う（マスター専用 / OpenAI互換プロバイダー）
 [aichat.misskeyTools]
 enabled = true  # デフォルト: true

@@ -21,6 +21,8 @@ export type WanderState = {
   actedNoteIds: string[];
   userLastReplyAt: Record<string, number>;
   userLastReactAt: Record<string, number>;
+  /** 無反応だったbot起点リプライ後の一時停止期限 */
+  userNoResponseUntil: Record<string, number>;
   recentEmojis: string[];
 };
 
@@ -39,6 +41,7 @@ function createDefaultWanderState(): WanderState {
     actedNoteIds: [],
     userLastReplyAt: {},
     userLastReactAt: {},
+    userNoResponseUntil: {},
     recentEmojis: [],
   };
 }
@@ -134,6 +137,7 @@ function normalizeWanderState(raw: unknown): WanderState {
     actedNoteIds,
     userLastReplyAt: normalizeTimestampMap(obj.userLastReplyAt),
     userLastReactAt: normalizeTimestampMap(obj.userLastReactAt),
+    userNoResponseUntil: normalizeTimestampMap(obj.userNoResponseUntil),
     recentEmojis,
   };
 }
@@ -221,6 +225,24 @@ export class WanderStore {
     });
   }
 
+  public async recordNoResponse(
+    acct: string,
+    untilMs: number,
+    nowMs: number
+  ): Promise<void> {
+    await this.store.update((state) => {
+      const userNoResponseUntil: Record<string, number> = {};
+      for (const [key, until] of Object.entries(state.userNoResponseUntil)) {
+        if (until > nowMs) userNoResponseUntil[key] = until;
+      }
+      userNoResponseUntil[acct] = untilMs;
+      return {
+        next: { ...state, userNoResponseUntil },
+        result: undefined,
+      };
+    });
+  }
+
   public async recordActions(
     params: RecordWanderActionsParams
   ): Promise<WanderState> {
@@ -263,6 +285,11 @@ export class WanderStore {
         userLastReactAt[acct] = nowMs;
       }
 
+      const userNoResponseUntil: Record<string, number> = {};
+      for (const [acct, until] of Object.entries(state.userNoResponseUntil)) {
+        if (until > nowMs) userNoResponseUntil[acct] = until;
+      }
+
       const emojiSet = new Set(state.recentEmojis);
       for (const emoji of usedEmojis) {
         emojiSet.delete(emoji);
@@ -277,6 +304,7 @@ export class WanderStore {
         actedNoteIds: nextActed,
         userLastReplyAt,
         userLastReactAt,
+        userNoResponseUntil,
         recentEmojis: nextEmojis,
       };
       return { next, result: next };

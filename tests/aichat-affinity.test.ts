@@ -293,4 +293,34 @@ describe('AffinityStore anti-runaway invariants', () => {
     expect(saved.users['id:rename-user']?.notes).toBe('引き継ぐメモ');
     expect(saved.users['@before']).toBeUndefined();
   });
+
+  it('persists reaction dedup, daily cap, and opt-out across store restart', async () => {
+    const filePath = createTempPath();
+    const user = { id: 'u-restart', username: 'restart', host: null };
+    const firstStore = new AffinityStore({ filePath });
+
+    expect(await firstStore.applyReactionBump(user, 'n1', false)).toBe(true);
+    await firstStore.setOptedOut(user, true);
+
+    const restarted = new AffinityStore({ filePath });
+    // 再起動後も同一ノートの重複加算は拒否される
+    expect(await restarted.applyReactionBump(user, 'n1', false)).toBe(false);
+    expect(await restarted.applyReactionBump(user, 'n2', false)).toBe(true);
+    expect(await restarted.applyReactionBump(user, 'n3', false)).toBe(true);
+    // n1分を含めた日次+3上限も再起動後に効く
+    expect(await restarted.applyReactionBump(user, 'n4', false)).toBe(false);
+
+    const entry = await restarted.getEntry(user, { isMaster: false });
+    expect(entry.score).toBe(3);
+    expect(entry.optedOut).toBe(true);
+
+    await restarted.setOptedOut(user, false);
+    expect(
+      (
+        await new AffinityStore({ filePath }).getEntry(user, {
+          isMaster: false,
+        })
+      ).optedOut
+    ).toBeUndefined();
+  });
 });

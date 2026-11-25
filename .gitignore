@@ -5,3 +5,6 @@ node_modules
 memory.json
 font.ttf
 *.json~
+
+# aichat runtime state (default memoryDir)
+aichat-*.json

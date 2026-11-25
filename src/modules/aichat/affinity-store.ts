@@ -6,6 +6,7 @@ export type AffinityEntry = {
   score: number;
   notes: string;
   last: string;
+  optedOut?: boolean;
 };
 
 export type AffinityFile = {
@@ -144,6 +145,7 @@ function normalizeEntry(raw: unknown): AffinityEntry {
     score,
     notes: sanitizedNotes,
     last,
+    ...(obj.optedOut === true ? { optedOut: true } : {}),
   };
 }
 
@@ -363,6 +365,7 @@ export class AffinityStore {
         score: nextScore,
         notes: nextNotes,
         last: nowIso,
+        ...(currentEntry.optedOut ? { optedOut: true } : {}),
       };
 
       users[writeKey] = updated;
@@ -370,6 +373,35 @@ export class AffinityStore {
         next: { ...file, users },
         result: updated,
       };
+    });
+  }
+
+  /** ユーザー自身による aichat オプトアウト/オプトインを永続化する。 */
+  public async setOptedOut(
+    user: AffinityUserRef,
+    optedOut: boolean,
+    options: { initialLoveSeed?: number } = {}
+  ): Promise<void> {
+    const targetAcct = normalizeAcct(user);
+    await this.store.update((file) => {
+      const users = cloneUsers(file.users);
+      const existing = this.findEntryInUsers(users, user);
+      const base: AffinityEntry = existing
+        ? existing.entry
+        : {
+            ...(user.id ? { userId: user.id } : {}),
+            score: this.seedScore(options.initialLoveSeed),
+            notes: '',
+            last: new Date(this.now()).toISOString(),
+          };
+      const writeKey = this.resolveWriteKey(users, user, targetAcct);
+      if (existing && existing.key !== writeKey) delete users[existing.key];
+      users[writeKey] = {
+        ...base,
+        ...(optedOut ? { optedOut: true } : {}),
+      };
+      if (!optedOut) delete users[writeKey].optedOut;
+      return { next: { ...file, users }, result: undefined };
     });
   }
 
@@ -458,6 +490,7 @@ export class AffinityStore {
         score: nextScore,
         notes: base.notes,
         last: new Date(nowMs).toISOString(),
+        ...(base.optedOut ? { optedOut: true } : {}),
       };
       reactionDedup[dedupKey] = nowMs;
       dailyReactionBumps[dayKey] = serializedTodayCount + 1;

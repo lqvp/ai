@@ -81,6 +81,11 @@ export type Config = {
     allowNonMasterWebTools?: boolean;
     /** 交流ルール PLAYBOOK.md のパス（省略時は memoryDir/PLAYBOOK.md） */
     playbookPath?: string;
+    /** ユーザー単位の応答制御 */
+    engagement?: {
+      blockedUsers?: string[];
+      noResponseBackoffMinutes?: number;
+    };
     /** LLM呼び出し全体の日次予算と連続エラー時バックオフ */
     llmBudget?: {
       enabled?: boolean;
@@ -408,6 +413,29 @@ function validateAndResolve(input: RawConfig): Config {
         aichat.playbookPath.includes('\0'))
     ) {
       issues.push('aichat.playbookPath が不正です');
+    }
+
+    if (isObject(aichat.engagement)) {
+      const engagement = aichat.engagement;
+      if (
+        engagement.blockedUsers !== undefined &&
+        (!Array.isArray(engagement.blockedUsers) ||
+          engagement.blockedUsers.some(
+            (entry) => typeof entry !== 'string' || entry.trim() === ''
+          ))
+      ) {
+        issues.push(
+          'aichat.engagement.blockedUsers は文字列配列で指定してください'
+        );
+      }
+      if (engagement.noResponseBackoffMinutes !== undefined) {
+        const value = Number(engagement.noResponseBackoffMinutes);
+        if (!Number.isFinite(value) || value <= 0) {
+          issues.push(
+            'aichat.engagement.noResponseBackoffMinutes は正の数で指定してください'
+          );
+        }
+      }
     }
 
     if (isObject(aichat.llmBudget)) {

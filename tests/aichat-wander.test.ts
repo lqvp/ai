@@ -83,6 +83,20 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
     }
     expect(drawn.state.slots).not.toContain(0);
   });
+
+  it('persists no-response backoff across store restart', async () => {
+    const dir = createTempDir();
+    const nowMs = Date.parse('2026-11-24T12:00:00+09:00');
+    const filePath = join(dir, 'aichat-wander.json');
+    const first = new WanderStore({ filePath, now: () => nowMs });
+
+    await first.recordNoResponse('@alice', nowMs + 12 * 3_600_000, nowMs);
+
+    const restarted = new WanderStore({ filePath, now: () => nowMs });
+    expect((await restarted.load()).userNoResponseUntil['@alice']).toBe(
+      nowMs + 12 * 3_600_000
+    );
+  });
 });
 
 describe('WanderRunner', () => {

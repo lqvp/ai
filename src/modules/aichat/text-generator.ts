@@ -1,5 +1,6 @@
 import type Message from '@/message.js';
 import { getLlmUsageGuard } from './llm-usage-guard.js';
+import { formatOperationalEvent } from './operational-log.js';
 import {
   genTextByGeminiDetailed,
   type ProviderContext,
@@ -37,7 +38,11 @@ export class TextGenerator {
     try {
       const budget = await usageGuard.tryAcquire();
       if (!budget.allowed) {
-        this.ctx.log(`LLM呼び出しを抑制しました: ${budget.reason}`);
+        this.ctx.log(
+          formatOperationalEvent('llm_budget_blocked', {
+            reason: budget.reason,
+          })
+        );
         return {
           error: true,
           errorCode: 429,

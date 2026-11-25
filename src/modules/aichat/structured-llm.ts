@@ -7,6 +7,7 @@ import {
   type OpenaiProviderConfig,
   resolveOpenaiSettings,
 } from './openai-settings.js';
+import { formatOperationalEvent } from './operational-log.js';
 import { findMatchingBrace } from './tool-call-parser.js';
 
 export type StructuredLlmCallOptions<T> = {
@@ -216,7 +217,12 @@ export async function callStructuredJson<T>(
   try {
     const budget = await usageGuard.tryAcquire();
     if (!budget.allowed) {
-      log(`構造化LLM呼び出しを抑制しました: ${budget.reason}`);
+      log(
+        formatOperationalEvent('llm_budget_blocked', {
+          reason: budget.reason,
+          structured: true,
+        })
+      );
       return null;
     }
     budgetConsumed = true;

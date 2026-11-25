@@ -28,6 +28,9 @@ export type AiChatHist = {
   isChat?: boolean;
   chatUserId?: string;
   ownerUserId?: string;
+  ownerAcct?: string;
+  /** bot起点セッションでオーナーの本文返信を観測済みか */
+  ownerResponded?: boolean;
   followUpUsed?: boolean;
   timelineContext?: TimelineContext;
   quotedFiles?: Base64File[];

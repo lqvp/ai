@@ -18,6 +18,7 @@ import type {
   AiChatHist,
   ChatHistoryRepository,
 } from './history-repository.js';
+import { formatOperationalEvent } from './operational-log.js';
 import type { PlaybookLoader } from './playbook.js';
 import {
   MISSKEY_FORMAT_CONSTRAINTS,
@@ -67,6 +68,7 @@ export type WanderRunnerDeps = {
   lookupFriend: (userId: string) => Friend | null;
   isFollowing: (userId: string) => Promise<boolean>;
   isMasterUser: (user: User) => boolean;
+  isBlockedUser?: (user: User) => boolean;
   hasExistingConversationInChain?: (noteId: string) => Promise<boolean>;
   affinityStore: AffinityStore;
   emojiCatalog: EmojiCatalog;
@@ -107,6 +109,27 @@ function shuffle<T>(items: T[], rng: () => number): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+/** 好感度が高い候補をやや選びやすくしつつ、低い候補も完全には排除しない。 */
+function weightedShuffle<T>(
+  items: T[],
+  weight: (item: T) => number,
+  rng: () => number
+): T[] {
+  const remaining = [...items];
+  const out: T[] = [];
+  while (remaining.length > 0) {
+    const total = remaining.reduce((sum, item) => sum + weight(item), 0);
+    let cursor = rng() * total;
+    let index = 0;
+    for (; index < remaining.length; index++) {
+      cursor -= weight(remaining[index]);
+      if (cursor <= 0) break;
+    }
+    out.push(remaining.splice(Math.min(index, remaining.length - 1), 1)[0]);
+  }
+  return out;
 }
 
 function sampleReactionBudget(rng: () => number): number {
@@ -311,6 +334,7 @@ export class WanderRunner {
       if (!note || !note.id || !note.user) continue;
       if (note.userId === this.deps.selfUserId) continue;
       if (note.user.isBot) continue;
+      if (this.deps.isBlockedUser?.(note.user) === true) continue;
       if (note.visibility !== 'public' && note.visibility !== 'home') continue;
       if (note.cw != null) continue;
       if (note.replyId != null || note.renoteId != null) continue;
@@ -348,11 +372,13 @@ export class WanderRunner {
         initialLoveSeed: friend?.love,
       });
       const tier = this.deps.affinityStore.getTier(affinity.score, isMaster);
-      if (tier === 'ignore') continue;
+      if (affinity.optedOut || tier === 'ignore') continue;
 
       const acctKey = normalizeAcct(note.user);
       const lastReactMs = state.userLastReactAt[acctKey] ?? 0;
       const lastReplyMs = state.userLastReplyAt[acctKey] ?? 0;
+      const noResponseUntil = state.userNoResponseUntil[acctKey] ?? 0;
+      if (noResponseUntil > nowMs) continue;
       const replyCooldownMs =
         (affinity.score >= 30
           ? Math.min(userReplyCooldownBaseMin, 180)
@@ -377,7 +403,16 @@ export class WanderRunner {
       });
     }
 
-    const picked = shuffle(candidates, this.rng).slice(0, MAX_CANDIDATES);
+    const picked = weightedShuffle(
+      candidates,
+      (candidate) =>
+        candidate.isMaster || candidate.affinity.score >= 30
+          ? 1.5
+          : candidate.affinity.score < 0
+            ? 0.5
+            : 1,
+      this.rng
+    ).slice(0, MAX_CANDIDATES);
 
     const postCooldownMin = cfg.postCooldownMinutes ?? 120;
     const lastPostMs = state.lastPostAt ? Date.parse(state.lastPostAt) : 0;
@@ -472,7 +507,12 @@ export class WanderRunner {
         });
 
     if (!decision) {
-      this.log('TL巡回: LLM判断が取得できなかったため何もしません');
+      this.log(
+        formatOperationalEvent('wander_decision', {
+          result: 'no_llm_decision',
+          candidates: picked.length,
+        })
+      );
       return;
     }
 
@@ -484,6 +524,16 @@ export class WanderRunner {
     const usedEmojis: string[] = [];
     const reactedNoteSet = new Set<string>();
     let lastPostAt: string | undefined;
+
+    this.log(
+      formatOperationalEvent('wander_decision', {
+        result: 'accepted',
+        candidates: picked.length,
+        maxReactions,
+        reply: decision.reply != null,
+        post: decision.post != null,
+      })
+    );
 
     // 1. リアクションの実行
     for (const item of decision.reactions) {
@@ -572,6 +622,7 @@ export class WanderRunner {
               fromMention: false,
               originalNoteId: target.note.id,
               ownerUserId: target.note.userId,
+              ownerAcct: target.acct,
               history: historyItems,
               historySnapshots: {
                 [created.id]: historyItems.map((item) => ({ ...item })),
@@ -582,6 +633,13 @@ export class WanderRunner {
               sessionId,
               historyLength: historyItems.length,
             });
+            this.log(
+              formatOperationalEvent('wander_action', {
+                kind: 'reply',
+                targetAcct: target.acct,
+                sessionId,
+              })
+            );
 
             if (
               decision.reply.reaction &&
