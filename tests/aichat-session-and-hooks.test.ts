@@ -628,6 +628,12 @@ describe('ReactionFollowUpHandler', () => {
             notes: '',
             last: seededLast,
           },
+          '@carol': {
+            userId: 'u-carol',
+            score: 5,
+            notes: '',
+            last: seededLast,
+          },
         },
       })}\n`,
       'utf8'
@@ -760,6 +766,39 @@ describe('ReactionFollowUpHandler', () => {
       isMaster: false,
     });
     expect(afterDisabled.score).toBe(beforeDisabled.score);
+
+    // 既定の最低好感度30未満のユーザーには追いリプしない
+    const carol = {
+      id: 'u-carol',
+      username: 'carol',
+      host: null,
+      isBot: false,
+    } as User;
+    history.insert({
+      sessionId: 'sess-low-affinity',
+      postId: 'bot-note-low',
+      latestPostId: 'bot-note-low',
+      postIds: ['bot-note-low'],
+      createdAt: nowMs - 60_000,
+      updatedAt: nowMs - 60_000,
+      expiresAt: nowMs + 1_800_000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: 'u-carol',
+      history: [{ role: 'model', content: '低好感度の会話' }],
+    });
+    const carolNotif = {
+      ...notif,
+      id: 'notif-carol',
+      user: carol,
+      userId: carol.id,
+      note: {
+        ...reactionNote,
+        id: 'bot-note-low',
+      },
+    } as unknown as Misskey.entities.Notification;
+    expect(await handler.handleNotification(carolNotif)).toBe(false);
+    expect(posts).toHaveLength(1);
 
     // 好感度JSONが構文破損していても、保存済みの状態で追いリプ判定は継続する
     const bob = {
