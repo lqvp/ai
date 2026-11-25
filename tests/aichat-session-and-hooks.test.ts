@@ -626,7 +626,7 @@ describe('ReactionFollowUpHandler', () => {
     await affinityStore.applyInteractionUpdate({
       user: alice,
       isMaster: false,
-      delta: 5,
+      delta: 35,
       note: null,
       userText: '親しい状態のベース作成用メッセージです',
       source: 'chat',
@@ -652,7 +652,7 @@ describe('ReactionFollowUpHandler', () => {
       history,
       affinityStore,
       playbookLoader,
-      isMasterUser: () => true,
+      isMasterUser: () => false,
       post: async (param) => {
         posts.push(param);
         return { id: 'bot-followup-1' } as Note;
@@ -660,6 +660,7 @@ describe('ReactionFollowUpHandler', () => {
       subscribeReply: () => {},
       config: {
         enabled: true,
+        minAffinity: 5,
         probability: 1,
         delaySeconds: 0,
       },
@@ -757,7 +758,7 @@ describe('ReactionFollowUpHandler', () => {
     await affinityStore.applyInteractionUpdate({
       user: bob,
       isMaster: false,
-      delta: 5,
+      delta: 35,
       note: null,
       userText: '破損前の好感度ベース作成用メッセージです',
       source: 'chat',
