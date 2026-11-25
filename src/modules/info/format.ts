@@ -300,8 +300,10 @@ export function formatPressureSettings(): string {
 
   const lines: string[] = [
     CONFIG_LABELS.sections.pressure,
+    // kiatsu モジュールは enabled === false のときだけ停止する（未設定は稼働）。
+    // 既定値の true をここで補い、表示と実行状態を一致させる。
     `- ${CONFIG_LABELS.pressure.enabled}: ${formatBooleanSetting(
-      config.kiatsu.enabled
+      config.kiatsu.enabled ?? true
     )}`,
     `- ${CONFIG_LABELS.pressure.locationName}: ${safeConfigValue(
       config.kiatsu.locationName

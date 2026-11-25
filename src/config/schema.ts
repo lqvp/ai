@@ -672,12 +672,19 @@ function validateAndResolve(input: RawConfig): Config {
 
     if (kiatsu.alertThresholdHpa !== undefined) {
       const value = kiatsu.alertThresholdHpa;
-      // 気圧は低下を負値で表すため、0（変化なし）を含む負値のみ受け付ける
-      if (!isNumber(value) || value > 0 || value < -10) {
+      // 気圧の低下を負値で表す。0 は「常時警報」になり判定が成立しないため弾く
+      // （pressure-trend.ts の evaluateAlert が 0 以上を実行時例外にしている）。
+      if (!isNumber(value) || value >= 0 || value < -10) {
         issues.push(
-          'kiatsu.alertThresholdHpa は -10〜0 の負値で指定してください'
+          'kiatsu.alertThresholdHpa は 0 より小さい負値（-10 以上）で指定してください（例: -2.0）'
         );
       }
+    }
+
+    if (kiatsu.enabled !== undefined && typeof kiatsu.enabled !== 'boolean') {
+      // "false" のような文字列は enabled === false 比較をすり抜けて
+      // 有効扱いになるため、型の段階で弾く。
+      issues.push('kiatsu.enabled は true または false で指定してください');
     }
 
     if (kiatsu.hysteresisHpa !== undefined) {

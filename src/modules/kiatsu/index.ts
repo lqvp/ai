@@ -4,14 +4,17 @@ import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
 import type { DriveFile } from '@/misskey/types.js';
 import Module from '@/module.js';
+import { buildAlertMessage, buildMentionMessage } from './messages.js';
 import { fetchForecast, type HourlyForecast } from './open-meteo.js';
 import {
   type AlertState,
+  backoffDelayMs,
+  DEFAULT_ALERT_OPTIONS,
   deltaOverHours,
   evaluateAlert,
-  formatDeltaHpa,
   formatLocalHourKey,
   indexOfLocalHour,
+  shouldNotifySuspension,
 } from './pressure-trend.js';
 import { renderKiatsuImage } from './render-kiatsu.js';
 
@@ -21,6 +24,7 @@ import { renderKiatsuImage } from './render-kiatsu.js';
  * 地点は zutool.jp 時代の既定（locationCode '13102' = 東京都中央区）を
  * 引き継いでいる。config が未設定でも同じ場所で動くようにするため、
  * 既定値は schema ではなくこのモジュール側で持つ。
+ * 閾値とヒステリシスは判定層の既定値をそのまま使う（二重定義を避ける）。
  */
 const DEFAULTS = {
   latitude: 35.6702,
@@ -28,8 +32,7 @@ const DEFAULTS = {
   locationName: '中央区',
   requestTimeoutMs: 10_000,
   updateIntervalMs: 10 * 60 * 1000,
-  alertThresholdHpa: -2.0,
-  hysteresisHpa: 0.5,
+  ...DEFAULT_ALERT_OPTIONS,
   maxPostsPerDay: 1,
   maxErrorRetries: 5,
   errorCooldownMs: 60 * 60 * 1000,
@@ -38,13 +41,25 @@ const DEFAULTS = {
 /** ΔP を評価する時間幅（時間）。 */
 const DELTA_HOURS = 3;
 
+/** 現在時刻のキーが見つからないときに探す前後の幅（時間）。 */
+const FALLBACK_HOURS = 1;
+
 /**
- * 気象データの出典表示。
+ * 停止・再開を通知する上限回数。
  *
- * Open-Meteo（JMA MSM）の CC-BY 4.0 は帰属表示が義務なので、
- * 気象データを含む投稿文からは外さない。
+ * 恒久障害では「停止 → クールダウン → 再開 → また停止」を延々と繰り返す。
+ * 通知を無制限に出すとタイムラインが埋まるので、同じ障害の連鎖では
+ * 最初の数回だけ知らせ、以降はログに落とす（復帰は自動で試み続ける）。
  */
-const ATTRIBUTION = '気象データ: Open-Meteo（JMA MSM）/ CC-BY 4.0';
+const NOTICE_LIMIT = 2;
+
+/** これより古い ΔP はメンション応答に出さない（鮮度切れ）。 */
+const STALE_MS = 2 * 60 * 60 * 1000;
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/** 旧設定キー。読み込まれても使われないため、起動時に警告する。 */
+const LEGACY_KEYS = ['locationCode', 'postIntervalMs', 'minPostLevel'] as const;
 
 export default class extends Module {
   public readonly name = 'kiatsu';
@@ -57,12 +72,18 @@ export default class extends Module {
    *
    * 予報は過去1日分（past_days=1）を含むため、そのまま描くと表の大半が
    * 過ぎた時刻になる。利用者が見たいのは「今から先」なので、
-   * レンダラへはこの添字以降を切り出して渡す。
+   * レンダラへはこの添字以降を描かせる。
    */
   private latestForecastStart = 0;
 
-  /** 直近の ΔP3h。計算できないときは null（メンション応答を「データなし」にする）。 */
+  /** 直近の ΔP3h。計算できないときは null。 */
   private latestDelta3h: number | null = null;
+
+  /** `latestDelta3h` を観測した時刻（ミリ秒）。鮮度切れの判定に使う。 */
+  private latestDeltaAt: number | null = null;
+
+  /** `latestDelta3h` の観測時刻（ローカル時刻キー）。返信に添える。 */
+  private latestObservedAt: string | null = null;
 
   /**
    * 警報の状態。投稿したかどうかに関わらず毎回 evaluateAlert の結果で置き換える。
@@ -77,6 +98,15 @@ export default class extends Module {
   /** 一時停止中は update() を素通りさせる。クールダウン中の再試行を防ぐ。 */
   private suspended = false;
 
+  /** 連続した停止の回数。クールダウンの指数バックオフに使う。 */
+  private consecutiveSuspensions = 0;
+
+  /** 通知済みの停止回数。NOTICE_LIMIT を超えたら黙って再試行する。 */
+  private noticedSuspensions = 0;
+
+  /** 停止中に再開したことを、取得成功後に一度だけ知らせるためのフラグ。 */
+  private pendingResumeNotice = false;
+
   private postsToday = 0;
   private postsTodayKey: string | null = null;
 
@@ -87,10 +117,32 @@ export default class extends Module {
     // 自動登録してしまうため、mentionHook を止められない。
     if (config.kiatsu?.enabled === false) return false;
 
+    this.warnLegacyKeys();
+
     this.startMonitoring();
     void this.update(); // 初回実行
 
     return { mentionHook: this.mentionHook };
+  }
+
+  /**
+   * 旧キーが設定に残っていれば警告する。
+   *
+   * 旧 `locationCode` は黙って無視され、地点が既定（中央区）に戻る。
+   * 利用者が別地点を指定していた場合、気づかないまま違う地点の予報を
+   * 投稿し続けることになるため、起動時に1回だけ知らせる。
+   */
+  private warnLegacyKeys(): void {
+    const kiatsu = config.kiatsu as Record<string, unknown> | undefined;
+    if (!kiatsu) return;
+
+    const found = LEGACY_KEYS.filter((key) => kiatsu[key] !== undefined);
+    if (found.length === 0) return;
+
+    this.log(
+      `[kiatsu] 廃止された設定キーを無視しました: ${found.join(', ')}。` +
+        '地点は latitude / longitude / locationName で指定してください。'
+    );
   }
 
   @bindThis
@@ -112,65 +164,129 @@ export default class extends Module {
 
     this.syncPostDay();
 
+    let forecast: HourlyForecast;
+
     try {
-      const forecast = await fetchForecast({
+      forecast = await fetchForecast({
         latitude: config.kiatsu?.latitude ?? DEFAULTS.latitude,
         longitude: config.kiatsu?.longitude ?? DEFAULTS.longitude,
         timeoutMs: config.kiatsu?.requestTimeoutMs ?? DEFAULTS.requestTimeoutMs,
       });
-
-      // 現在時刻のデータが無くても画像は描けるので、取得できた時点で保持する。
-      this.latestForecast = forecast;
-
-      const nowLocal = formatLocalHourKey(new Date());
-      const currentIndex = indexOfLocalHour(forecast.hours, nowLocal);
-
-      if (currentIndex < 0) {
-        this.log(`現在時刻 (${nowLocal}) の気圧データがありません。`);
-        this.handleError();
-        return;
-      }
-
-      // 画像は「今」から描く。添字を保持しておき、描画時に切り出す。
-      this.latestForecastStart = currentIndex;
-
-      const delta3h = deltaOverHours(forecast.hours, currentIndex, DELTA_HOURS);
-      this.latestDelta3h = delta3h;
-
-      const { state, trigger } = evaluateAlert(delta3h, this.alertState, {
-        thresholdHpa:
-          config.kiatsu?.alertThresholdHpa ?? DEFAULTS.alertThresholdHpa,
-        hysteresisHpa: config.kiatsu?.hysteresisHpa ?? DEFAULTS.hysteresisHpa,
-      });
-
-      // 投稿の有無に関わらず状態は進める（同じ警報の再 trigger を防ぐ）。
-      this.alertState = state;
-
-      this.log(
-        `気圧トレンドを更新しました: Δ3h=${
-          delta3h === null ? '不明' : `${formatDeltaHpa(delta3h)}hPa`
-        } (警報中: ${state.alerting})`
-      );
-
-      // trigger が立つのは delta3h が計算できたときだけだが、
-      // 型を締めるために null チェックを明示する。
-      if (trigger && delta3h !== null) {
-        if (this.canPostToday()) {
-          void this.ai.post({ text: this.buildAlertMessage(delta3h) });
-          this.recordPost();
-        } else {
-          // 日次上限に達している場合も状態遷移は進めているので、ここは見送るだけ。
-          this.log('本日の投稿上限に達しているため、警報の投稿は見送ります。');
-        }
-      }
-
-      // 取得と判定まで通ったときだけ失敗カウントを戻す。
-      this.errorCount = 0;
     } catch (error) {
       this.log('気圧データの取得に失敗しました。');
       console.warn(error);
       this.handleError();
+      return;
     }
+
+    // 現在時刻のデータが無くても画像は描けるので、取得できた時点で保持する。
+    this.latestForecast = forecast;
+
+    const now = new Date();
+    const currentIndex = this.findCurrentIndex(forecast, now);
+
+    if (currentIndex < 0) {
+      // 時刻キーの不一致は「取得失敗」ではない。ここでエラー回数を増やすと、
+      // API の時刻書式が変わっただけで停止・再開の通知ループに入る。
+      this.log(
+        `現在時刻 (${formatLocalHourKey(now)}) 付近の気圧データがありません。`
+      );
+      return;
+    }
+
+    this.latestForecastStart = currentIndex;
+
+    const delta3h = deltaOverHours(forecast.hours, currentIndex, DELTA_HOURS);
+    const observedAt = forecast.hours[currentIndex].timeLocal;
+
+    this.latestDelta3h = delta3h;
+    this.latestDeltaAt = now.getTime();
+    this.latestObservedAt = observedAt;
+
+    const { state, trigger } = evaluateAlert(delta3h, this.alertState, {
+      thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
+      hysteresisHpa: config.kiatsu?.hysteresisHpa ?? DEFAULTS.hysteresisHpa,
+    });
+
+    // 投稿の有無に関わらず状態は進める（同じ警報の再 trigger を防ぐ）。
+    this.alertState = state;
+
+    this.log(
+      `気圧トレンドを更新しました: Δ3h=${
+        delta3h === null ? '不明' : `${delta3h.toFixed(1)}hPa`
+      } (警報中: ${state.alerting})`
+    );
+
+    if (trigger && delta3h !== null) {
+      await this.postAlert(delta3h);
+    }
+
+    // 取得と判定まで通ったので、失敗カウントと連続停止をリセットする。
+    this.onRecovered();
+  }
+
+  /**
+   * 現在時刻に対応する予報点の添字を返す。
+   *
+   * 完全一致が無い場合は ±1 時間まで探す。時刻の丸めや API 側の書式変更で
+   * 1時間ずれることがあり、そのたびに「データが無い」と扱うのは乱暴なため。
+   */
+  @bindThis
+  private findCurrentIndex(forecast: HourlyForecast, now: Date): number {
+    const exact = indexOfLocalHour(forecast.hours, formatLocalHourKey(now));
+    if (exact >= 0) return exact;
+
+    for (let offset = 1; offset <= FALLBACK_HOURS; offset++) {
+      for (const sign of [1, -1]) {
+        const shifted = new Date(now.getTime() + sign * offset * HOUR_MS);
+        const index = indexOfLocalHour(
+          forecast.hours,
+          formatLocalHourKey(shifted)
+        );
+        if (index >= 0) {
+          this.log(
+            `現在時刻のデータが無いため ${offset} 時間${sign > 0 ? '後' : '前'}の点を使います。`
+          );
+          return index;
+        }
+      }
+    }
+
+    return -1;
+  }
+
+  /** 警報を投稿する。日次上限に達していれば見送る。 */
+  @bindThis
+  private async postAlert(delta3h: number): Promise<void> {
+    if (!this.canPostToday()) {
+      // 日次上限に達している場合も状態遷移は進めているので、ここは見送るだけ。
+      this.log('本日の投稿上限に達しているため、警報の投稿は見送ります。');
+      return;
+    }
+
+    try {
+      await this.ai.post({
+        text: buildAlertMessage(this.locationName, delta3h),
+      });
+      // 投稿できたときだけ枠を消費する（失敗で枠だけ減るのを避ける）。
+      this.recordPost();
+    } catch (error) {
+      this.log('警報の投稿に失敗しました。');
+      console.warn(error);
+    }
+  }
+
+  /** 取得に成功したときの後始末。再開通知もここで1回だけ出す。 */
+  @bindThis
+  private onRecovered(): void {
+    this.errorCount = 0;
+    this.consecutiveSuspensions = 0;
+    this.noticedSuspensions = 0;
+
+    if (!this.pendingResumeNotice) return;
+
+    this.pendingResumeNotice = false;
+    void this.ai.post({ text: '気圧監視を再開しました。' });
   }
 
   @bindThis
@@ -187,24 +303,35 @@ export default class extends Module {
 
     if (this.errorCount <= maxErrorRetries) return;
 
-    // 停止処理はここ1か所だけ。suspended を立てることで、
-    // 恒久障害でも「一時停止／再開」を二重投稿しない。
     this.suspended = true;
     this.log('エラーが続いています。監視を一時停止します。');
-    void this.ai.post({
-      text: 'エラーが続いています。気圧監視を一時停止しました。',
-    });
+
+    if (shouldNotifySuspension(this.noticedSuspensions, NOTICE_LIMIT)) {
+      this.noticedSuspensions++;
+      void this.ai.post({
+        text: 'エラーが続いています。気圧監視を一時停止しました。',
+      });
+    } else {
+      // 障害が長引いている。通知は打ち切り、復帰だけ試み続ける。
+      this.log('停止の通知は上限に達したため省略します。');
+    }
 
     const cooldownMs =
       config.kiatsu?.errorCooldownMs ?? DEFAULTS.errorCooldownMs;
+    const backoffMs = backoffDelayMs(cooldownMs, this.consecutiveSuspensions);
 
-    this.later(cooldownMs, () => {
-      // 再開時にカウントを戻さないと、再開後の1回の失敗でまた閾値に達し、
-      // 「停止しました／再開しました」を1時間ごとに永久投稿し続ける。
+    this.consecutiveSuspensions++;
+
+    this.later(backoffMs, () => {
+      // 再開時にカウントを戻さないと、再開後の1回の失敗でまた閾値に達する。
       this.errorCount = 0;
       this.suspended = false;
-      this.log('監視を再開します。');
-      void this.ai.post({ text: '気圧監視を再開しました。' });
+      // 「再開しました」は取得に成功した時点で出す。再開しただけで
+      // 失敗し続けているのに成功を報せない（実際に直ったか区別できない）。
+      this.pendingResumeNotice = true;
+      this.log(
+        `監視を再開します（次回の試行まで ${backoffMs / 60000} 分待機）。`
+      );
       void this.update();
     });
   }
@@ -239,34 +366,13 @@ export default class extends Module {
     return config.kiatsu?.locationName ?? DEFAULTS.locationName;
   }
 
-  /**
-   * 警報投稿の本文。
-   *
-   * 旧実装のレベル語彙・「頭痛」の因果・絶対気圧は出さない。
-   * 検証できる事実（変化量）と出典だけを書く。
-   */
-  @bindThis
-  private buildAlertMessage(delta3h: number): string {
-    return [
-      `気圧が下がってきています（${this.locationName}付近、3時間で ${formatDeltaHpa(
-        delta3h
-      )} hPa）。無理しないでね。`,
-      ATTRIBUTION,
-    ].join('\n');
-  }
+  /** 鮮度の切れた ΔP は返信に出さない（古い値を断定しない）。 */
+  private currentDelta(): number | null {
+    if (this.latestDelta3h === null || this.latestDeltaAt === null) return null;
 
-  @bindThis
-  private buildMentionMessage(): string {
-    if (this.latestDelta3h === null) {
-      return '気圧データを取得できませんでした。少し待ってからもう一度話しかけてね。';
-    }
-
-    return [
-      `${this.locationName}付近の気圧は3時間で ${formatDeltaHpa(
-        this.latestDelta3h
-      )} hPa 変化しています。`,
-      ATTRIBUTION,
-    ].join('\n');
+    return Date.now() - this.latestDeltaAt > STALE_MS
+      ? null
+      : this.latestDelta3h;
   }
 
   @bindThis
@@ -279,6 +385,8 @@ export default class extends Module {
     const image = renderKiatsuImage(this.latestForecast, {
       locationName: this.locationName,
       startIndex: this.latestForecastStart,
+      thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
+      fetchedAtLocal: formatLocalHourKey(new Date()),
     });
 
     return await this.ai.upload(image, {
@@ -302,10 +410,17 @@ export default class extends Module {
       console.warn(error);
     }
 
-    message.reply(this.buildMentionMessage(), {
-      immediate: true,
-      file,
-    });
+    message.reply(
+      buildMentionMessage(
+        this.locationName,
+        this.currentDelta(),
+        this.latestObservedAt ?? undefined
+      ),
+      {
+        immediate: true,
+        file,
+      }
+    );
 
     return true;
   }

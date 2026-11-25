@@ -21,6 +21,23 @@ export interface RenderKiatsuOptions {
    * 過去分（`past_days`）を含む配列をそのまま渡してここで開始位置を指定する。
    */
   startIndex?: number;
+  /**
+   * 3時間変化の色分けに使う閾値（負値）。既定 -2。
+   *
+   * 投稿判定（`pressure-trend` の `thresholdHpa`）と同じ設定を渡さないと、
+   * 画像では赤なのに投稿されない（逆も）という食い違いが起きるため、
+   * 警報色の境界はハードコードせず設定に追随させる。注意色はその半分を目安にする。
+   * 不正値は例外にせず既定へ丸める（描画は止めない）。
+   */
+  thresholdHpa?: number;
+  /**
+   * 画像の取得時刻（`YYYY-MM-DDTHH:00`）。
+   *
+   * 画像だけを見て「いつのデータか」を判断できるようにするためのもの。
+   * 取得に失敗して古い予報を出したとき、これが無いと最新のデータに見えてしまう。
+   * 未指定なら何も描かず、レイアウトも変えない（既存の見た目を壊さない）。
+   */
+  fetchedAtLocal?: string;
 }
 
 type ForecastColumn = {
@@ -46,8 +63,10 @@ type ParsedHourlyTime = {
 };
 
 const DEFAULT_MAX_COLUMNS = 12;
+const DEFAULT_THRESHOLD_HPA = -2;
 const MS_PER_DAY = 86_400_000;
 const TIME_LOCAL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})/;
+const FETCHED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/;
 
 /**
  * 天気の短縮ラベル。
@@ -200,17 +219,24 @@ function getPressureTrend(current: number, previous: number | null): string {
 /**
  * 3時間の気圧低下は気象病の目安になるため、低下量で色を3段階に分ける。
  * 数値そのものを表示するのでバッジに「警戒」などの語は入れない。
+ *
+ * 警報の境界は設定の閾値（負値）に合わせる。注意の境界はその半分を目安に
+ * 置き、閾値を緩めても強めても段階の幅が比例して動くようにする。
+ * thresholdHpa は呼び出し側で正規化済み（負の有限値）の前提。
  */
-function getDropStyle(deltaHpa: number | null): DropStyle {
+function getDropStyle(
+  deltaHpa: number | null,
+  thresholdHpa: number
+): DropStyle {
   if (deltaHpa == null) {
     return { background: '#edf2f7', foreground: '#4a5568' };
   }
 
-  if (deltaHpa <= -2) {
+  if (deltaHpa <= thresholdHpa) {
     return { background: '#ffc4c4', foreground: '#8a1f1f' };
   }
 
-  if (deltaHpa <= -1) {
+  if (deltaHpa <= thresholdHpa / 2) {
     return { background: '#ffe9b8', foreground: '#7f5900' };
   }
 
@@ -258,6 +284,43 @@ function normalizeStartIndex(
   if (startIndex == null || !Number.isInteger(startIndex)) return 0;
   if (startIndex < 0 || startIndex >= length) return 0;
   return startIndex;
+}
+
+/**
+ * 色分けの閾値の丸め。
+ *
+ * 投稿判定側（`pressure-trend`）は不正値を例外にするが、描画は画像を1枚
+ * 出すだけの処理なので、設定ミスで投稿全体を止めるより既定で描くほうがよい。
+ * 0 以上だと「下回ったら警報」が成立しない（0 は常時警報になる）ため、
+ * これも既定へ落とす。unknown で受けるのは、型の無い呼び出し元から
+ * 数値以外が来ても比較が静かに壊れないようにするため。
+ */
+function normalizeThresholdHpa(value: unknown): number {
+  if (typeof value !== 'number') return DEFAULT_THRESHOLD_HPA;
+  if (!Number.isFinite(value) || value >= 0) return DEFAULT_THRESHOLD_HPA;
+  return value;
+}
+
+/**
+ * 取得時刻キー（`YYYY-MM-DDTHH:00`）から `HH:MM` だけを取り出す。
+ *
+ * 日付は列の時刻ラベル側で分かるので、タイトルでは時刻だけを添える。
+ * 読めない値は null を返し、呼び出し側は何も描かない（誤った時刻を出さない）。
+ */
+function formatFetchedTime(fetchedAtLocal?: string): string | null {
+  const value = fetchedAtLocal?.trim();
+  if (!value) return null;
+
+  const match = FETCHED_AT_PATTERN.exec(value);
+  if (!match) return null;
+
+  const hour = Number.parseInt(match[4], 10);
+  const minute = Number.parseInt(match[5], 10);
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
+  if (hour > 23 || minute > 59) return null;
+
+  // 正規表現で2桁固定なので、先頭ゼロを保つため元の文字列を使う
+  return `${match[4]}:${match[5]}`;
 }
 
 function formatCoordinate(
@@ -337,6 +400,7 @@ export function renderKiatsuImage(
       : DEFAULT_MAX_COLUMNS;
 
   const startIndex = normalizeStartIndex(options?.startIndex, hours.length);
+  const thresholdHpa = normalizeThresholdHpa(options?.thresholdHpa);
   const columns = buildForecastColumns(hours, maxColumns, startIndex);
 
   const padding = 32;
@@ -388,11 +452,23 @@ export function renderKiatsuImage(
 
   ctx.fillStyle = '#4a6175';
   ctx.font = font(18);
-  ctx.fillText(
-    formatLocationLabel(forecast, options?.locationName),
-    contentX,
-    titleY + 62
-  );
+  const locationLabel = formatLocationLabel(forecast, options?.locationName);
+  ctx.fillText(locationLabel, contentX, titleY + 62);
+
+  // 取得時刻は地点ラベルと同じ行の右に添える。行を増やすとタイトル領域の
+  // 高さ（titleAreaHeight）を変える必要があり、取得時刻の有無で縦位置が
+  // ずれてしまうため。未指定なら何も描かない。
+  const fetchedTime = formatFetchedTime(options?.fetchedAtLocal);
+  if (fetchedTime) {
+    const locationWidth = ctx.measureText(locationLabel).width;
+    ctx.font = font(16);
+    ctx.fillStyle = '#5b7085';
+    ctx.fillText(
+      `取得: ${fetchedTime}`,
+      contentX + locationWidth + 16,
+      titleY + 62
+    );
+  }
 
   const tableX = contentX;
   let rowY = titleY + titleAreaHeight;
@@ -560,7 +636,7 @@ export function renderKiatsuImage(
 
         case 'drop': {
           const delta = getPressureDelta3h(hours, column.absoluteIndex);
-          const dropStyle = getDropStyle(delta);
+          const dropStyle = getDropStyle(delta, thresholdHpa);
           const badgeX = x + 9;
           const badgeY = rowY + 12;
           const badgeWidth = colWidth - 18;

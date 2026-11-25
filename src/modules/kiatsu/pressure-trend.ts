@@ -168,3 +168,49 @@ export function formatDeltaHpa(delta: number): string {
   const text = Math.abs(rounded).toFixed(1);
   return rounded < 0 ? `-${text}` : `+${text}`;
 }
+
+/** バックオフ倍率の上限（1時間 × 16 = 16時間）。 */
+const MAX_BACKOFF_SHIFT = 4;
+
+/**
+ * 連続停止が続いたときの再試行までの待ち時間。
+ *
+ * 恒久障害では「停止 → 待機 → 再開 → また停止」を無限に繰り返すため、
+ * 待機時間を指数的に伸ばして相手への負荷とログの量を抑える。
+ * 上限を設けるのは、復帰したときに長すぎる空白を残さないため。
+ */
+export function backoffDelayMs(
+  baseMs: number,
+  suspensionCount: number
+): number {
+  if (!Number.isFinite(baseMs) || baseMs <= 0) {
+    throw new Error(
+      `backoffDelayMs: baseMs must be a finite positive number, got ${baseMs}`
+    );
+  }
+
+  const count = Number.isFinite(suspensionCount)
+    ? Math.max(0, Math.floor(suspensionCount))
+    : 0;
+
+  return baseMs * 2 ** Math.min(count, MAX_BACKOFF_SHIFT);
+}
+
+/**
+ * この停止を利用者に知らせるか。
+ *
+ * 同じ障害が長引くときに「停止しました／再開しました」を出し続けると
+ * タイムラインが埋まるので、通知は上限回数までにする（復帰は試み続ける）。
+ */
+export function shouldNotifySuspension(
+  noticedCount: number,
+  limit: number
+): boolean {
+  if (!Number.isFinite(limit) || limit < 0) {
+    throw new Error(
+      `shouldNotifySuspension: limit must be a non-negative number, got ${limit}`
+    );
+  }
+
+  return noticedCount < limit;
+}

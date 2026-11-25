@@ -3,12 +3,14 @@ import type { HourlyPoint } from '../src/modules/kiatsu/open-meteo.js';
 import {
   type AlertOptions,
   type AlertState,
+  backoffDelayMs,
   DEFAULT_ALERT_OPTIONS,
   deltaOverHours,
   evaluateAlert,
   formatDeltaHpa,
   formatLocalHourKey,
   indexOfLocalHour,
+  shouldNotifySuspension,
 } from '../src/modules/kiatsu/pressure-trend.js';
 
 /** テスト用の1点。timeLocal は API と同じ `YYYY-MM-DDTHH:mm` 形式で渡す。 */
@@ -258,5 +260,36 @@ describe('formatLocalHourKey', () => {
     expect(formatLocalHourKey(date, 'UTC')).toBe('2026-11-25T10:00');
     // 30分オフセットのタイムゾーンでも時だけを切り出す
     expect(formatLocalHourKey(date, 'Asia/Kolkata')).toBe('2026-11-25T16:00');
+  });
+});
+
+describe('連続停止のバックオフと通知上限', () => {
+  it('待機時間を指数的に伸ばし、上限で頭打ちにする', () => {
+    // 1時間 → 2 → 4 → 8 → 16 → 16（上限）
+    const hour = 60 * 60 * 1000;
+
+    expect(backoffDelayMs(hour, 0)).toBe(hour);
+    expect(backoffDelayMs(hour, 1)).toBe(2 * hour);
+    expect(backoffDelayMs(hour, 2)).toBe(4 * hour);
+    expect(backoffDelayMs(hour, 3)).toBe(8 * hour);
+    expect(backoffDelayMs(hour, 4)).toBe(16 * hour);
+    expect(backoffDelayMs(hour, 99)).toBe(16 * hour);
+  });
+
+  it('不正な入力は例外にする（設定ミスを黙って通さない）', () => {
+    expect(() => backoffDelayMs(0, 0)).toThrow();
+    expect(() => backoffDelayMs(Number.NaN, 0)).toThrow();
+    expect(() => backoffDelayMs(-1, 0)).toThrow();
+    // 停止回数が壊れていても、待機時間は壊さない
+    expect(backoffDelayMs(1000, Number.NaN)).toBe(1000);
+    expect(backoffDelayMs(1000, -3)).toBe(1000);
+  });
+
+  it('通知は上限回数までで打ち切る', () => {
+    expect(shouldNotifySuspension(0, 2)).toBe(true);
+    expect(shouldNotifySuspension(1, 2)).toBe(true);
+    expect(shouldNotifySuspension(2, 2)).toBe(false);
+    expect(shouldNotifySuspension(0, 0)).toBe(false);
+    expect(() => shouldNotifySuspension(0, -1)).toThrow();
   });
 });

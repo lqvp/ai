@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, resolveConfig } from '../src/config/index.js';
+import {
+  ConfigError,
+  initConfig,
+  loadConfig,
+  resolveConfig,
+} from '../src/config/index.js';
+import { formatPressureSettings } from '../src/modules/info/format.js';
 
 const base = {
   host: 'https://example.com/',
@@ -205,18 +211,36 @@ describe('resolveConfig', () => {
     expect(config.kiatsu?.longitude).toBe(-180);
   });
 
-  it('rejects a kiatsu alert threshold outside -10..0', () => {
-    for (const alertThresholdHpa of [0.1, 2, -10.1]) {
+  it('rejects a kiatsu alert threshold that is zero or outside -10..0', () => {
+    // 0 は「常時警報」で意味を持たず evaluateAlert が例外にするため弾く
+    for (const alertThresholdHpa of [0, 0.1, 2, -10.1]) {
       expect(() =>
         resolveConfig({ ...base, kiatsu: { alertThresholdHpa } })
       ).toThrow(ConfigError);
     }
 
-    // 0（変化なし）と -10 は境界として受け付ける
-    for (const alertThresholdHpa of [0, -10, -2.0]) {
+    // -10 以上 0 未満（開区間）は許可
+    for (const alertThresholdHpa of [-0.5, -10, -2.0]) {
       const config = resolveConfig({ ...base, kiatsu: { alertThresholdHpa } });
       expect(config.kiatsu?.alertThresholdHpa).toBe(alertThresholdHpa);
     }
+  });
+
+  it('rejects a non-boolean kiatsu.enabled', () => {
+    // 文字列 "false" は enabled === false 比較をすり抜けて有効扱いになる
+    expect(() =>
+      resolveConfig({ ...base, kiatsu: { enabled: 'false' as never } })
+    ).toThrow(ConfigError);
+
+    const config = resolveConfig({ ...base, kiatsu: { enabled: false } });
+    expect(config.kiatsu?.enabled).toBe(false);
+  });
+
+  it('shows kiatsu as running when enabled is unset', () => {
+    // モジュールは enabled === false のときだけ停止する（未設定は稼働）。
+    // 表示側も同じ扱いにしないと、既存利用者が全員「停止」と誤表示される。
+    initConfig(resolveConfig({ ...base, kiatsu: {} }));
+    expect(formatPressureSettings()).toContain('✅');
   });
 
   it('rejects out-of-range kiatsu hysteresis and maxPostsPerDay', () => {
