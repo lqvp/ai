@@ -390,3 +390,22 @@ describe('kiatsu のヒステリシス', () => {
     ).not.toThrow();
   });
 });
+
+describe('kiatsu の解除境界（既定値を含む）', () => {
+  it('しきい値だけを浅く指定しても、既定の幅で境界が 0 を超えたら拒否する', () => {
+    // しきい値 -0.2 に既定の幅 0.5 を足すと +0.3 になり、横ばいでも解除されない。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -0.2 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/絶対値以下/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -0.2, hysteresisHpa: 0.2 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).not.toThrow();
+  });
+});

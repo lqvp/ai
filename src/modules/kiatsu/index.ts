@@ -404,10 +404,13 @@ export default class extends Module<KiatsuData> {
     }
 
     if (delta3h >= 0) {
-      // 気圧が上昇に転じている。「下がってきています」とは言えないので捨てる。
-      this.log('気圧が上昇しているため、未送信の警報を破棄します。');
+      // 気圧が横ばい〜上昇。「下がってきています」とは言えないので捨てる。
+      // 警報状態も解除する。解除境界がちょうど 0 の設定では、横ばいのまま
+      // alerting が残り、次に同じだけ下がっても trigger が立たなくなる。
+      this.log('気圧が下がっていないため、未送信の警報を破棄します。');
       this.pendingAlert = false;
       this.pendingAlertAttempts = 0;
+      this.alertState = { alerting: false };
       this.persistState();
       return;
     }
