@@ -538,6 +538,51 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       expect(legacyDec.state.slots).toEqual([0, 10]);
       expect(legacyDec.state.executedSlots).toBeUndefined();
 
+      // 予定表に lastRunAt 対応枠が含まれない旧データでも、executedSlots を捏造せず1回分を上限から差し引く
+      const unscheduledDir = createTempDir();
+      const unscheduledPath = join(unscheduledDir, 'aichat-wander.json');
+      writeFileSync(
+        unscheduledPath,
+        JSON.stringify({
+          version: 1,
+          lastPostAt: null,
+          lastRunAt: t1210_00,
+          schedule: { hour: '2026-11-24T12', slots: [45] },
+          recent: [],
+          actedNoteIds: [],
+          userLastReplyAt: {},
+          userLastReactAt: {},
+          userNoResponseUntil: {},
+          recentEmojis: [],
+        }),
+        'utf8'
+      );
+      const unscheduledStore = new WanderStore({
+        filePath: unscheduledPath,
+        now: () => t1225_00,
+      });
+      const unscheduledMigrated =
+        await unscheduledStore.checkAndCommitScheduleTick(
+          t1225_00,
+          {
+            activeHoursStart: 9,
+            activeHoursEnd: 23,
+            minGapMinutes: 10,
+            minRunsPerHour: 2,
+            maxRunsPerHour: 2,
+          },
+          () => 0.5
+        );
+      expect(unscheduledMigrated.state.executedSlots).toBeUndefined();
+      expect(unscheduledMigrated.state.slots).toHaveLength(2);
+      expect(unscheduledMigrated.state.slots![0]).toBe(10);
+      expect(unscheduledMigrated.state.slots![1]).toBeGreaterThanOrEqual(25);
+      const persistedUnscheduled = (await unscheduledStore.load()).schedule;
+      expect(persistedUnscheduled?.executedSlots).toBeUndefined();
+      expect(persistedUnscheduled?.slots).toEqual(
+        unscheduledMigrated.state.slots
+      );
+
       // WanderStore 経由でも、未変更の再起動を挟んでから 2..2 へ移行しても上限を超えず executedSlots を捏造しない
       const legacyDir = createTempDir();
       const legacyPath = join(legacyDir, 'aichat-wander.json');
