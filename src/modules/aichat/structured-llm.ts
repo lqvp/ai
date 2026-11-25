@@ -224,7 +224,7 @@ export async function callStructuredJson<T>(
 
   let recordOutcome: LlmOutcomeRecorder;
   try {
-    recordOutcome = await acquireLlmCallBudget(log);
+    recordOutcome = await acquireLlmCallBudget(log, 'structured');
   } catch {
     // acquire 側で構造化ログ済み。構造化呼び出しは失敗時 null 契約なので抑制する。
     return null;
@@ -299,7 +299,7 @@ export async function callStructuredJson<T>(
         .join('');
     }
   } catch (err: unknown) {
-    await recordOutcome(false);
+    await recordOutcome(false, 'general');
     log(
       `構造化LLM呼び出しエラー: ${err instanceof Error ? err.message : String(err)}`
     );

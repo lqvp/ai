@@ -204,7 +204,11 @@ describe('callStructuredJson', () => {
     expect(res).toBeNull();
     const usage = JSON.parse(
       readFileSync(join(memoryDir, 'aichat-llm-usage.json'), 'utf8')
-    ) as { consecutiveErrors: number };
-    expect(usage.consecutiveErrors).toBe(1);
+    ) as {
+      consecutiveErrors: number;
+      structuredConsecutiveErrors: number;
+    };
+    expect(usage.structuredConsecutiveErrors).toBe(1);
+    expect(usage.consecutiveErrors).toBe(0);
   });
 });

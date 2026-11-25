@@ -4,6 +4,7 @@ import type Message from '@/message.js';
 import {
   acquireLlmCallBudget,
   LlmBudgetBlockedError,
+  type LlmOutcomeRecorder,
 } from '../llm-usage-guard.js';
 import {
   type OpenaiSettings,
@@ -45,7 +46,8 @@ type OpenaiChatCompletion = {
 async function postChatCompletion(
   settings: OpenaiSettings,
   body: OpenaiOptions,
-  log?: (message: string) => void
+  log?: (message: string) => void,
+  reservedOutcome?: LlmOutcomeRecorder
 ): Promise<OpenaiChatCompletion> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -54,7 +56,7 @@ async function postChatCompletion(
     headers.Authorization = `Bearer ${settings.apiKey}`;
   }
 
-  const recordOutcome = await acquireLlmCallBudget(log);
+  const recordOutcome = reservedOutcome ?? (await acquireLlmCallBudget(log));
   try {
     const result = await got
       .post(settings.apiUrl, {
@@ -162,8 +164,13 @@ export async function genTextByOpenaiDetailed(
 
   let responseText = '';
 
-  const requestFinalText = async (): Promise<string> => {
-    const fetchText = async (extraUserMessage?: string): Promise<string> => {
+  const requestFinalText = async (
+    firstReservedOutcome?: LlmOutcomeRecorder
+  ): Promise<string> => {
+    const fetchText = async (
+      extraUserMessage?: string,
+      reservedOutcome?: LlmOutcomeRecorder
+    ): Promise<string> => {
       const finalMessages = extraUserMessage
         ? ([
             ...messages,
@@ -182,14 +189,15 @@ export async function genTextByOpenaiDetailed(
               }
             : {}),
         },
-        ctx.log
+        ctx.log,
+        reservedOutcome
       );
       const finalMessage = res.choices?.[0]?.message;
       return extractOpenaiContentText(finalMessage?.content);
     };
 
     try {
-      let text = await fetchText();
+      let text = await fetchText(undefined, firstReservedOutcome);
       if (text === '') {
         ctx.log('最終応答が空のため、文章での応答を明示して再試行します');
         text = await fetchText(
@@ -206,6 +214,8 @@ export async function genTextByOpenaiDetailed(
     }
   };
 
+  let reservedNextRequest: LlmOutcomeRecorder | undefined;
+
   for (let round = 0; round < maxRounds; round++) {
     const isLastRound = round === maxRounds - 1;
 
@@ -220,7 +230,13 @@ export async function genTextByOpenaiDetailed(
 
     let resData: OpenaiChatCompletion;
     try {
-      resData = await postChatCompletion(settings, openaiOptions, ctx.log);
+      resData = await postChatCompletion(
+        settings,
+        openaiOptions,
+        ctx.log,
+        reservedNextRequest
+      );
+      reservedNextRequest = undefined;
 
       ctx.log(
         `OpenAI互換APIレスポンス(round=${round}): ${JSON.stringify(resData).slice(0, 1000)}`
@@ -297,6 +313,10 @@ export async function genTextByOpenaiDetailed(
         .join(', ')}`
     );
 
+    // 副作用のあるツールを実行する前に、結果を文章化する次のAPI枠を確保する。
+    // 確保できない場合はリアクション等を実行せず予算エラーで終了する。
+    reservedNextRequest = await acquireLlmCallBudget(ctx.log);
+
     const results = await Promise.all(
       effectiveToolCalls.map(async (call) => {
         const toolResult = await executeToolCall(
@@ -323,7 +343,8 @@ export async function genTextByOpenaiDetailed(
 
     if (isLastRound) {
       ctx.log('最終ラウンドに到達したため、ツールなしで最終応答を取得します');
-      responseText = await requestFinalText();
+      responseText = await requestFinalText(reservedNextRequest);
+      reservedNextRequest = undefined;
       break;
     }
   }

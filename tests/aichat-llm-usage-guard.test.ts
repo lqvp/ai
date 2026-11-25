@@ -108,4 +108,35 @@ describe('LlmUsageGuard', () => {
     await guard.recordOutcome(true);
     expect(await guard.tryAcquire()).toEqual({ allowed: true });
   });
+  it('backs off structured JSON failures without blocking normal chat calls', async () => {
+    const dir = createTempDir();
+    initConfig(
+      resolveConfig({
+        host: 'https://example.com',
+        i: 'token',
+        aichat: {
+          llmBudget: {
+            maxCallsPerDay: 10,
+            maxConsecutiveErrors: 2,
+            errorBackoffMinutes: 10,
+          },
+        },
+      })
+    );
+    const guard = new LlmUsageGuard({
+      filePath: join(dir, 'aichat-llm-usage.json'),
+      now: () => Date.parse('2026-11-24T12:00:00Z'),
+    });
+
+    expect(await guard.tryAcquire('structured')).toEqual({ allowed: true });
+    await guard.recordOutcome(false, 'structured');
+    expect(await guard.tryAcquire('structured')).toEqual({ allowed: true });
+    await guard.recordOutcome(false, 'structured');
+
+    expect(await guard.tryAcquire('structured')).toEqual({
+      allowed: false,
+      reason: 'error_backoff',
+    });
+    expect(await guard.tryAcquire('general')).toEqual({ allowed: true });
+  });
 });

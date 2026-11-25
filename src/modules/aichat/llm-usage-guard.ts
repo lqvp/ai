@@ -9,7 +9,12 @@ export type LlmUsageState = {
   calls: number;
   consecutiveErrors: number;
   backoffUntil: number;
+  /** 構造化JSON専用の連続失敗。通常文章生成へは波及させない */
+  structuredConsecutiveErrors: number;
+  structuredBackoffUntil: number;
 };
+
+export type LlmFailureKind = 'general' | 'structured';
 
 export type LlmBudgetDecision =
   | { allowed: true }
@@ -37,6 +42,16 @@ function normalizeUsageState(raw: unknown): LlmUsageState {
       typeof obj.backoffUntil === 'number' && Number.isFinite(obj.backoffUntil)
         ? obj.backoffUntil
         : 0,
+    structuredConsecutiveErrors:
+      typeof obj.structuredConsecutiveErrors === 'number' &&
+      Number.isFinite(obj.structuredConsecutiveErrors)
+        ? Math.max(0, Math.trunc(obj.structuredConsecutiveErrors))
+        : 0,
+    structuredBackoffUntil:
+      typeof obj.structuredBackoffUntil === 'number' &&
+      Number.isFinite(obj.structuredBackoffUntil)
+        ? obj.structuredBackoffUntil
+        : 0,
   };
 }
 
@@ -47,6 +62,8 @@ function createDefaultUsageState(): LlmUsageState {
     calls: 0,
     consecutiveErrors: 0,
     backoffUntil: 0,
+    structuredConsecutiveErrors: 0,
+    structuredBackoffUntil: 0,
   };
 }
 
@@ -66,18 +83,22 @@ export class LlmBudgetBlockedError extends Error {
   }
 }
 
-export type LlmOutcomeRecorder = (success: boolean) => Promise<void>;
+export type LlmOutcomeRecorder = (
+  success: boolean,
+  failureKind?: LlmFailureKind
+) => Promise<void>;
 
 /**
  * LLM API 1リクエスト分の予約を行い、成否記録用のコールバックを返す。
  * 予算状態そのものを保存できない場合は可用性を優先して no-op 記録で継続する。
  */
 export async function acquireLlmCallBudget(
-  log?: (message: string) => void
+  log?: (message: string) => void,
+  failureKind: LlmFailureKind = 'general'
 ): Promise<LlmOutcomeRecorder> {
   const usageGuard = getLlmUsageGuard(log);
   try {
-    const budget = await usageGuard.tryAcquire();
+    const budget = await usageGuard.tryAcquire(failureKind);
     if (!budget.allowed) {
       log?.(formatBlockedBudgetLog(budget.reason));
       throw new LlmBudgetBlockedError(budget.reason);
@@ -90,8 +111,10 @@ export async function acquireLlmCallBudget(
     return async () => {};
   }
 
-  return async (success: boolean) => {
-    await usageGuard.recordOutcome(success).catch(() => undefined);
+  return async (success: boolean, overrideKind?: LlmFailureKind) => {
+    await usageGuard
+      .recordOutcome(success, overrideKind ?? failureKind)
+      .catch(() => undefined);
   };
 }
 
@@ -124,7 +147,9 @@ export class LlmUsageGuard {
     });
   }
 
-  public async tryAcquire(): Promise<LlmBudgetDecision> {
+  public async tryAcquire(
+    failureKind: LlmFailureKind = 'general'
+  ): Promise<LlmBudgetDecision> {
     const budget = config.aichat?.llmBudget;
     if (budget?.enabled === false) return { allowed: true };
 
@@ -135,6 +160,15 @@ export class LlmUsageGuard {
     return this.store.update<LlmBudgetDecision>((state) => {
       const current = rollover(state, day);
       if (current.backoffUntil > nowMs) {
+        return {
+          next: current,
+          result: { allowed: false, reason: 'error_backoff' },
+        };
+      }
+      if (
+        failureKind === 'structured' &&
+        current.structuredBackoffUntil > nowMs
+      ) {
         return {
           next: current,
           result: { allowed: false, reason: 'error_backoff' },
@@ -151,7 +185,10 @@ export class LlmUsageGuard {
     });
   }
 
-  public async recordOutcome(success: boolean): Promise<void> {
+  public async recordOutcome(
+    success: boolean,
+    failureKind: LlmFailureKind = 'general'
+  ): Promise<void> {
     const budget = config.aichat?.llmBudget;
     if (budget?.enabled === false) return;
 
@@ -162,9 +199,37 @@ export class LlmUsageGuard {
 
     await this.store.update((state) => {
       const current = rollover(state, day);
-      const consecutiveErrors = success ? 0 : current.consecutiveErrors + 1;
+      if (success) {
+        return {
+          next: {
+            ...current,
+            consecutiveErrors: 0,
+            structuredConsecutiveErrors: 0,
+          },
+          result: undefined,
+        };
+      }
+
+      if (failureKind === 'structured') {
+        const structuredConsecutiveErrors =
+          current.structuredConsecutiveErrors + 1;
+        const structuredBackoffUntil =
+          structuredConsecutiveErrors >= maxErrors
+            ? nowMs + backoffMs
+            : current.structuredBackoffUntil;
+        return {
+          next: {
+            ...current,
+            structuredConsecutiveErrors,
+            structuredBackoffUntil,
+          },
+          result: undefined,
+        };
+      }
+
+      const consecutiveErrors = current.consecutiveErrors + 1;
       const backoffUntil =
-        !success && consecutiveErrors >= maxErrors
+        consecutiveErrors >= maxErrors
           ? nowMs + backoffMs
           : current.backoffUntil;
       return {

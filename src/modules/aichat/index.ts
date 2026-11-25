@@ -926,6 +926,11 @@ export default class extends Module {
           replyTargetId && (isDifferentUser || isOldTurnReply)
         );
 
+        if (!exist.fromMention && exist.ownerUserId === msg.userId) {
+          // 古いターンへ返信して分岐する場合も、元セッションの無反応判定を残さない。
+          exist.ownerResponded = true;
+        }
+
         let targetSession = exist;
         if (isBranch && replyTargetId) {
           const snapshot = exist.historySnapshots?.[replyTargetId];
@@ -946,7 +951,7 @@ export default class extends Module {
             postIds: [],
             ownerUserId: msg.userId,
             ownerAcct: normalizeAcct(msg.user),
-            ownerResponded: false,
+            ownerResponded: exist.ownerUserId === msg.userId ? true : false,
             followUpUsed: false,
             history: baseHistory.map((item) => ({ ...item })),
             historySnapshots: {},
