@@ -321,12 +321,7 @@ export default class extends Module<KiatsuData> {
       } (警報中: ${state.alerting})`
     );
 
-    if (
-      trigger &&
-      delta3h !== null &&
-      !this.pendingAlert &&
-      Date.now() >= this.alertRetryAfter
-    ) {
+    if (trigger && delta3h !== null && !this.pendingAlert) {
       this.pendingAlert = true;
       this.pendingAlertAttempts = 0;
       this.persistState();
@@ -381,6 +376,10 @@ export default class extends Module<KiatsuData> {
   @bindThis
   private async flushPendingAlert(): Promise<void> {
     if (!this.pendingAlert || this.posting) return;
+
+    // 諦めた直後は間隔を空ける。ただし未送信フラグは保持したままなので、
+    // 待機が明ければ次の評価で送信される。
+    if (Date.now() < this.alertRetryAfter) return;
 
     // 送る直前に最新の変化量を使う。鮮度が切れていたら諦める
     // （前日の変化量を「直近3時間」として投稿しない）。
@@ -443,17 +442,14 @@ export default class extends Module<KiatsuData> {
       console.warn(error);
 
       if (this.pendingAlertAttempts >= MAX_ALERT_ATTEMPTS) {
-        // 何度試しても通らないなら一旦諦める。ただし警報状態も解除する。
-        // 解除しないと、Misskey が復旧しても trigger が立たず、その低下の
-        // 警報が二度と出せない。再挑戦は一定時間後に限る。
+        // 何度試しても通らないなら一旦間隔を空ける。未送信フラグは残すので、
+        // 待機が明けて Misskey が復旧していれば同じ低下のまま送信される
+        // （ここでフラグも状態も落とすと、その低下の警報が永久に出せない）。
         this.log(
-          `警報の投稿を諦めます。${ALERT_RETRY_SUPPRESS_MS / 60000} 分後に再挑戦します。`
+          `警報の投稿を保留します。${ALERT_RETRY_SUPPRESS_MS / 60000} 分後に再挑戦します。`
         );
-        this.pendingAlert = false;
         this.pendingAlertAttempts = 0;
         this.alertRetryAfter = Date.now() + ALERT_RETRY_SUPPRESS_MS;
-        this.alertState = { alerting: false };
-        this.persistState();
       }
     } finally {
       this.posting = false;
