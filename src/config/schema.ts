@@ -672,9 +672,7 @@ function validateAndResolve(input: RawConfig): Config {
 
     // 片側だけの座標指定は拒否する。片方だけだと既定値と組み合わされ、
     // 利用者が意図していない地点の予報を投稿してしまう。
-    if (
-      (kiatsu.latitude === undefined) !== (kiatsu.longitude === undefined)
-    ) {
+    if ((kiatsu.latitude === undefined) !== (kiatsu.longitude === undefined)) {
       issues.push(
         'kiatsu.latitude と kiatsu.longitude は両方そろえて指定してください'
       );
