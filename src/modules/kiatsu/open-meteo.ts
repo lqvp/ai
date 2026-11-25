@@ -183,7 +183,7 @@ export function parseForecast(payload: unknown): HourlyForecast {
  * リクエストのクエリを組み立てる。
  *
  * `elevation` は要求しない。`pressure_msl` は海面更正気圧で標高に依存せず、
- * 絶対気圧を表示しない方針のため不要。
+ * 現地気圧（`surface_pressure`）を使わない方針のため不要。
  */
 export function buildQuery(options: OpenMeteoOptions): Record<string, string> {
   return {
@@ -201,16 +201,52 @@ export function buildQuery(options: OpenMeteoOptions): Record<string, string> {
   };
 }
 
+function extractApiErrorReason(error: unknown): string | null {
+  if (!isRecord(error) || !isRecord(error.response)) return null;
+  const statusCode = error.response.statusCode;
+  const rawBody = error.response.body;
+
+  let reason: string | null = null;
+  if (typeof rawBody === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(rawBody);
+      if (isRecord(parsed) && typeof parsed.reason === 'string') {
+        reason = parsed.reason;
+      }
+    } catch {
+      // JSON でない応答はそのままステータスだけ伝える
+    }
+  } else if (isRecord(rawBody) && typeof rawBody.reason === 'string') {
+    reason = rawBody.reason;
+  }
+
+  if (typeof statusCode === 'number') {
+    return reason
+      ? `Open-Meteo HTTP ${statusCode}: ${reason}`
+      : `Open-Meteo HTTP ${statusCode}`;
+  }
+  return reason ? `Open-Meteo: ${reason}` : null;
+}
+
 /**
  * 取得して parseForecast を通す。失敗は例外で伝える（呼び出し側が処理する）。
  */
 export async function fetchForecast(
   options: OpenMeteoOptions
 ): Promise<HourlyForecast> {
-  const payload = await getJson<unknown>(OPEN_METEO_FORECAST_URL, {
-    searchParams: buildQuery(options),
-    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
+  let payload: unknown;
+  try {
+    payload = await getJson<unknown>(OPEN_METEO_FORECAST_URL, {
+      searchParams: buildQuery(options),
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const summary = extractApiErrorReason(error);
+    if (summary) {
+      throw new Error(summary, { cause: error });
+    }
+    throw error;
+  }
 
   return parseForecast(payload);
 }

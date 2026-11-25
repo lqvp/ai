@@ -1,12 +1,16 @@
 import { readFileSync } from 'node:fs';
 import * as TOML from '@iarna/toml';
 import { describe, expect, it } from 'vitest';
+import { resolveConfig } from '../src/config/schema.js';
 
 const example = TOML.parse(
   readFileSync(new URL('../example.config.toml', import.meta.url), 'utf8')
 ) as Record<string, any>;
 
 describe('example.config.toml', () => {
+  it('passes resolveConfig schema validation as-is', () => {
+    expect(() => resolveConfig(example)).not.toThrow();
+  });
   it('keeps top-level keys at the top level', () => {
     // [userAgent] などのテーブル見出しより後ろにトップレベルキーを書くと
     // そのテーブルに取り込まれてしまう（TOML の仕様）。

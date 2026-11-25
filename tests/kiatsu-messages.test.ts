@@ -56,4 +56,28 @@ describe('気圧投稿の文面', () => {
     expect(text).not.toContain('hPa');
     expect(text).not.toContain(ATTRIBUTION);
   });
+
+  it('予報画像を添付しつつ 3時間変化だけ欠測のときは欠測説明と出典 URL を両方出す', () => {
+    const text = buildMentionMessage('高崎市', null, '2026-11-25T20:00', {
+      hasForecastImage: true,
+    });
+
+    expect(text).toContain('高崎市付近');
+    expect(text).toContain('欠測');
+    expect(text).toContain('20:00時点');
+    expect(text).toContain(ATTRIBUTION);
+  });
+
+  it('locationName 未設定時は座標を出さず自然な日本語にする', () => {
+    const alertText = buildAlertMessage(undefined, -2.4);
+    expect(alertText).toContain(
+      '気圧が下がってきています（直近3時間で -2.4 hPa）。'
+    );
+    expect(alertText).not.toContain('undefined');
+
+    const mentionText = buildMentionMessage('', -1.2, '2026-11-25T20:00');
+    expect(mentionText).toContain(
+      '気圧は直近3時間で -1.2 hPa 変化しています（20:00時点）。'
+    );
+  });
 });

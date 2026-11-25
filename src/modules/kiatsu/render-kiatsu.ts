@@ -7,11 +7,12 @@ import {
 import { createCanvasWithBackground } from '@/utils/canvas.js';
 import { ensureFont } from '@/utils/font.js';
 import type { HourlyForecast, HourlyPoint } from './open-meteo.js';
+import { COMPARISON_EPSILON, formatDeltaHpa } from './pressure-trend.js';
 
 export interface RenderKiatsuOptions {
   /** 表示する列数。既定 12。 */
   maxColumns?: number;
-  /** タイトルに出す地点名。渡されない場合は緯度経度で代替する。 */
+  /** タイトルに出す地点名。未指定・空欄時は座標を出さず「設定地点」とする。 */
   locationName?: string;
   /** 描画時点のローカル時刻（`YYYY-MM-DDTHH:00`）。相対日付の基準に使う */
   nowLocal?: string;
@@ -33,7 +34,7 @@ export interface RenderKiatsuOptions {
    */
   thresholdHpa?: number;
   /**
-   * 画像の取得時刻（`YYYY-MM-DDTHH:00`）。
+   * 画像の取得時刻（`YYYY-MM-DDTHH:mm`）。
    *
    * 画像だけを見て「いつのデータか」を判断できるようにするためのもの。
    * 取得に失敗して古い予報を出したとき、これが無いと最新のデータに見えてしまう。
@@ -64,6 +65,12 @@ type ParsedHourlyTime = {
   hour: number;
 };
 
+type WeatherDisplay = {
+  /** `./font.ttf` に収録されている BMP 記号。雷のみベクター描画を使う。 */
+  symbol: string | 'thunder-vector';
+  label: string;
+};
+
 const DEFAULT_MAX_COLUMNS = 12;
 const DEFAULT_THRESHOLD_HPA = -2;
 const MS_PER_DAY = 86_400_000;
@@ -71,18 +78,22 @@ const TIME_LOCAL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})/;
 const FETCHED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/;
 
 /**
- * 天気の短縮ラベル。
- * WMO_CODE_MAP の description（例: 「軽い着氷性の霧雨」）は列幅に収まらないため、
- * 描画層でこの粒度まで丸める。
+ * 天気の短縮ラベルと記号。
+ *
+ * `WMO_CODE_MAP` の `emoji`（`🌤️` `🌧️` `🌫️` `☔` 等のカラー絵文字）をそのまま
+ * `@napi-rs/canvas` に渡すと、同梱の `./font.ttf` や Docker 環境（絵文字フォント無し）
+ * では未収録グリフの豆腐（`□`）になる。ここでは `./font.ttf` 収録確認済みの
+ * BMP 文字記号（`☀` `☁` `☂` `☃` `≡` `・`）と、フォント非依存のベクター描画（雷）に限定する。
  */
-const SHORT_WEATHER_LABELS: Record<WmoCodeInfo['serifKey'], string> = {
-  sunny: '晴',
-  cloudy: '曇',
-  rainy: '雨',
-  snowy: '雪',
-  thunder: '雷',
-  other: '不明',
-};
+const WEATHER_DISPLAY_BY_KEY: Record<WmoCodeInfo['serifKey'], WeatherDisplay> =
+  {
+    sunny: { symbol: '☀', label: '晴' },
+    cloudy: { symbol: '☁', label: '曇' },
+    rainy: { symbol: '☂', label: '雨' },
+    snowy: { symbol: '☃', label: '雪' },
+    thunder: { symbol: 'thunder-vector', label: '雷' },
+    other: { symbol: '・', label: '不明' },
+  };
 
 function font(size: number, weight: 'normal' | 'bold' = 'normal'): string {
   return `${weight} ${size}px ${ensureFont()}`;
@@ -125,9 +136,9 @@ function parseHourlyTime(timeLocal: string): ParsedHourlyTime | null {
 /**
  * 日付ラベル。
  *
- * 基準は「描画時点の日付」でなければならない。予報の先頭を基準にすると、
- * 前日の予報を描いたときに 25日を「今日」と表示してしまう（日付をまたいで
- * 取得に失敗した場合に起こる）。基準が取れないときだけ先頭基準に戻す。
+ * 基準は「描画時点の日付（`nowLocal`）」。予報の先頭を基準にすると、
+ * 前日の予報を描いたときに前日を「今日」と表示してしまう。
+ * `nowLocal` が渡されない呼び出しでは表示開始点の日付を基準にする。
  */
 function formatDayLabel(dayOffset: number): string {
   switch (dayOffset) {
@@ -186,7 +197,7 @@ function buildForecastColumns(
 
     const parsed = parseHourlyTime(point.timeLocal);
 
-    // 日付ラベルの基準は表示開始点。切り出して渡された場合と同じ見え方になる。
+    // 相対日付の基準は描画時点（base）。未指定のときだけ表示開始点を使う。
     const dayOffset =
       parsed == null || start == null ? 0 : parsed.dayIndex - start.dayIndex;
 
@@ -202,29 +213,47 @@ function buildForecastColumns(
   return columns;
 }
 
-function getWeatherDisplay(code: number): {
-  symbol: string;
-  label: string;
-} {
+function getWeatherDisplay(code: number): WeatherDisplay {
   const info = WMO_CODE_MAP[code] ?? UNKNOWN_WMO_CODE;
 
-  // 霧（45/48）は serifKey が cloudy になるため、描画では霧として区別する。
+  // 霧（45/48）は serifKey が cloudy になるため、描画では三本線記号で霧として区別する。
   if (code === 45 || code === 48) {
-    return { symbol: info.emoji, label: '霧' };
+    return { symbol: '≡', label: '霧' };
   }
 
-  return {
-    symbol: info.emoji,
-    label: SHORT_WEATHER_LABELS[info.serifKey] ?? '不明',
-  };
+  return WEATHER_DISPLAY_BY_KEY[info.serifKey] ?? WEATHER_DISPLAY_BY_KEY.other;
+}
+
+/**
+ * `⚡`（U+26A1）は同梱フォントにグリフが無いため、Canvas パスで稲妻を描く。
+ */
+function drawThunderBolt(
+  ctx: SKRSContext2D,
+  centerX: number,
+  centerY: number,
+  color: string
+): void {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(centerX + 2, centerY - 12);
+  ctx.lineTo(centerX - 8, centerY + 1);
+  ctx.lineTo(centerX - 1, centerY + 1);
+  ctx.lineTo(centerX - 4, centerY + 12);
+  ctx.lineTo(centerX + 8, centerY - 2);
+  ctx.lineTo(centerX + 1, centerY - 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
 }
 
 function getPressureTrend(current: number, previous: number | null): string {
   if (previous == null) return '';
 
   const diff = current - previous;
-  if (diff >= 0.3) return '↑';
-  if (diff <= -0.3) return '↓';
+  // 0.1 hPa 刻みの引き算誤差（例: 979.7 - 980.0 = -0.2999999999999545）を吸収する
+  if (diff >= 0.3 - COMPARISON_EPSILON) return '↑';
+  if (diff <= -0.3 + COMPARISON_EPSILON) return '↓';
   return '→';
 }
 
@@ -234,7 +263,8 @@ function getPressureTrend(current: number, previous: number | null): string {
  *
  * 警報の境界は設定の閾値（負値）に合わせる。注意の境界はその半分を目安に
  * 置き、閾値を緩めても強めても段階の幅が比例して動くようにする。
- * thresholdHpa は呼び出し側で正規化済み（負の有限値）の前提。
+ * 判定層の `evaluateAlert` と同じ `COMPARISON_EPSILON` を使い、警報投稿や
+ * 表示テキスト（`-2.0` 等）とバッジ色が食い違わないようにする。
  */
 function getDropStyle(
   deltaHpa: number | null,
@@ -244,23 +274,15 @@ function getDropStyle(
     return { background: '#edf2f7', foreground: '#4a5568' };
   }
 
-  if (deltaHpa <= thresholdHpa) {
+  if (deltaHpa <= thresholdHpa + COMPARISON_EPSILON) {
     return { background: '#ffc4c4', foreground: '#8a1f1f' };
   }
 
-  if (deltaHpa <= thresholdHpa / 2) {
+  if (deltaHpa <= thresholdHpa / 2 + COMPARISON_EPSILON) {
     return { background: '#ffe9b8', foreground: '#7f5900' };
   }
 
   return { background: '#d8f5d4', foreground: '#245d27' };
-}
-
-function formatSignedDecimal(value: number): string {
-  const rounded = Math.round(value * 10) / 10;
-  if (rounded === 0) return '0.0';
-
-  const text = rounded.toFixed(1);
-  return rounded > 0 ? `+${text}` : text;
 }
 
 /**
@@ -314,9 +336,8 @@ function normalizeThresholdHpa(value: unknown): number {
 }
 
 /**
- * 取得時刻キー（`YYYY-MM-DDTHH:00`）から `HH:MM` だけを取り出す。
+ * 取得時刻文字列（`YYYY-MM-DDTHH:mm`）から `M/D HH:mm` を取り出す。
  *
- * 日付は列の時刻ラベル側で分かるので、タイトルでは時刻だけを添える。
  * 読めない値は null を返し、呼び出し側は何も描かない（誤った時刻を出さない）。
  */
 function formatFetchedTime(fetchedAtLocal?: string): string | null {
@@ -326,44 +347,57 @@ function formatFetchedTime(fetchedAtLocal?: string): string | null {
   const match = FETCHED_AT_PATTERN.exec(value);
   if (!match) return null;
 
-  const hour = Number.parseInt(match[4], 10);
-  const minute = Number.parseInt(match[5], 10);
-  if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
-  if (hour > 23 || minute > 59) return null;
-
-  // 日付も出す。取得に失敗して前日の予報を描いたとき、時刻だけだと
-  // 「今の予報」に見えてしまう（列の「今日」もデータ基準でしか動かない）。
   const month = Number.parseInt(match[2], 10);
   const day = Number.parseInt(match[3], 10);
+  const hour = Number.parseInt(match[4], 10);
+  const minute = Number.parseInt(match[5], 10);
+  if (
+    Number.isNaN(month) ||
+    Number.isNaN(day) ||
+    Number.isNaN(hour) ||
+    Number.isNaN(minute) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour > 23 ||
+    minute > 59
+  ) {
+    return null;
+  }
 
-  // 正規表現で2桁固定なので、先頭ゼロを保つため元の文字列を使う
   return `${month}/${day} ${match[4]}:${match[5]}`;
 }
 
-function formatCoordinate(
-  value: number,
-  positive: string,
-  negative: string
-): string {
-  const hemisphere = value >= 0 ? positive : negative;
-  return `${Math.abs(value).toFixed(2)}°${hemisphere}`;
+/**
+ * 地点ラベルを組み立てる。
+ *
+ * 監視地点の緯度経度は自宅付近になり得るため、名前が未設定でも座標は描かない
+ * （`/info` と同じプライバシ方針）。
+ */
+function formatLocationLabel(locationName?: string): string {
+  const name = typeof locationName === 'string' ? locationName.trim() : '';
+  return name ? `地点: ${name}` : '地点: 設定地点';
 }
 
-/**
- * 地点名はもう API から受け取らないので、名前が無ければ緯度経度を出す。
- * どの地点の予報かを利用者が確認できないと、誤配信に気づけないため。
- * 標高は出さない（海面更正気圧は標高に依存しない）。
- */
-function formatLocationLabel(
-  forecast: HourlyForecast,
-  locationName?: string
+function truncateTextToWidth(
+  ctx: SKRSContext2D,
+  text: string,
+  maxWidth: number
 ): string {
-  const name = locationName?.trim();
-  if (name) return `地点: ${name}`;
+  if (maxWidth <= 0) return '';
+  if (ctx.measureText(text).width <= maxWidth) return text;
 
-  const latitude = formatCoordinate(forecast.latitude, 'N', 'S');
-  const longitude = formatCoordinate(forecast.longitude, 'E', 'W');
-  return `地点: ${latitude} ${longitude}`;
+  const ellipsis = '…';
+  const chars = [...text];
+  while (chars.length > 0) {
+    chars.pop();
+    const candidate = `${chars.join('')}${ellipsis}`;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      return candidate;
+    }
+  }
+  return ellipsis;
 }
 
 function formatColumnTime(column: ForecastColumn): string | null {
@@ -393,12 +427,12 @@ function drawCenteredText(
   y: number,
   width: number,
   height: number,
-  font: string,
+  fontSpec: string,
   color: string
 ) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = font;
+  ctx.font = fontSpec;
   ctx.fillStyle = color;
   ctx.fillText(text, x + width / 2, y + height / 2);
 }
@@ -418,7 +452,7 @@ export function renderKiatsuImage(
 
   const startIndex = normalizeStartIndex(options?.startIndex, hours.length);
   const thresholdHpa = normalizeThresholdHpa(options?.thresholdHpa);
-  // 「今日」の基準は描画時点の日付。渡されない場合は予報の先頭を使う。
+  // 「今日」の基準は描画時点の日付。渡されない場合は表示開始点を使う。
   const nowParsed = options?.nowLocal
     ? parseHourlyTime(options.nowLocal)
     : null;
@@ -432,7 +466,6 @@ export function renderKiatsuImage(
   const padding = 32;
   const panelPadding = 18;
   const titleAreaHeight = 88;
-  const footerAreaHeight = 44;
   const leftLabelWidth = 132;
   const colWidth = 92;
 
@@ -444,9 +477,13 @@ export function renderKiatsuImage(
     { key: 'drop', label: '3時間変化', height: 74 },
   ] as const;
 
+  const contentWidth = leftLabelWidth + columns.length * colWidth;
+  // 列数が少ない（例: maxColumns: 4）場合はフッターの左右テキストが重なるため2段に分ける
+  const stackFooter = contentWidth < 620;
+  const footerAreaHeight = stackFooter ? 64 : 44;
+
   const tableHeight = rows.reduce((sum, row) => sum + row.height, 0);
-  const width =
-    padding * 2 + panelPadding * 2 + leftLabelWidth + columns.length * colWidth;
+  const width = padding * 2 + panelPadding * 2 + contentWidth;
   const height =
     padding * 2 +
     panelPadding * 2 +
@@ -476,24 +513,29 @@ export function renderKiatsuImage(
   ctx.font = font(30, 'bold');
   ctx.fillText('気圧予報', contentX, titleY + 24);
 
+  const fetchedTime = formatFetchedTime(options?.fetchedAtLocal);
+  const fetchedLabel = fetchedTime ? `取得: ${fetchedTime}` : null;
+  let fetchedWidth = 0;
+  if (fetchedLabel) {
+    ctx.font = font(16);
+    fetchedWidth = ctx.measureText(fetchedLabel).width + 16;
+  }
+
   ctx.fillStyle = '#4a6175';
   ctx.font = font(18);
-  const locationLabel = formatLocationLabel(forecast, options?.locationName);
+  const rawLocationLabel = formatLocationLabel(options?.locationName);
+  const locationLabel = truncateTextToWidth(
+    ctx,
+    rawLocationLabel,
+    Math.max(80, contentWidth - fetchedWidth)
+  );
   ctx.fillText(locationLabel, contentX, titleY + 62);
 
-  // 取得時刻は地点ラベルと同じ行の右に添える。行を増やすとタイトル領域の
-  // 高さ（titleAreaHeight）を変える必要があり、取得時刻の有無で縦位置が
-  // ずれてしまうため。未指定なら何も描かない。
-  const fetchedTime = formatFetchedTime(options?.fetchedAtLocal);
-  if (fetchedTime) {
+  if (fetchedLabel) {
     const locationWidth = ctx.measureText(locationLabel).width;
     ctx.font = font(16);
     ctx.fillStyle = '#5b7085';
-    ctx.fillText(
-      `取得: ${fetchedTime}`,
-      contentX + locationWidth + 16,
-      titleY + 62
-    );
+    ctx.fillText(fetchedLabel, contentX + locationWidth + 16, titleY + 62);
   }
 
   const tableX = contentX;
@@ -577,7 +619,7 @@ export function renderKiatsuImage(
         case 'weather': {
           const weatherCode = column.point?.weatherCode ?? null;
 
-          // 欠測は絵文字とラベルの2行にすると「—」が2つ並んで読みにくい
+          // 欠測は記号とラベルの2行にすると「—」が2つ並んで読みにくい
           if (weatherCode == null) {
             drawCenteredText(
               ctx,
@@ -595,16 +637,28 @@ export function renderKiatsuImage(
           const weather = getWeatherDisplay(weatherCode);
           const tone = column.isMissing ? '#7c8796' : '#223b53';
 
+          if (weather.symbol === 'thunder-vector') {
+            drawThunderBolt(
+              ctx,
+              x + colWidth / 2,
+              rowY + rowHeight * 0.38,
+              tone
+            );
+          } else {
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = tone;
+            ctx.font = font(26, 'bold');
+            ctx.fillText(
+              weather.symbol,
+              x + colWidth / 2,
+              rowY + rowHeight * 0.4
+            );
+          }
+
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillStyle = tone;
-          ctx.font = font(26, 'bold');
-          ctx.fillText(
-            weather.symbol,
-            x + colWidth / 2,
-            rowY + rowHeight * 0.4
-          );
-
           ctx.font = font(16);
           ctx.fillText(
             weather.label,
@@ -676,7 +730,7 @@ export function renderKiatsuImage(
 
           drawCenteredText(
             ctx,
-            delta == null ? '—' : formatSignedDecimal(delta),
+            delta == null ? '—' : formatDeltaHpa(delta),
             badgeX,
             badgeY,
             badgeWidth,
@@ -695,21 +749,27 @@ export function renderKiatsuImage(
     rowY += rowHeight;
   }
 
-  const rangeText = formatRangeText(columns);
+  const rangeText = `表示範囲: ${formatRangeText(columns)}`;
+  const sourceText = 'source: Open-Meteo (JMA MSM) / CC-BY 4.0';
 
-  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#4e6477';
-  ctx.font = font(16);
-  ctx.fillText(`表示範囲: ${rangeText}`, contentX, rowY + footerAreaHeight / 2);
+  ctx.fillStyle = '#5b7085';
+  ctx.font = font(15);
 
-  // CC-BY 4.0 の帰属表示はライセンス上の義務なので消さない。
-  ctx.textAlign = 'right';
-  ctx.fillText(
-    'source: Open-Meteo (JMA MSM) / CC-BY 4.0',
-    panelX + panelWidth - panelPadding,
-    rowY + footerAreaHeight / 2
-  );
+  if (stackFooter) {
+    ctx.textAlign = 'left';
+    ctx.fillText(rangeText, contentX, rowY + 20);
+    ctx.fillText(sourceText, contentX, rowY + 44);
+  } else {
+    ctx.textAlign = 'left';
+    ctx.fillText(rangeText, contentX, rowY + footerAreaHeight / 2);
+    ctx.textAlign = 'right';
+    ctx.fillText(
+      sourceText,
+      panelX + panelWidth - panelPadding,
+      rowY + footerAreaHeight / 2
+    );
+  }
 
   return canvas.toBuffer('image/png');
 }

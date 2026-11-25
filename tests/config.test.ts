@@ -359,15 +359,78 @@ describe('kiatsu の座標指定', () => {
 });
 
 describe('廃止キーの後方互換', () => {
-  it('旧 postIntervalMs が文字列でも起動を止めない', () => {
-    // 旧設定では postIntervalMs = "43200000" のように書かれていた。
-    // 廃止キーは無視するのが約束なので、型を理由に起動を失敗させない。
-    const config = resolveConfig({
-      ...base,
-      kiatsu: { postIntervalMs: '43200000', locationCode: '13102' },
-    } as unknown as Parameters<typeof resolveConfig>[0]);
+  it('旧 postIntervalMs が文字列や 0 でも起動を止めない', () => {
+    // 旧設定では postIntervalMs = "43200000" や 0 のように書かれていた。
+    // 廃止キーは無視するのが約束なので、型や値を理由に起動を失敗させない。
+    for (const postIntervalMs of ['43200000', '', 0, -1, false]) {
+      const config = resolveConfig({
+        ...base,
+        kiatsu: { postIntervalMs, locationCode: '13102' },
+      } as unknown as Parameters<typeof resolveConfig>[0]);
 
-    expect(config.kiatsu?.latitude).toBeUndefined();
+      expect(config.kiatsu?.latitude).toBeUndefined();
+    }
+  });
+});
+
+describe('kiatsu の追加型・範囲検証', () => {
+  it('kiatsu がテーブル以外（boolean 等）なら拒否する', () => {
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: false,
+      } as unknown as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/テーブル/);
+  });
+
+  it('locationName が文字列以外なら拒否する', () => {
+    for (const locationName of [13102, true, ['高崎市']]) {
+      expect(() =>
+        resolveConfig({
+          ...base,
+          kiatsu: { locationName },
+        } as unknown as Parameters<typeof resolveConfig>[0])
+      ).toThrow(/locationName は文字列/);
+    }
+  });
+
+  it('maxErrorRetries が 0〜100 の整数以外なら拒否する', () => {
+    for (const maxErrorRetries of [-1, 1.5, 101, '5', false]) {
+      expect(() =>
+        resolveConfig({
+          ...base,
+          kiatsu: { maxErrorRetries },
+        } as unknown as Parameters<typeof resolveConfig>[0])
+      ).toThrow(/maxErrorRetries/);
+    }
+
+    const ok = resolveConfig({
+      ...base,
+      kiatsu: { maxErrorRetries: 0 },
+    });
+    expect(ok.kiatsu?.maxErrorRetries).toBe(0);
+  });
+
+  it('*Ms が 0 以下や 32-bit タイマー上限超えなら拒否し、重複エラーを出さない', () => {
+    for (const updateIntervalMs of [0, -100, 2_147_483_648]) {
+      expect(() =>
+        resolveConfig({
+          ...base,
+          kiatsu: { updateIntervalMs },
+        })
+      ).toThrow(ConfigError);
+    }
+
+    try {
+      resolveConfig({
+        ...base,
+        kiatsu: { requestTimeoutMs: 'abc' as unknown as number },
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).issues).toHaveLength(1);
+    }
   });
 });
 

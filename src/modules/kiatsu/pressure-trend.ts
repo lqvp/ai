@@ -53,8 +53,12 @@ export const DEFAULT_ALERT_OPTIONS: AlertOptions = Object.freeze({
  * 1012.4 − 1010.1 は 2.2999999999999545 になり、しきい値 −2.3 と比べると
  * 「下回っていない」と判定されて警報が落ちる。倍精度の誤差は 1e-12 程度
  * なので、その桁だけ吸収する（表示値を丸めるわけではない）。
+ * 描画層の色分けとも共有し、投稿判定と画像のバッジ色が食い違わないようにする。
  */
-const COMPARISON_EPSILON = 1e-9;
+export const COMPARISON_EPSILON = 1e-9;
+
+/** Node.js タイマー（setTimeout / setInterval）の最大ミリ秒（32-bit 符号付き整数）。 */
+export const MAX_TIMER_MS = 2_147_483_647;
 
 function pad2(value: number): string {
   return String(value).padStart(2, '0');
@@ -75,6 +79,7 @@ export function validateAlertOptions(options: AlertOptions): void {
  *
  * - threshold が 0 以上だと「下回ったら警報」が成立しない（0 は常時警報になる）。
  * - 解除幅が負だと解除条件が閾値より下になり、警報に入った直後に解除され続ける。
+ * - 解除境界（threshold + hysteresis）が 0 を超えると、気圧が上昇しても解除されない。
  * - NaN / Infinity は比較が常に false になるため、判定が静かに壊れる。
  * いずれも呼び出し側の設定バグなので、既定値で握りつぶさず例外にする。
  */
@@ -91,14 +96,17 @@ function assertValidOptions(options: AlertOptions): void {
       `AlertOptions.hysteresisHpa must be a finite non-negative number, got ${hysteresisHpa}`
     );
   }
+  if (thresholdHpa + hysteresisHpa > COMPARISON_EPSILON) {
+    throw new Error(
+      `AlertOptions release boundary (thresholdHpa + hysteresisHpa) must be <= 0, got ${thresholdHpa + hysteresisHpa}`
+    );
+  }
 }
 
 /**
  * Date を `YYYY-MM-DDTHH:00` に整形する（純粋関数）。
  *
- * Open-Meteo から受け取る `timeLocal` と同じ形式に揃えるためのもの。
- * 実行環境のタイムゾーンに依存させないため、`Intl` の `timeZone` を明示的に
- * 渡す（既定は Asia/Tokyo）。分・秒は捨てて正時キーにする。
+ * Open-Meteo から受け取る `timeLocal` と同じ正時キー形式に揃えるためのもの。
  */
 export function formatLocalHourKey(
   date: Date,
@@ -108,16 +116,33 @@ export function formatLocalHourKey(
   return `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:00`;
 }
 
-/** timeLocal が targetLocal と一致する最初の要素の添字。無ければ -1 */
-export function indexOfLocalHour(
-  hours: HourlyPoint[],
-  targetLocal: string
-): number {
-  return hours.findIndex((hour) => hour.timeLocal === targetLocal);
+/**
+ * Date を `YYYY-MM-DDTHH:mm`（実分を含む）に整形する。
+ *
+ * 画像ヘッダの「取得: MM/DD HH:MM」で実際の取得時刻を示すために使う。
+ * 正時キー（`:00`）を渡すと 10:58 に取得しても 10:00 と表示されてしまうため分ける。
+ */
+export function formatLocalMinuteKey(
+  date: Date,
+  timeZone: string = DEFAULT_TIME_ZONE
+): string {
+  const { year, month, day, hour, minute } = getZonedParts(date, timeZone);
+  return `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}`;
 }
 
 /**
- * hours[targetIndex] と hours[targetIndex - k] の pressureMsl の差。
+ * 指定されたローカル正時キー（`YYYY-MM-DDTHH:00`）に一致する要素の添字を返す。
+ * 見つからなければ -1。
+ */
+export function indexOfLocalHour(
+  hours: HourlyPoint[],
+  targetHourKey: string
+): number {
+  return hours.findIndex((point) => point.timeLocal === targetHourKey);
+}
+
+/**
+ * `targetIndex` の点と、その `k` 個前の点の気圧差（現在 - k時間前）を返す。
  *
  * どちらかが欠測（null）なら null、添字が範囲外でも null。欠測を 0 と
  * みなすと「変化なし」に化けて判定を誤るため、null は null のまま返す。
@@ -148,8 +173,10 @@ export function deltaOverHours(
  * - delta3h が null（欠測）: 判定材料が無いので状態を動かさない。欠測を
  *   0 とみなすと「変化なし」として解除してしまい、データが欠けるたびに
  *   黙って警報が消える。安全側に倒して据え置く（trigger もしない）。
- * - 解除は threshold + hysteresis を「超えた」ときだけ。境界ちょうどで
- *   解除すると、閾値ちょうどの警報判定と合わせて境界で振動しうる。
+ * - 解除は threshold + hysteresis を「超えた」とき、または気圧低下が完全に止まり
+ *   横ばい〜上昇（0.0 hPa 以上）へ戻ったとき。解除側にも COMPARISON_EPSILON を
+ *   入れておかないと、0.1 hPa 刻みの誤差（例: -1.4999999999998863）が境界 -1.5 を
+ *   超えたと誤判定されたり、hysteresis=0 で発火と解除が毎ティック振動する。
  */
 export function evaluateAlert(
   delta3h: number | null,
@@ -167,7 +194,9 @@ export function evaluateAlert(
     return { state: { alerting: trigger }, trigger };
   }
 
-  const release = delta3h > options.thresholdHpa + options.hysteresisHpa;
+  const releaseAt = options.thresholdHpa + options.hysteresisHpa;
+  const release =
+    delta3h >= -COMPARISON_EPSILON || delta3h > releaseAt + COMPARISON_EPSILON;
   return { state: { alerting: !release }, trigger: false };
 }
 
@@ -197,7 +226,8 @@ const MAX_BACKOFF_SHIFT = 4;
  *
  * 恒久障害では「停止 → 待機 → 再開 → また停止」を無限に繰り返すため、
  * 待機時間を指数的に伸ばして相手への負荷とログの量を抑える。
- * 上限を設けるのは、復帰したときに長すぎる空白を残さないため。
+ * 上限を設けるのは、復帰したときに長すぎる空白を残さないため（加えて
+ * Node.js の 32-bit タイマー上限を超えないようにクランプする）。
  */
 export function backoffDelayMs(
   baseMs: number,
@@ -213,7 +243,10 @@ export function backoffDelayMs(
     ? Math.max(0, Math.floor(suspensionCount))
     : 0;
 
-  return baseMs * 2 ** Math.min(count, MAX_BACKOFF_SHIFT);
+  return Math.min(
+    baseMs * 2 ** Math.min(count, MAX_BACKOFF_SHIFT),
+    MAX_TIMER_MS
+  );
 }
 
 /**

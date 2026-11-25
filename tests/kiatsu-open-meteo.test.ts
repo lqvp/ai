@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as httpClient from '../src/http/client.js';
 import {
   buildQuery,
   DEFAULT_FORECAST_DAYS,
   DEFAULT_PAST_DAYS,
+  fetchForecast,
+  OPEN_METEO_FORECAST_URL,
   parseForecast,
 } from '../src/modules/kiatsu/open-meteo.js';
 
@@ -215,5 +218,49 @@ describe('buildQuery', () => {
 
     expect(query.past_days).toBe('0');
     expect(query.forecast_days).toBe('2');
+  });
+});
+
+describe('fetchForecast & additional edge cases', () => {
+  it('accepts equator / prime meridian (0, 0) coordinates', () => {
+    const forecast = parseForecast(makePayload({ latitude: 0, longitude: 0 }));
+    expect(forecast.latitude).toBe(0);
+    expect(forecast.longitude).toBe(0);
+  });
+
+  it('calls getJson with expected URL, query and timeout, and extracts HTTP 400 reason', async () => {
+    const spy = vi
+      .spyOn(httpClient, 'getJson')
+      .mockResolvedValueOnce(makePayload());
+
+    const result = await fetchForecast({
+      latitude: 36.32,
+      longitude: 139.0,
+      timeoutMs: 5000,
+    });
+    expect(result.hours).toHaveLength(4);
+    expect(spy).toHaveBeenCalledWith(OPEN_METEO_FORECAST_URL, {
+      searchParams: expect.objectContaining({
+        latitude: '36.32',
+        longitude: '139',
+        models: 'jma_msm',
+      }),
+      timeoutMs: 5000,
+    });
+
+    spy.mockRejectedValueOnce({
+      response: {
+        statusCode: 400,
+        body: JSON.stringify({
+          error: true,
+          reason: 'No data is available for this location',
+        }),
+      },
+    });
+    await expect(fetchForecast({ latitude: 0, longitude: 0 })).rejects.toThrow(
+      'Open-Meteo HTTP 400: No data is available for this location'
+    );
+
+    spy.mockRestore();
   });
 });

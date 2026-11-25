@@ -637,7 +637,6 @@ function validateAndResolve(input: RawConfig): Config {
   }
 
   for (const [name, section] of [
-    ['kiatsu', raw.kiatsu],
     ['earthquakeWarning', raw.earthquakeWarning],
   ] as const) {
     if (!isObject(section)) continue;
@@ -653,8 +652,13 @@ function validateAndResolve(input: RawConfig): Config {
 
   // kiatsu は既定値をモジュール側（src/modules/kiatsu/index.ts）が持つため、
   // ここでは範囲検査だけを行う（値の書き換えはしない）。
-  if (isObject(raw.kiatsu)) {
+  if (raw.kiatsu !== undefined && !isObject(raw.kiatsu)) {
+    issues.push('kiatsu はテーブル（[kiatsu]）として指定してください');
+  } else if (isObject(raw.kiatsu)) {
     const kiatsu = raw.kiatsu;
+    // Node.js のタイマー上限（32-bit 符号付き整数）。これを超えると 1ms に丸められて
+    // 高頻度ループになるか、HTTP クライアントのタイムアウトが無効化される。
+    const maxTimerMs = 2_147_483_647;
     // TOML で数値は数値型として書かれるため、文字列などは設定ミスとして弾く
     const isNumber = (value: unknown): value is number =>
       typeof value === 'number' && Number.isFinite(value);
@@ -676,6 +680,13 @@ function validateAndResolve(input: RawConfig): Config {
       issues.push(
         'kiatsu.latitude と kiatsu.longitude は両方そろえて指定してください'
       );
+    }
+
+    if (
+      kiatsu.locationName !== undefined &&
+      typeof kiatsu.locationName !== 'string'
+    ) {
+      issues.push('kiatsu.locationName は文字列で指定してください');
     }
 
     if (kiatsu.alertThresholdHpa !== undefined) {
@@ -720,10 +731,11 @@ function validateAndResolve(input: RawConfig): Config {
       }
     }
 
-    // *Ms は数値として扱う。TOML で "3600000" と書くと文字列になり、
-    // タイマー計算（backoffDelayMs など）で例外になって監視が再開できなくなる。
+    // *Ms は正の数値（32-bit タイマー上限以下）として扱う。
+    // TOML で "3600000" と書くと文字列になり、タイマー計算（backoffDelayMs など）で
+    // 例外になって監視が再開できなくなる。
     // 検証するのは現行スキーマのキーだけ。廃止キー（postIntervalMs など）は
-    // 無視するのが約束なので、ここで型を理由に起動を止めてはいけない。
+    // 無視するのが約束なので、型や値を理由に起動を止めてはいけない。
     for (const key of [
       'requestTimeoutMs',
       'updateIntervalMs',
@@ -731,9 +743,9 @@ function validateAndResolve(input: RawConfig): Config {
     ] as const) {
       const value = kiatsu[key];
       if (value === undefined) continue;
-      if (!isNumber(value)) {
+      if (!isNumber(value) || value <= 0 || value > maxTimerMs) {
         issues.push(
-          `kiatsu.${key} は数値で指定してください（クォートで囲まない）`
+          `kiatsu.${key} は 1〜${maxTimerMs} の正の数値で指定してください（クォートで囲まない）`
         );
       }
     }
@@ -742,6 +754,20 @@ function validateAndResolve(input: RawConfig): Config {
       const value = kiatsu.maxPostsPerDay;
       if (!isNumber(value) || !Number.isInteger(value) || value < 1) {
         issues.push('kiatsu.maxPostsPerDay は 1 以上の整数で指定してください');
+      }
+    }
+
+    if (kiatsu.maxErrorRetries !== undefined) {
+      const value = kiatsu.maxErrorRetries;
+      if (
+        !isNumber(value) ||
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value > 100
+      ) {
+        issues.push(
+          'kiatsu.maxErrorRetries は 0〜100 の整数で指定してください'
+        );
       }
     }
   }

@@ -9,8 +9,11 @@ import {
   evaluateAlert,
   formatDeltaHpa,
   formatLocalHourKey,
+  formatLocalMinuteKey,
   indexOfLocalHour,
+  MAX_TIMER_MS,
   shouldNotifySuspension,
+  validateAlertOptions,
 } from '../src/modules/kiatsu/pressure-trend.js';
 
 /** テスト用の1点。timeLocal は API と同じ `YYYY-MM-DDTHH:mm` 形式で渡す。 */
@@ -337,5 +340,53 @@ describe('境界の浮動小数', () => {
         { thresholdHpa: -2.3, hysteresisHpa: 0.5 }
       ).trigger
     ).toBe(true);
+  });
+
+  it('解除側でも 0.1 hPa 引き算の誤差で誤解除や振動を起こさない', () => {
+    // 1022.6 - 1024.1 = -1.4999999999998863（数学的にはちょうど境界 -1.5）
+    const exactBoundary = 1022.6 - 1024.1;
+    expect(
+      evaluateAlert(
+        exactBoundary,
+        { alerting: true },
+        { thresholdHpa: -2.0, hysteresisHpa: 0.5 }
+      ).state.alerting
+    ).toBe(true);
+
+    // hysteresisHpa: 0 でも同じ値で発火⇔解除が振動しない
+    const zeroHysteresis: AlertOptions = {
+      thresholdHpa: -2.3,
+      hysteresisHpa: 0,
+    };
+    const drop = 1010.1 - 1012.4;
+    const t1 = evaluateAlert(drop, { alerting: false }, zeroHysteresis);
+    expect(t1.trigger).toBe(true);
+    const t2 = evaluateAlert(drop, t1.state, zeroHysteresis);
+    expect(t2.state.alerting).toBe(true);
+  });
+
+  it('解除境界が 0 の設定（threshold + hysteresis === 0）でも横ばい 0.0 hPa で解除する', () => {
+    const zeroBoundary: AlertOptions = {
+      thresholdHpa: -2.0,
+      hysteresisHpa: 2.0,
+    };
+    const first = evaluateAlert(-2.5, { alerting: false }, zeroBoundary);
+    expect(first.trigger).toBe(true);
+
+    const flat = evaluateAlert(0, first.state, zeroBoundary);
+    expect(flat.state.alerting).toBe(false);
+
+    const second = evaluateAlert(-3.0, flat.state, zeroBoundary);
+    expect(second.trigger).toBe(true);
+  });
+
+  it('validateAlertOptions は解除境界が正になる組み合わせを拒否し、backoff は 32-bit 上限を超えない', () => {
+    expect(() =>
+      validateAlertOptions({ thresholdHpa: -1, hysteresisHpa: 1.5 })
+    ).toThrow(/release boundary/);
+    expect(backoffDelayMs(500_000_000, 4)).toBe(MAX_TIMER_MS);
+    expect(
+      formatLocalMinuteKey(new Date('2026-11-25T11:58:00Z'), 'Asia/Tokyo')
+    ).toBe('2026-11-25T20:58');
   });
 });

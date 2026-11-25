@@ -4,16 +4,19 @@ import { bindThis } from '@/decorators.js';
 import Message from '@/message.js';
 import type { DriveFile } from '@/misskey/types.js';
 import Module from '@/module.js';
+import { todayKey } from '@/services/clock.js';
 import { buildAlertMessage, buildMentionMessage } from './messages.js';
 import { fetchForecast, type HourlyForecast } from './open-meteo.js';
 import {
   type AlertOptions,
   type AlertState,
   backoffDelayMs,
+  COMPARISON_EPSILON,
   DEFAULT_ALERT_OPTIONS,
   deltaOverHours,
   evaluateAlert,
   formatLocalHourKey,
+  formatLocalMinuteKey,
   indexOfLocalHour,
   shouldNotifySuspension,
   validateAlertOptions,
@@ -67,7 +70,7 @@ const MAX_ALERT_ATTEMPTS = 3;
  */
 const ALERT_RETRY_SUPPRESS_MS = 30 * 60 * 1000;
 
-/** これより古い ΔP はメンション応答に出さない（鮮度切れ）。 */
+/** これより古い予報・ΔP はメンション応答や保留警報に使わない（鮮度切れ）。 */
 const STALE_MS = 2 * 60 * 60 * 1000;
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -90,11 +93,31 @@ const LEGACY_KEYS = ['locationCode', 'postIntervalMs', 'minPostLevel'] as const;
 type KiatsuData = {
   /** 状態を保存したときの地点。地点を変えたら状態は引き継がない */
   spot?: string;
+  /** 状態を保存したときの閾値。閾値を変えたら古い警報状態は引き継がない */
+  thresholdHpa?: number;
+  /** 保存時刻（ミリ秒）。長時間停止後の再起動で古い警報を引き継がないために使う */
+  savedAtMs?: number;
   alerting?: boolean;
-  /** 未送信の警報が残っているか（再起動で取りこぼさないため） */
+  /** 未送信の警報が残っているか（短時間の再起動で取りこぼさないため） */
   pending?: boolean;
   postsToday?: number;
   postsTodayKey?: string | null;
+};
+
+type EvaluateParams = {
+  /** タイムラインへの投稿（警報・停止通知・再開通知）を許可するか */
+  allowPost: boolean;
+  /** 失敗・回復を定期監視のエラーカウンタに反映するか */
+  countErrors: boolean;
+};
+
+type ForecastSnapshot = {
+  forecast: HourlyForecast | null;
+  startIndex: number;
+  fetchedAtLocal: string | null;
+  delta3h: number | null;
+  observedAtLocal: string | null;
+  observedAtMs: number | null;
 };
 
 export default class extends Module<KiatsuData> {
@@ -113,12 +136,14 @@ export default class extends Module<KiatsuData> {
   private latestForecastStart = 0;
 
   /**
-   * 予報を取得した時刻（ローカル時刻キー）。
+   * 予報を取得した時刻（`YYYY-MM-DDTHH:mm`）。
    *
-   * 画像に「取得: HH:MM」として出す。描画した時刻ではなく**取得した時刻**を
-   * 渡さないと、取得に失敗して古い予報を描いたときに最新に見えてしまう。
+   * 画像に「取得: M/D HH:mm」として出す。描画した時刻ではなく取得した実時刻を渡す。
    */
   private latestForecastFetchedAt: string | null = null;
+
+  /** 直近で予報取得に成功した時刻（ミリ秒）。メンション時の再取得判定に使う。 */
+  private latestForecastFetchedAtMs: number | null = null;
 
   /** 直近の ΔP3h。計算できないときは null。 */
   private latestDelta3h: number | null = null;
@@ -126,7 +151,7 @@ export default class extends Module<KiatsuData> {
   /**
    * 評価した予報点の時刻（ミリ秒）。
    *
-   * 鮮度は「取得時刻」ではなく**予報点の時刻**から測る。20:50 に 20:00 の点を
+   * 鮮度は「取得時刻」ではなく予報点の時刻から測る。20:50 に 20:00 の点を
    * 取った場合、22:40 の時点で予報は 2時間40分前のものだから。
    */
   private latestObservedAtMs: number | null = null;
@@ -137,7 +162,7 @@ export default class extends Module<KiatsuData> {
   /**
    * 警報の状態。投稿したかどうかに関わらず毎回 evaluateAlert の結果で置き換える。
    *
-   * これを怠ると、投稿を見送った評価で alerting が立ったままになり、
+   * これを怠ると、投稿を見送った評価で alerting が立たないままになり、
    * 同じ警報で毎回 trigger してしまう。
    */
   private alertState: AlertState = { alerting: false };
@@ -145,9 +170,7 @@ export default class extends Module<KiatsuData> {
   /**
    * 送信待ちの警報があるか。投稿に失敗したら次回以降に再試行する。
    *
-   * 値ではなくフラグで持つのは、送る直前に**そのときの**変化量を使うため。
-   * 日次上限で見送ったまま日付が変わると、前日の変化量を「直近3時間」として
-   * 投稿してしまう。
+   * 値ではなくフラグで持つのは、送る直前にそのときの変化量を使うため。
    */
   private pendingAlert = false;
 
@@ -157,12 +180,23 @@ export default class extends Module<KiatsuData> {
   /** この時刻までは未送信警報の再挑戦をしない（諦めた直後の間隔）。 */
   private alertRetryAfter = 0;
 
-  /** 投稿処理の多重実行を防ぐ（タイマーと他の経路が重なったとき）。 */
+  /** 投稿処理の多重実行を防ぐ。 */
   private posting = false;
+
+  /**
+   * `evaluate()` の直列化チェーン。
+   *
+   * `every()` は単一タイマー内の重なりしか防がないため、初回実行・クールダウン再開・
+   * メンション応答が重なったときの Out-of-order 上書きや二重評価をここで防ぐ。
+   */
+  private evaluationQueue: Promise<void> = Promise.resolve();
+
+  /** 現在進行中の評価 Promise（メンション側が相乗りするために保持）。 */
+  private inFlightEvaluation: Promise<void> | null = null;
 
   private errorCount = 0;
 
-  /** 一時停止中は update() を素通りさせる。クールダウン中の再試行を防ぐ。 */
+  /** 一時停止中は定期評価を素通りさせる。クールダウン中の再試行を防ぐ。 */
   private suspended = false;
 
   /** 連続した停止の回数。クールダウンの指数バックオフに使う。 */
@@ -198,7 +232,6 @@ export default class extends Module<KiatsuData> {
     }
 
     this.startMonitoring();
-    void this.update(); // 初回実行
 
     return { mentionHook: this.mentionHook };
   }
@@ -227,28 +260,52 @@ export default class extends Module<KiatsuData> {
   private startMonitoring(): void {
     // 投稿判断はこの評価ループだけに集約する。別タイマーで定期投稿すると
     // 3時間変化のピークを捕まえ損ねたり、同じ警報を二重投稿する原因になる。
-    // every() は前回の実行が終わるまで次を呼ばないので、遅い取得でも重ならない。
+    // immediate: true で初回実行も同じ running ガードに乗せる。
     this.every(
       config.kiatsu?.updateIntervalMs ?? DEFAULTS.updateIntervalMs,
-      this.update
+      this.update,
+      { immediate: true }
     );
   }
 
   @bindThis
   private async update(): Promise<void> {
-    await this.evaluate(true);
+    await this.enqueueEvaluation({ allowPost: true, countErrors: true });
   }
 
   /**
-   * 予報を取り直して判定する。
-   *
-   * `allowPost` が false のときは投稿しない（メンション応答用）。
-   * 話しかけられただけで警報が出ると、利用者の意図しないタイミングで
-   * タイムラインに投稿してしまうため、返信のための更新では投稿しない。
+   * 評価処理を直列キューに積んで実行する。
    */
-  private async evaluate(allowPost: boolean): Promise<void> {
-    // 停止中の呼び出し（mentionHook 経由を含む）では何もしない。
-    // ここで失敗を数えると、再開直後の1回でまた閾値に達してしまう。
+  private enqueueEvaluation(params: EvaluateParams): Promise<void> {
+    const run = this.evaluationQueue.then(
+      () => this.evaluateInternal(params),
+      () => this.evaluateInternal(params)
+    );
+    const settled = run.catch((error) => {
+      this.log(`気圧評価中に予期しない例外が発生しました: ${String(error)}`);
+      console.warn(error);
+    });
+    this.evaluationQueue = settled;
+    const tracked = settled.finally(() => {
+      if (this.inFlightEvaluation === tracked) {
+        this.inFlightEvaluation = null;
+      }
+    });
+    this.inFlightEvaluation = tracked;
+    return tracked;
+  }
+
+  /**
+   * 予報を取り直して判定する（直列キュー内部からのみ呼ぶ）。
+   *
+   * - `allowPost` が false のとき（メンション応答用）はタイムラインに一切投稿しない。
+   * - `countErrors` が false のときは一時的なメンション集中で `errorCount` を
+   *   進めない（数秒の瞬断中に話しかけられただけで1時間停止するのを防ぐ）。
+   */
+  private async evaluateInternal(params: EvaluateParams): Promise<void> {
+    const { allowPost, countErrors } = params;
+
+    // 停止中の呼び出しでは何もしない。
     if (this.suspended) return;
 
     this.syncPostDay();
@@ -264,7 +321,9 @@ export default class extends Module<KiatsuData> {
     } catch (error) {
       this.log('気圧データの取得に失敗しました。');
       console.warn(error);
-      this.handleError();
+      if (countErrors) {
+        await this.handleError();
+      }
       return;
     }
 
@@ -277,16 +336,17 @@ export default class extends Module<KiatsuData> {
       this.log(
         `現在時刻 (${formatLocalHourKey(now)}) 付近の気圧データがありません。`
       );
-      // 取得自体は成功しているので、連続失敗としては数えない。
-      // ここで数えると、時刻書式の変更だけで停止しきい値に達してしまう。
-      this.errorCount = 0;
+      if (countErrors) {
+        this.errorCount = 0;
+      }
       return;
     }
 
     // 使える時刻が見つかってから差し替える。先に保持すると、開始位置だけ
     // 古いまま新しい予報を描き、過去の列を「今」として出すことになる。
     this.latestForecast = forecast;
-    this.latestForecastFetchedAt = formatLocalHourKey(now);
+    this.latestForecastFetchedAt = formatLocalMinuteKey(now);
+    this.latestForecastFetchedAtMs = now.getTime();
     this.latestForecastStart = currentIndex;
 
     const delta3h = deltaOverHours(forecast.hours, currentIndex, DELTA_HOURS);
@@ -305,15 +365,21 @@ export default class extends Module<KiatsuData> {
     // 投稿の有無に関わらず状態は進める（同じ警報の再 trigger を防ぐ）。
     // 送信に失敗したときは、状態とは別に「未送信」として抱える。
     this.alertState = state;
-    this.persistState();
 
-    // 警報が解除されたら未送信の警報も捨てる。解除済みの古い警報を
-    // あとから投稿するのは、状況と食い違う。
-    if (!state.alerting && this.pendingAlert) {
+    // 警報が解除されたら未送信の警報も再試行抑制も捨てる。
+    // 抑制タイマーを残すと、直後に別の急降下が来たときに邪魔をする。
+    if (!state.alerting) {
       this.pendingAlert = false;
       this.pendingAlertAttempts = 0;
-      this.persistState();
+      this.alertRetryAfter = 0;
     }
+
+    if (trigger && delta3h !== null && !this.pendingAlert) {
+      this.pendingAlert = true;
+      this.pendingAlertAttempts = 0;
+    }
+
+    this.persistState();
 
     this.log(
       `気圧トレンドを更新しました: Δ3h=${
@@ -321,18 +387,13 @@ export default class extends Module<KiatsuData> {
       } (警報中: ${state.alerting})`
     );
 
-    if (trigger && delta3h !== null && !this.pendingAlert) {
-      this.pendingAlert = true;
-      this.pendingAlertAttempts = 0;
-      this.persistState();
-    }
-
     if (allowPost) {
       await this.flushPendingAlert();
     }
 
-    // 取得と判定まで通ったので、失敗カウントと連続停止をリセットする。
-    this.onRecovered();
+    if (countErrors) {
+      await this.onRecovered();
+    }
   }
 
   /**
@@ -369,9 +430,6 @@ export default class extends Module<KiatsuData> {
 
   /**
    * 未送信の警報があれば送る。
-   *
-   * 投稿処理は多重実行しない。タイマーとメンション経由の更新が重なると、
-   * 同じ警報を2回送ってしまうため。
    */
   @bindThis
   private async flushPendingAlert(): Promise<void> {
@@ -381,8 +439,8 @@ export default class extends Module<KiatsuData> {
     // 待機が明ければ次の評価で送信される。
     if (Date.now() < this.alertRetryAfter) return;
 
-    // 送る直前に最新の変化量を使う。鮮度が切れていたら諦める
-    // （前日の変化量を「直近3時間」として投稿しない）。
+    // 送る直前に最新の変化量を使う。鮮度が切れていたら警報状態ごと戻して破棄する
+    // （alerting だけ残すと、復帰後も低下が続いているのに再発火できなくなる）。
     if (
       this.latestObservedAtMs !== null &&
       Date.now() - this.latestObservedAtMs > STALE_MS
@@ -390,27 +448,31 @@ export default class extends Module<KiatsuData> {
       this.log('未送信の警報は鮮度が切れたため破棄します。');
       this.pendingAlert = false;
       this.pendingAlertAttempts = 0;
+      this.alertRetryAfter = 0;
+      this.alertState = { alerting: false };
       this.persistState();
       return;
     }
 
     const delta3h = this.latestDelta3h;
     if (delta3h === null) {
-      // 一時的な欠測。警報は解除されていないので、未送信のまま延期する
-      // （ここで捨てると、データが戻っても同じ低下の警報が届かなくなる）。
+      // 一時的な欠測。警報は解除されていないので、未送信のまま延期する。
       this.log('気圧データが欠測しているため、警報の送信を延期します。');
       return;
     }
 
-    if (delta3h >= 0) {
-      // 気圧が横ばい〜上昇。「下がってきています」とは言えないので捨てる。
-      // 警報状態も解除する。解除境界がちょうど 0 の設定では、横ばいのまま
-      // alerting が残り、次に同じだけ下がっても trigger が立たなくなる。
-      this.log('気圧が下がっていないため、未送信の警報を破棄します。');
-      this.pendingAlert = false;
-      this.pendingAlertAttempts = 0;
-      this.alertState = { alerting: false };
-      this.persistState();
+    // 発火しきい値より浅い（ヒステリシス帯まで回復しかけている）場合や、
+    // 小数1桁への丸めで 0.0 以上になる場合は、しきい値未満の数値で遅れて
+    // 警報を出さない。まだエピソード自体は解除されていないので、再び
+    // しきい値以下へ深掘りしたときだけ送れるよう保留のまま見送る。
+    const roundedTenths = Math.round(delta3h * 10) / 10;
+    if (
+      roundedTenths >= 0 ||
+      delta3h > this.alertOptions.thresholdHpa + COMPARISON_EPSILON
+    ) {
+      this.log(
+        '現在の気圧変化量が警報しきい値に達していないため、警報の送信を見送ります。'
+      );
       return;
     }
 
@@ -427,11 +489,11 @@ export default class extends Module<KiatsuData> {
 
     try {
       await this.ai.post({
-        text: buildAlertMessage(this.locationName, delta3h),
+        text: buildAlertMessage(this.displayLocationName, delta3h),
       });
       this.pendingAlert = false;
       this.pendingAlertAttempts = 0;
-      this.persistState();
+      this.alertRetryAfter = 0;
       // 投稿できたときだけ枠を消費する（失敗で枠だけ減るのを避ける）。
       this.recordPost();
     } catch (error) {
@@ -443,8 +505,7 @@ export default class extends Module<KiatsuData> {
 
       if (this.pendingAlertAttempts >= MAX_ALERT_ATTEMPTS) {
         // 何度試しても通らないなら一旦間隔を空ける。未送信フラグは残すので、
-        // 待機が明けて Misskey が復旧していれば同じ低下のまま送信される
-        // （ここでフラグも状態も落とすと、その低下の警報が永久に出せない）。
+        // 待機が明けて Misskey が復旧していれば同じ低下のまま送信される。
         this.log(
           `警報の投稿を保留します。${ALERT_RETRY_SUPPRESS_MS / 60000} 分後に再挑戦します。`
         );
@@ -456,9 +517,21 @@ export default class extends Module<KiatsuData> {
     }
   }
 
+  /** 例外を外へ漏らさずに通知ノートを投稿する（UnhandledRejection 防止）。 */
+  private async safePostNotice(text: string): Promise<void> {
+    try {
+      await this.ai.post({ text });
+    } catch (error) {
+      this.log(`通知の投稿に失敗しました: ${text}`);
+      console.warn(error);
+    }
+  }
+
   /** 取得に成功したときの後始末。再開通知もここで1回だけ出す。 */
   @bindThis
-  private onRecovered(): void {
+  private async onRecovered(): Promise<void> {
+    if (this.suspended) return;
+
     this.errorCount = 0;
     this.consecutiveSuspensions = 0;
     this.noticedSuspensions = 0;
@@ -466,14 +539,11 @@ export default class extends Module<KiatsuData> {
     if (!this.pendingResumeNotice) return;
 
     this.pendingResumeNotice = false;
-    void this.ai.post({ text: '気圧監視を再開しました。' });
+    await this.safePostNotice('気圧監視を再開しました。');
   }
 
   @bindThis
-  private handleError(): void {
-    // 停止の多重実行を防ぐ。interval の評価と mentionHook 経由の update() が
-    // 重なると、両方がここへ来て「一時停止」を二重投稿し、クールダウンの
-    // タイマーも二重に仕掛かってしまう。
+  private async handleError(): Promise<void> {
     if (this.suspended) return;
 
     this.errorCount++;
@@ -484,42 +554,42 @@ export default class extends Module<KiatsuData> {
     if (this.errorCount <= maxErrorRetries) return;
 
     this.suspended = true;
-    this.log('エラーが続いています。監視を一時停止します。');
-
-    if (shouldNotifySuspension(this.noticedSuspensions, NOTICE_LIMIT)) {
-      this.noticedSuspensions++;
-      void this.ai.post({
-        text: 'エラーが続いています。気圧監視を一時停止しました。',
-      });
-    } else {
-      // 障害が長引いている。通知は打ち切り、復帰だけ試み続ける。
-      this.log('停止の通知は上限に達したため省略します。');
-    }
 
     const cooldownMs =
       config.kiatsu?.errorCooldownMs ?? DEFAULTS.errorCooldownMs;
     const backoffMs = backoffDelayMs(cooldownMs, this.consecutiveSuspensions);
 
     this.consecutiveSuspensions++;
+    this.log(
+      `エラーが続いています。監視を一時停止します（${Math.round(backoffMs / 60000)} 分後に再試行）。`
+    );
 
+    // クールダウンタイマーは通知投稿の成否に関わらず先に仕掛ける
     this.later(backoffMs, () => {
       // 再開時にカウントを戻さないと、再開後の1回の失敗でまた閾値に達する。
       this.errorCount = 0;
       this.suspended = false;
-      // 「再開しました」は取得に成功した時点で出す。再開しただけで
-      // 失敗し続けているのに成功を報せない（実際に直ったか区別できない）。
+      // 「再開しました」は取得に成功した時点で出す。
       this.pendingResumeNotice = true;
-      this.log(
-        `監視を再開します（次回の試行まで ${backoffMs / 60000} 分待機）。`
-      );
+      this.log('一時停止期間が終了しました。監視を再開します。');
       void this.update();
     });
+
+    if (shouldNotifySuspension(this.noticedSuspensions, NOTICE_LIMIT)) {
+      this.noticedSuspensions++;
+      await this.safePostNotice(
+        'エラーが続いています。気圧監視を一時停止しました。'
+      );
+    } else {
+      // 障害が長引いている。通知は打ち切り、復帰だけ試み続ける。
+      this.log('停止の通知は上限に達したため省略します。');
+    }
   }
 
   /** 日付が変わっていたら日次投稿カウントを戻す。 */
   @bindThis
   private syncPostDay(): void {
-    const today = formatLocalHourKey(new Date()).slice(0, 10);
+    const today = todayKey();
 
     if (this.postsTodayKey === today) return;
 
@@ -552,24 +622,31 @@ export default class extends Module<KiatsuData> {
     return `${latitude},${longitude}`;
   }
 
-  /** 再起動をまたいだ状態を読み戻す。 */
+  /** 再起動をまたいで状態を読み戻す。 */
   private restoreState(): void {
     const data = this.getData();
 
-    // 日次投稿枠は地点に依存しないので、地点が変わっても必ず読み戻す。
-    // ここを地点判定のあとに置くと、地点変更＋再起動で当日の投稿数が
-    // 0 に戻り、同じ日に上限を超えて投稿できてしまう。
+    // 日次投稿枠は地点や閾値に依存しないので、設定が変わっても必ず読み戻す。
     this.postsToday = typeof data.postsToday === 'number' ? data.postsToday : 0;
     this.postsTodayKey = data.postsTodayKey ?? null;
 
     const spotChanged = data.spot !== undefined && data.spot !== this.spotKey;
+    const thresholdChanged =
+      data.thresholdHpa !== undefined &&
+      data.thresholdHpa !== this.alertOptions.thresholdHpa;
+    const stateExpired =
+      typeof data.savedAtMs === 'number'
+        ? Date.now() - data.savedAtMs > STALE_MS
+        : false;
 
-    if (spotChanged) {
-      // 警報状態だけは地点にひも付く。前の地点の低下を引き継ぐと、
-      // 新しい地点で最初の低下を取りこぼす。
-      this.log('地点が変わったため、警報状態は引き継ぎません。');
+    if (spotChanged || thresholdChanged || stateExpired) {
+      // 地点変更・閾値変更・長時間停止後の再起動では、古い警報状態を引き継がない。
+      this.log(
+        '設定変更または長時間経過のため、前回の警報状態は引き継ぎません。'
+      );
       this.alertState = { alerting: false };
       this.pendingAlert = false;
+      this.alertRetryAfter = 0;
       this.persistState();
     } else {
       this.alertState = { alerting: data.alerting === true };
@@ -584,6 +661,8 @@ export default class extends Module<KiatsuData> {
   private persistState(): void {
     this.setData({
       spot: this.spotKey,
+      thresholdHpa: this.alertOptions.thresholdHpa,
+      savedAtMs: Date.now(),
       alerting: this.alertState.alerting,
       pending: this.pendingAlert,
       postsToday: this.postsToday,
@@ -600,56 +679,77 @@ export default class extends Module<KiatsuData> {
   }
 
   /**
-   * 投稿文に出す地点名。
+   * 投稿文と画像に出す地点名（プライバシ保護のため座標は返さない）。
    *
-   * `locationName` が未設定でも既定名（中央区）を出してはいけない。
-   * 利用者が緯度経度だけを設定した場合、実際には別の地点の予報なのに
-   * 「中央区」と名乗ることになる。名前が無ければ座標で示す。
+   * - `locationName` が設定されていればその表示名を使う。
+   * - 座標も `locationName` も未設定なら既定地点の「中央区」を返す（本文・画像とも一致）。
+   * - 利用者がカスタム座標だけを設定して `locationName` を省略した場合は
+   *   `undefined` を返し、公開ノートや画像に自宅付近の座標が載らないようにする。
    */
-  private get locationName(): string {
-    const configured = config.kiatsu?.locationName?.trim();
+  private get displayLocationName(): string | undefined {
+    const rawName = config.kiatsu?.locationName;
+    const configured = typeof rawName === 'string' ? rawName.trim() : '';
     if (configured) return configured;
 
-    const latitude = config.kiatsu?.latitude ?? DEFAULTS.latitude;
-    const longitude = config.kiatsu?.longitude ?? DEFAULTS.longitude;
+    const usesDefaultCoordinates =
+      config.kiatsu?.latitude === undefined &&
+      config.kiatsu?.longitude === undefined;
 
-    const isDefaultSpot =
-      latitude === DEFAULTS.latitude && longitude === DEFAULTS.longitude;
-
-    return isDefaultSpot
-      ? DEFAULTS.locationName
-      : `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
+    return usesDefaultCoordinates ? DEFAULTS.locationName : undefined;
   }
 
-  /** 画像の地点ラベル。未設定ならレンダラに座標を描かせる。 */
-  private get renderLocationName(): string | undefined {
-    const configured = config.kiatsu?.locationName?.trim();
-    return configured ? configured : undefined;
-  }
-
-  /** 鮮度の切れた ΔP は返信に出さない（古い値を断定しない）。 */
-  private currentDelta(): number | null {
-    if (this.latestDelta3h === null || this.latestObservedAtMs === null) {
-      return null;
+  /**
+   * メンション応答の前に、必要なら予報を更新する。
+   *
+   * - 進行中の評価があればそれに相乗りする。
+   * - 直近 `updateIntervalMs` 以内に取得済みで鮮度も有効なら再取得せず即座に返す
+   *   （連続メンションで外部 API を叩き続けたり、応答が遅れるのを防ぐ）。
+   */
+  private async ensureFreshForMention(): Promise<void> {
+    if (this.inFlightEvaluation) {
+      await this.inFlightEvaluation;
+      return;
     }
 
-    return Date.now() - this.latestObservedAtMs > STALE_MS
-      ? null
-      : this.latestDelta3h;
+    const updateIntervalMs =
+      config.kiatsu?.updateIntervalMs ?? DEFAULTS.updateIntervalMs;
+    const nowMs = Date.now();
+    const recentlyFetched =
+      this.latestForecast !== null &&
+      this.latestForecastFetchedAtMs !== null &&
+      nowMs - this.latestForecastFetchedAtMs < updateIntervalMs &&
+      this.latestObservedAtMs !== null &&
+      nowMs - this.latestObservedAtMs <= STALE_MS;
+
+    if (recentlyFetched) return;
+
+    await this.enqueueEvaluation({ allowPost: false, countErrors: false });
+  }
+
+  /** 画像アップロード待機中に定期更新が走っても矛盾しないよう、状態を1回で切り出す。 */
+  private captureSnapshot(): ForecastSnapshot {
+    return {
+      forecast: this.latestForecast,
+      startIndex: this.latestForecastStart,
+      fetchedAtLocal: this.latestForecastFetchedAt,
+      delta3h: this.latestDelta3h,
+      observedAtLocal: this.latestObservedAt,
+      observedAtMs: this.latestObservedAtMs,
+    };
   }
 
   @bindThis
-  private async generateForecastImageFile(): Promise<DriveFile | undefined> {
-    if (!this.latestForecast) return undefined;
+  private async generateForecastImageFile(
+    snapshot: ForecastSnapshot,
+    locationName: string | undefined
+  ): Promise<DriveFile | undefined> {
+    if (!snapshot.forecast) return undefined;
 
-    // レンダラ側で startIndex 以降を描く。
-    // 配列を切り出す方式だと先頭3列の ΔP3h が計算できなくなるため、
-    // 過去分（past_days=1）を残したまま開始位置だけ渡す。
-    const image = renderKiatsuImage(this.latestForecast, {
-      locationName: this.renderLocationName,
-      startIndex: this.latestForecastStart,
-      thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
-      fetchedAtLocal: this.latestForecastFetchedAt ?? undefined,
+    const image = renderKiatsuImage(snapshot.forecast, {
+      locationName,
+      startIndex: snapshot.startIndex,
+      thresholdHpa: this.alertOptions.thresholdHpa,
+      fetchedAtLocal: snapshot.fetchedAtLocal ?? undefined,
       nowLocal: formatLocalHourKey(new Date()),
     });
 
@@ -663,28 +763,46 @@ export default class extends Module<KiatsuData> {
   private async mentionHook(message: Message) {
     if (!message.includes(['気圧', 'きあつ', 'kiatsu'])) return false;
 
-    await this.evaluate(false);
+    await this.ensureFreshForMention();
 
+    const snapshot = this.captureSnapshot();
+    const locationName = this.displayLocationName;
+    const isFresh =
+      snapshot.forecast !== null &&
+      snapshot.observedAtMs !== null &&
+      Date.now() - snapshot.observedAtMs <= STALE_MS;
+
+    // 予報自体が鮮度切れのときは古い画像を添付しない（本文「取得できませんでした」との矛盾と
+    // 出典 URL 欠落を同時に防ぐ）。
     let file: DriveFile | undefined;
-
-    try {
-      file = await this.generateForecastImageFile();
-    } catch (error) {
-      this.log('気圧画像の生成に失敗しました。テキストのみ返信します。');
-      console.warn(error);
+    if (isFresh) {
+      try {
+        file = await this.generateForecastImageFile(snapshot, locationName);
+      } catch (error) {
+        this.log('気圧画像の生成に失敗しました。テキストのみ返信します。');
+        console.warn(error);
+      }
     }
 
-    message.reply(
-      buildMentionMessage(
-        this.locationName,
-        this.currentDelta(),
-        this.latestObservedAt ?? undefined
-      ),
-      {
-        immediate: true,
-        file,
-      }
-    );
+    const deltaForReply = isFresh ? snapshot.delta3h : null;
+
+    try {
+      await message.reply(
+        buildMentionMessage(
+          locationName,
+          deltaForReply,
+          isFresh ? (snapshot.observedAtLocal ?? undefined) : undefined,
+          { hasForecastImage: file !== undefined }
+        ),
+        {
+          immediate: true,
+          file,
+        }
+      );
+    } catch (error) {
+      this.log('メンションへの返信に失敗しました。');
+      console.warn(error);
+    }
 
     return true;
   }

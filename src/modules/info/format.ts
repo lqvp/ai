@@ -282,13 +282,20 @@ export function formatPressureSettings(): string {
   if (!config.kiatsu) return '';
 
   const updateIntervalMinutes = config.kiatsu.updateIntervalMs
-    ? Math.floor(config.kiatsu.updateIntervalMs / 60000) + '分'
+    ? config.kiatsu.updateIntervalMs >= 60_000
+      ? `${Math.floor(config.kiatsu.updateIntervalMs / 60000)}分`
+      : `${Math.max(1, Math.round(config.kiatsu.updateIntervalMs / 1000))}秒`
     : FORMAT_DEFAULTS.notSet;
 
   const alertThreshold =
     config.kiatsu.alertThresholdHpa !== undefined
       ? `${config.kiatsu.alertThresholdHpa} hPa`
       : FORMAT_DEFAULTS.notSet;
+
+  const locationName =
+    typeof config.kiatsu.locationName === 'string'
+      ? config.kiatsu.locationName.trim() || undefined
+      : undefined;
 
   const lines: string[] = [
     CONFIG_LABELS.sections.pressure,
@@ -299,9 +306,7 @@ export function formatPressureSettings(): string {
     )}`,
     // 座標は出さない。公開ノートへの返信に設定値が載ると、監視地点が
     // 第三者に特定されてしまう（locationName は利用者が自分で決めた表示名）。
-    `- ${CONFIG_LABELS.pressure.locationName}: ${safeConfigValue(
-      config.kiatsu.locationName
-    )}`,
+    `- ${CONFIG_LABELS.pressure.locationName}: ${safeConfigValue(locationName)}`,
     `- ${CONFIG_LABELS.pressure.alertThreshold}: ${alertThreshold}`,
     `- ${CONFIG_LABELS.pressure.updateInterval}: ${updateIntervalMinutes}`,
   ];
