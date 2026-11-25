@@ -907,9 +907,9 @@ describe('ReactionFollowUpHandler concurrency', () => {
       alice,
       '🎉'
     );
-    expect(await second).toBe(false);
     releaseLlm({ shouldReply: true, text: 'ありがとう！' });
     expect(await first).toBe(true);
+    expect(await second).toBe(false);
     expect(posts).toHaveLength(1);
   });
 });

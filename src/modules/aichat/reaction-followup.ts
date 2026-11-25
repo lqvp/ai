@@ -86,7 +86,7 @@ export class ReactionFollowUpHandler {
   private readonly userLastFollowUpAt = new Map<string, number>();
   private readonly pendingTimers = new Set<NodeJS.Timeout>();
   private readonly userReplyMarkers = new Map<string, number>();
-  private readonly inFlightFollowUpUsers = new Set<string>();
+  private readonly followUpLocks = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: ReactionFollowUpDeps) {
     this.log = deps.log ?? (() => {});
@@ -227,18 +227,33 @@ export class ReactionFollowUpHandler {
       return false;
     }
 
-    if (this.inFlightFollowUpUsers.has(reactor.id)) return false;
-    this.inFlightFollowUpUsers.add(reactor.id);
+    return this.runWithFollowUpLock(reactor.id, () =>
+      this.executeFollowUpInner(session, sessionId, note, reactor, reaction)
+    );
+  }
+
+  private async runWithFollowUpLock<T>(
+    userId: string,
+    task: () => Promise<T>
+  ): Promise<T> {
+    const prev = this.followUpLocks.get(userId) ?? Promise.resolve();
+    let release!: () => void;
+    const nextLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chain = prev.then(
+      () => nextLock,
+      () => nextLock
+    );
+    this.followUpLocks.set(userId, chain);
+    await prev.catch(() => undefined);
     try {
-      return await this.executeFollowUpInner(
-        session,
-        sessionId,
-        note,
-        reactor,
-        reaction
-      );
+      return await task();
     } finally {
-      this.inFlightFollowUpUsers.delete(reactor.id);
+      release();
+      if (this.followUpLocks.get(userId) === chain) {
+        this.followUpLocks.delete(userId);
+      }
     }
   }
 
