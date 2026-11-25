@@ -3,6 +3,7 @@ import { getZonedParts } from '@/services/clock.js';
 export type WanderScheduleState = {
   hour?: string;
   slots?: number[];
+  boundsKey?: string;
   lastRunAt?: number;
 };
 
@@ -55,17 +56,21 @@ function pickWeightedCount(rng: () => number): number {
   return 1;
 }
 
+type ResolvedRunsBounds = {
+  min: number;
+  max: number;
+  key: string;
+};
+
 /**
- * 1時間あたりの巡回回数を抽選する。
- * min/max 両方未指定時は従来の重み付き確率（0〜3回）を維持し、片側または両側指定時は範囲内で一様抽選する。
+ * minRunsPerHour / maxRunsPerHour を正規化する。両方未指定の場合は undefined を返す。
  */
-function pickSlotCount(
-  rng: () => number,
+function resolveRunsBounds(
   minRunsPerHour?: number,
   maxRunsPerHour?: number
-): number {
+): ResolvedRunsBounds | undefined {
   if (minRunsPerHour === undefined && maxRunsPerHour === undefined) {
-    return pickWeightedCount(rng);
+    return undefined;
   }
   const rawMin =
     minRunsPerHour !== undefined && Number.isFinite(minRunsPerHour)
@@ -77,8 +82,27 @@ function pickSlotCount(
       ? Math.trunc(maxRunsPerHour)
       : Math.max(DEFAULT_MAX_RUNS_PER_HOUR, min);
   const max = Math.max(min, Math.min(MAX_RUNS_PER_HOUR, rawMax));
-  if (min === max) return min;
-  return Math.min(max, min + Math.floor(rng() * (max - min + 1)));
+  return { min, max, key: `${min}..${max}` };
+}
+
+/**
+ * 1時間あたりの巡回回数を抽選する。
+ * min/max 両方未指定時は従来の重み付き確率（0〜3回）を維持し、片側または両側指定時は範囲内で一様抽選する。
+ */
+function pickSlotCount(
+  rng: () => number,
+  minRunsPerHour?: number,
+  maxRunsPerHour?: number
+): number {
+  const bounds = resolveRunsBounds(minRunsPerHour, maxRunsPerHour);
+  if (!bounds) {
+    return pickWeightedCount(rng);
+  }
+  if (bounds.min === bounds.max) return bounds.min;
+  return Math.min(
+    bounds.max,
+    bounds.min + Math.floor(rng() * (bounds.max - bounds.min + 1))
+  );
 }
 
 function shuffle<T>(items: T[], rng: () => number): T[] {
@@ -87,6 +111,89 @@ function shuffle<T>(items: T[], rng: () => number): T[] {
     [items[i], items[j]] = [items[j], items[i]];
   }
   return items;
+}
+
+/**
+ * 昇順候補から minGapMinutes 以上の間隔を保って選択できる最大スロット数を返す。
+ */
+function maxDisjointSlots(
+  sortedCandidates: readonly number[],
+  minGapMinutes: number
+): number {
+  let count = 0;
+  let last = Number.NEGATIVE_INFINITY;
+  for (const m of sortedCandidates) {
+    if (m - last >= minGapMinutes) {
+      count++;
+      last = m;
+    }
+  }
+  return count;
+}
+
+/**
+ * 候補リストから minGapMinutes 以上の間隔を満たしつつ、目標件数（上限は配置可能最大数）を確実に満たすようランダムに選択する。
+ */
+function selectDisjointSlots(
+  sortedCandidates: readonly number[],
+  requestedCount: number,
+  minGapMinutes: number,
+  rng: () => number
+): number[] {
+  if (requestedCount <= 0 || sortedCandidates.length === 0) return [];
+  const targetCount = Math.min(
+    requestedCount,
+    maxDisjointSlots(sortedCandidates, minGapMinutes)
+  );
+  if (targetCount <= 0) return [];
+
+  const shuffled = shuffle([...sortedCandidates], rng);
+  const slots: number[] = [];
+  for (let i = 0; i < shuffled.length; i++) {
+    if (slots.length >= targetCount) break;
+    const m = shuffled[i];
+    if (!slots.every((s) => Math.abs(m - s) >= minGapMinutes)) continue;
+
+    // 残余候補もすべて既選スロット・m の双方と間隔を満たすため、区間グラフ上の貪欲最大数で到達可能性を正確に判定できる
+    const remainingCompatible = shuffled
+      .slice(i + 1)
+      .filter(
+        (x) =>
+          Math.abs(x - m) >= minGapMinutes &&
+          slots.every((s) => Math.abs(x - s) >= minGapMinutes)
+      )
+      .sort((a, b) => a - b);
+
+    if (
+      slots.length + 1 + maxDisjointSlots(remainingCompatible, minGapMinutes) >=
+      targetCount
+    ) {
+      slots.push(m);
+    }
+  }
+  return slots.sort((a, b) => a - b);
+}
+
+/**
+ * 開始ティック以降で lastRunAt との最短間隔を満たす候補時刻（分）を昇順で返す。
+ */
+function buildRemainingTickCandidates(
+  hourStartMs: number,
+  startTickMinute: number,
+  lastRunAt: number | undefined,
+  minGapMinutes: number
+): number[] {
+  const candidates: number[] = [];
+  for (let m = startTickMinute; m < 60; m += TICK_MINUTES) {
+    candidates.push(m);
+  }
+  if (lastRunAt != null) {
+    const minGapMs = minGapMinutes * 60_000;
+    return candidates.filter(
+      (m) => hourStartMs + m * 60_000 - lastRunAt >= minGapMs
+    );
+  }
+  return candidates;
 }
 
 export function drawHourlySlots(
@@ -112,27 +219,14 @@ export function drawHourlySlots(
     new Date(nowMs).getMilliseconds();
   const hourStartMs = nowMs - msWithinHour;
 
-  let candidates: number[] = [];
-  for (let m = tickMinute; m < 60; m += TICK_MINUTES) {
-    candidates.push(m);
-  }
+  const candidates = buildRemainingTickCandidates(
+    hourStartMs,
+    tickMinute,
+    lastRunAt,
+    minGapMinutes
+  );
 
-  if (lastRunAt != null) {
-    const minGapMs = minGapMinutes * 60_000;
-    candidates = candidates.filter(
-      (m) => hourStartMs + m * 60_000 - lastRunAt >= minGapMs
-    );
-  }
-
-  shuffle(candidates, rng);
-  const slots: number[] = [];
-  for (const m of candidates) {
-    if (slots.length >= k) break;
-    if (slots.every((s) => Math.abs(m - s) >= minGapMinutes)) {
-      slots.push(m);
-    }
-  }
-  return slots.sort((a, b) => a - b);
+  return selectDisjointSlots(candidates, k, minGapMinutes, rng);
 }
 
 /**
@@ -160,9 +254,20 @@ export function decideWanderTick(
 
   const tickMinute = Math.floor(parts.minute / TICK_MINUTES) * TICK_MINUTES;
   const hourKey = `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hour)}`;
+  const msWithinHour =
+    parts.minute * 60_000 +
+    parts.second * 1000 +
+    new Date(nowMs).getMilliseconds();
+  const hourStartMs = nowMs - msWithinHour;
   const lastRunAt = state.lastRunAt;
+  const resolvedBounds = resolveRunsBounds(
+    options.minRunsPerHour,
+    options.maxRunsPerHour
+  );
+  const currentBoundsKey = resolvedBounds?.key;
 
   let nextState: WanderScheduleState;
+  let completedThisTick = false;
   if (state.hour !== hourKey || !Array.isArray(state.slots)) {
     nextState = {
       hour: hourKey,
@@ -178,17 +283,66 @@ export function decideWanderTick(
           maxRunsPerHour: options.maxRunsPerHour,
         }
       ),
+      ...(currentBoundsKey !== undefined
+        ? { boundsKey: currentBoundsKey }
+        : {}),
+      lastRunAt,
+    };
+  } else if ((state.boundsKey ?? undefined) !== currentBoundsKey) {
+    // 設定変更を伴う同一時間帯の再起動時は、実行済みスロットを保持しつつ残余枠を再計算する
+    const completedSlots =
+      lastRunAt != null && lastRunAt >= hourStartMs
+        ? state.slots.filter(
+            (s) => s <= tickMinute && hourStartMs + s * 60_000 <= lastRunAt
+          )
+        : [];
+    completedThisTick = completedSlots.includes(tickMinute);
+
+    const totalTarget = pickSlotCount(
+      rng,
+      options.minRunsPerHour,
+      options.maxRunsPerHour
+    );
+    const remainingTarget = Math.max(0, totalTarget - completedSlots.length);
+    let futureSlots: number[] = [];
+    if (remainingTarget > 0) {
+      const startTick = completedThisTick
+        ? tickMinute + TICK_MINUTES
+        : tickMinute;
+      const futureCandidates = buildRemainingTickCandidates(
+        hourStartMs,
+        startTick,
+        lastRunAt,
+        minGapMinutes
+      );
+      futureSlots = selectDisjointSlots(
+        futureCandidates,
+        remainingTarget,
+        minGapMinutes,
+        rng
+      );
+    }
+
+    nextState = {
+      hour: hourKey,
+      slots: [...completedSlots, ...futureSlots].sort((a, b) => a - b),
+      ...(currentBoundsKey !== undefined
+        ? { boundsKey: currentBoundsKey }
+        : {}),
       lastRunAt,
     };
   } else {
     nextState = {
       hour: state.hour,
       slots: [...state.slots],
+      ...(currentBoundsKey !== undefined
+        ? { boundsKey: currentBoundsKey }
+        : {}),
       lastRunAt,
     };
   }
 
-  if (nextState.slots!.includes(tickMinute)) {
+  if (!completedThisTick && nextState.slots!.includes(tickMinute)) {
     if (lastRunAt != null && nowMs - lastRunAt < minGapMinutes * 60_000) {
       return {
         run: false,

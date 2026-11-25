@@ -174,9 +174,261 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       minRunsPerHour: 6,
       maxRunsPerHour: 8,
     });
-    expect(slots.length).toBeLessThanOrEqual(3);
+    expect(slots).toHaveLength(3);
     for (let i = 1; i < slots.length; i++) {
       expect(slots[i] - slots[i - 1]).toBeGreaterThanOrEqual(25);
+    }
+  });
+
+  it('guarantees feasible k slots regardless of shuffle order (Devin/CodeRabbit regression)', () => {
+    const noon = Date.parse('2026-11-24T12:00:00+09:00');
+
+    // Devin 指摘の例: rng = () => 0.19 でも 6 枠を確保できる
+    const devinCase = decideWanderTick(
+      noon,
+      {},
+      {
+        activeHoursStart: 9,
+        activeHoursEnd: 23,
+        minGapMinutes: 10,
+        minRunsPerHour: 6,
+        maxRunsPerHour: 6,
+      },
+      () => 0.19
+    );
+    expect(devinCase.state.slots).toHaveLength(6);
+    for (let i = 1; i < devinCase.state.slots!.length; i++) {
+      expect(
+        devinCase.state.slots![i] - devinCase.state.slots![i - 1]
+      ).toBeGreaterThanOrEqual(10);
+    }
+
+    // CodeRabbit 指摘の候補順: Fisher-Yates で先頭が [5, 20, 35, 50] になる RNG 列でも 6 枠を確保できる
+    const jValues = [11, 9, 8, 6, 5, 3, 2, 0, 3, 2, 0];
+    let step = 0;
+    const coderabbitRng = () => {
+      const i = 11 - step;
+      const j = jValues[step++] ?? 0;
+      return (j + 0.5) / (i + 1);
+    };
+    const coderabbitSlots = drawHourlySlots(
+      noon,
+      0,
+      0,
+      undefined,
+      10,
+      coderabbitRng,
+      { minRunsPerHour: 6, maxRunsPerHour: 6 }
+    );
+    expect(coderabbitSlots).toHaveLength(6);
+    for (let i = 1; i < coderabbitSlots.length; i++) {
+      expect(
+        coderabbitSlots[i] - coderabbitSlots[i - 1]
+      ).toBeGreaterThanOrEqual(10);
+    }
+
+    // 多数の乱数シードでも (k=6, minGap=10) は常に 6 枠、(min=6..8, minGap=25) は最大値 3 枠に到達する
+    const makeLcg = (seed: number) => {
+      let state = seed >>> 0;
+      return () => {
+        state = (1664525 * state + 1013904223) >>> 0;
+        return state / 0x100000000;
+      };
+    };
+    for (let seed = 1; seed <= 50; seed++) {
+      const slots6 = drawHourlySlots(noon, 0, 0, undefined, 10, makeLcg(seed), {
+        minRunsPerHour: 6,
+        maxRunsPerHour: 6,
+      });
+      expect(slots6).toHaveLength(6);
+      for (let i = 1; i < slots6.length; i++) {
+        expect(slots6[i] - slots6[i - 1]).toBeGreaterThanOrEqual(10);
+      }
+
+      const slots3 = drawHourlySlots(noon, 0, 0, undefined, 25, makeLcg(seed), {
+        minRunsPerHour: 6,
+        maxRunsPerHour: 8,
+      });
+      expect(slots3).toHaveLength(3);
+      for (let i = 1; i < slots3.length; i++) {
+        expect(slots3[i] - slots3[i - 1]).toBeGreaterThanOrEqual(25);
+      }
+    }
+  });
+
+  it('recalculates remaining slots on mid-hour bounds change while keeping unchanged bounds stable across restarts', async () => {
+    const t1200 = Date.parse('2026-11-24T12:00:00+09:00');
+    const t1215 = Date.parse('2026-11-24T12:15:00+09:00');
+    const t1220 = Date.parse('2026-11-24T12:20:00+09:00');
+
+    // 1. 変更なしの再起動では保存済みスロットを維持する
+    {
+      const dir = createTempDir();
+      const filePath = join(dir, 'aichat-wander.json');
+      const store1 = new WanderStore({ filePath, now: () => t1200 });
+      const d0 = await store1.checkAndCommitScheduleTick(
+        t1200,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 2,
+          maxRunsPerHour: 2,
+        },
+        () => 0.5
+      );
+      const initialSlots = d0.state.slots!;
+      expect(initialSlots).toHaveLength(2);
+
+      const store2 = new WanderStore({ filePath, now: () => t1220 });
+      const dAfter = await store2.checkAndCommitScheduleTick(
+        t1220,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 2,
+          maxRunsPerHour: 2,
+        },
+        () => 0.1
+      );
+      expect(dAfter.state.slots).toEqual(initialSlots);
+    }
+
+    // 2. 12:15 実行後に 12:20 で maxRunsPerHour = 0 に変更して再起動すると、残りの枠でも発火しない
+    {
+      const dir = createTempDir();
+      const filePath = join(dir, 'aichat-wander.json');
+      const store1 = new WanderStore({ filePath, now: () => t1215 });
+      const seeded = await store1.checkAndCommitScheduleTick(
+        t1215,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 2,
+          maxRunsPerHour: 2,
+        },
+        () => 0.5
+      );
+      // 12:15 に強制発火させた状態を構成（[15, 35] のうち 15 が実行済みで 35 が残っている想定）
+      const storeOverride = new WanderStore({ filePath, now: () => t1215 });
+      await storeOverride.load();
+      const dec15 = decideWanderTick(
+        t1215,
+        {
+          hour: '2026-11-24T12',
+          slots: [15, 35],
+          boundsKey: '2..2',
+        },
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 2,
+          maxRunsPerHour: 2,
+        }
+      );
+      expect(dec15.run).toBe(true);
+      expect(seeded.state.hour).toBe('2026-11-24T12');
+
+      // ストアに 12:15 実行済み ([15, 35], boundsKey="2..2") を直接保存する代わりに runTick 相当で再現
+      const dec20Zero = decideWanderTick(
+        t1220,
+        dec15.state,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 0,
+          maxRunsPerHour: 0,
+        },
+        () => 0.5
+      );
+      expect(dec20Zero.run).toBe(false);
+      expect(dec20Zero.state.slots).toEqual([15]);
+      expect(dec20Zero.state.boundsKey).toBe('0..0');
+
+      const t1235 = Date.parse('2026-11-24T12:35:00+09:00');
+      const dec35Zero = decideWanderTick(
+        t1235,
+        dec20Zero.state,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 0,
+          maxRunsPerHour: 0,
+        },
+        () => 0.5
+      );
+      expect(dec35Zero.run).toBe(false);
+      expect(dec35Zero.reason).toBe('not_slot');
+    }
+
+    // 3. WanderStore 経由で 12:15 発火後に 12:20 で min=3, max=3 へ引き上げると、合計3枠になるよう残余2枠が追加される
+    {
+      const dir = createTempDir();
+      const filePath = join(dir, 'aichat-wander.json');
+      const store1 = new WanderStore({ filePath, now: () => t1215 });
+      // rng=0 なら候補先頭やシャッフル順に関わらずまず 12:15 を引くとは限らないため、min=12,max=12 から絞る/12:15 で実行済みを作る
+      // まず 12:15 に 1 枠以上を含めて確実に実行される min=12, max=12 で起動 -> 12:15 で発火した直後に 2..2 や 3..3 を試す代わりに
+      // 12:15 に bounds=1..1 で 12:15 に発火させるため、12:15 が選ばれる rng を用いるか 12:15 に 12:15 のみの状態を作る
+      const decSeed = await store1.checkAndCommitScheduleTick(
+        t1215,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 1,
+          maxRunsPerHour: 1,
+        },
+        // i=8..1 (candidates = [15,20,25,30,35,40,45,50,55], len=9): すべて rng=0 なら 15 が最後に残り index 0 (つまり 20..55 が先に出るが k=1 なので先頭が選ばれる)
+        // i=8..1 ですべて rng=0.999 を渡せば無交換なので先頭は 15 のまま!
+        () => 0.999
+      );
+      expect(decSeed.run).toBe(true);
+      expect(decSeed.state.slots).toEqual([15]);
+
+      const store2 = new WanderStore({ filePath, now: () => t1220 });
+      const decIncreased = await store2.checkAndCommitScheduleTick(
+        t1220,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 3,
+          maxRunsPerHour: 3,
+        },
+        () => 0.5
+      );
+      expect(decIncreased.state.slots).toHaveLength(3);
+      expect(decIncreased.state.slots![0]).toBe(15);
+      expect(decIncreased.state.slots![1]).toBeGreaterThanOrEqual(25);
+      expect(
+        decIncreased.state.slots![2] - decIncreased.state.slots![1]
+      ).toBeGreaterThanOrEqual(10);
+
+      // さらに再起動した store3 で同じ時刻に 0..0 へ変更すると即座に残り枠が消える
+      const store3 = new WanderStore({ filePath, now: () => t1220 });
+      const decSuppressed = await store3.checkAndCommitScheduleTick(
+        t1220,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 0,
+          maxRunsPerHour: 0,
+        },
+        () => 0.5
+      );
+      expect(decSuppressed.run).toBe(false);
+      expect(decSuppressed.state.slots).toEqual([15]);
+      expect((await store3.load()).schedule).toEqual({
+        hour: '2026-11-24T12',
+        slots: [15],
+        boundsKey: '0..0',
+      });
     }
   });
 

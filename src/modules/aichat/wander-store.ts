@@ -16,7 +16,7 @@ export type WanderState = {
   version: 1;
   lastPostAt: string | null;
   lastRunAt: number | null;
-  schedule: { hour: string; slots: number[] } | null;
+  schedule: { hour: string; slots: number[]; boundsKey?: string } | null;
   recent: WanderRecentItem[];
   actedNoteIds: string[];
   userLastReplyAt: Record<string, number>;
@@ -75,7 +75,8 @@ function normalizeWanderState(raw: unknown): WanderState {
       ? obj.lastRunAt
       : null;
 
-  let schedule: { hour: string; slots: number[] } | null = null;
+  let schedule: { hour: string; slots: number[]; boundsKey?: string } | null =
+    null;
   if (obj.schedule != null && typeof obj.schedule === 'object') {
     const sched = obj.schedule as Record<string, unknown>;
     if (typeof sched.hour === 'string' && Array.isArray(sched.slots)) {
@@ -84,6 +85,9 @@ function normalizeWanderState(raw: unknown): WanderState {
         slots: sched.slots.filter(
           (s): s is number => typeof s === 'number' && Number.isInteger(s)
         ),
+        ...(typeof sched.boundsKey === 'string'
+          ? { boundsKey: sched.boundsKey }
+          : {}),
       };
     }
   }
@@ -191,6 +195,7 @@ export class WanderStore {
         {
           hour: state.schedule?.hour,
           slots: state.schedule?.slots,
+          boundsKey: state.schedule?.boundsKey,
           lastRunAt: state.lastRunAt ?? undefined,
         },
         schedulerOptions,
@@ -199,11 +204,18 @@ export class WanderStore {
 
       const newSchedule =
         decision.state.hour != null && decision.state.slots != null
-          ? { hour: decision.state.hour, slots: decision.state.slots }
+          ? {
+              hour: decision.state.hour,
+              slots: decision.state.slots,
+              ...(decision.state.boundsKey !== undefined
+                ? { boundsKey: decision.state.boundsKey }
+                : {}),
+            }
           : state.schedule;
 
       const scheduleChanged =
         newSchedule?.hour !== state.schedule?.hour ||
+        newSchedule?.boundsKey !== state.schedule?.boundsKey ||
         JSON.stringify(newSchedule?.slots) !==
           JSON.stringify(state.schedule?.slots);
       const lastRunChanged =
