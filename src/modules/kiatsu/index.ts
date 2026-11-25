@@ -58,6 +58,15 @@ const NOTICE_LIMIT = 2;
 /** 未送信の警報を諦めるまでの試行回数。 */
 const MAX_ALERT_ATTEMPTS = 3;
 
+/**
+ * 諦めたあと、同じ低下で再挑戦するまでの間隔。
+ *
+ * 投稿だけが失敗している場合、警報状態を解除しないと Misskey が復旧しても
+ * その低下の警報が二度と出せない。かといって毎ティック試すと失敗を繰り返すので、
+ * 一定時間だけ間隔を空けて再挑戦する。
+ */
+const ALERT_RETRY_SUPPRESS_MS = 30 * 60 * 1000;
+
 /** これより古い ΔP はメンション応答に出さない（鮮度切れ）。 */
 const STALE_MS = 2 * 60 * 60 * 1000;
 
@@ -144,6 +153,9 @@ export default class extends Module<KiatsuData> {
 
   /** 未送信警報の試行回数。無限に再試行しないための上限。 */
   private pendingAlertAttempts = 0;
+
+  /** この時刻までは未送信警報の再挑戦をしない（諦めた直後の間隔）。 */
+  private alertRetryAfter = 0;
 
   /** 投稿処理の多重実行を防ぐ（タイマーと他の経路が重なったとき）。 */
   private posting = false;
@@ -256,10 +268,6 @@ export default class extends Module<KiatsuData> {
       return;
     }
 
-    // 現在時刻のデータが無くても画像は描けるので、取得できた時点で保持する。
-    this.latestForecast = forecast;
-    this.latestForecastFetchedAt = formatLocalHourKey(new Date());
-
     const now = new Date();
     const currentIndex = this.findCurrentIndex(forecast, now);
 
@@ -275,6 +283,10 @@ export default class extends Module<KiatsuData> {
       return;
     }
 
+    // 使える時刻が見つかってから差し替える。先に保持すると、開始位置だけ
+    // 古いまま新しい予報を描き、過去の列を「今」として出すことになる。
+    this.latestForecast = forecast;
+    this.latestForecastFetchedAt = formatLocalHourKey(now);
     this.latestForecastStart = currentIndex;
 
     const delta3h = deltaOverHours(forecast.hours, currentIndex, DELTA_HOURS);
@@ -309,7 +321,12 @@ export default class extends Module<KiatsuData> {
       } (警報中: ${state.alerting})`
     );
 
-    if (trigger && delta3h !== null && !this.pendingAlert) {
+    if (
+      trigger &&
+      delta3h !== null &&
+      !this.pendingAlert &&
+      Date.now() >= this.alertRetryAfter
+    ) {
       this.pendingAlert = true;
       this.pendingAlertAttempts = 0;
       this.persistState();
@@ -423,10 +440,16 @@ export default class extends Module<KiatsuData> {
       console.warn(error);
 
       if (this.pendingAlertAttempts >= MAX_ALERT_ATTEMPTS) {
-        // 何度試しても通らないなら諦める。古い警報を延々と抱えない。
-        this.log('警報の投稿を諦めます。');
+        // 何度試しても通らないなら一旦諦める。ただし警報状態も解除する。
+        // 解除しないと、Misskey が復旧しても trigger が立たず、その低下の
+        // 警報が二度と出せない。再挑戦は一定時間後に限る。
+        this.log(
+          `警報の投稿を諦めます。${ALERT_RETRY_SUPPRESS_MS / 60000} 分後に再挑戦します。`
+        );
         this.pendingAlert = false;
         this.pendingAlertAttempts = 0;
+        this.alertRetryAfter = Date.now() + ALERT_RETRY_SUPPRESS_MS;
+        this.alertState = { alerting: false };
         this.persistState();
       }
     } finally {
