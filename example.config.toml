@@ -197,15 +197,19 @@ heartbeatTimeoutMs = 120000
 heartbeatIntervalMs = 60000
 p2pWebSocketUrl = "wss://api.p2pquake.net/v2/ws" # P2P地震情報WebSocket（津波情報を受信）
 
-# 気圧監視設定
+# 気圧監視設定（Open-Meteo / 気象庁MSM）
 [kiatsu]
-locationCode = "13102" # 都道府県コード
-requestTimeoutMs = 10000
-maxErrorRetries = 5
-updateIntervalMs = 600000
-postIntervalMs = 43200000
-errorCooldownMs = 3600000
-minPostLevel = 2
+enabled = true                 # 気圧監視を有効化
+latitude = 36.3219             # 地点の緯度
+longitude = 139.0033           # 地点の経度
+locationName = "高崎市"         # 投稿文に出す地名
+requestTimeoutMs = 10000       # API取得のタイムアウト (ミリ秒)
+updateIntervalMs = 600000      # 10分ごとに再取得
+alertThresholdHpa = -2.0       # 3時間でこの値以上下がったら投稿（負値）
+hysteresisHpa = 0.5            # 解除の幅（チャタリング防止）
+maxPostsPerDay = 1             # 1日の投稿上限
+maxErrorRetries = 5            # 連続エラーで停止するまでの回数
+errorCooldownMs = 3600000      # エラー後の待機時間 (ミリ秒)
 
 # Imagen設定
 [imagen]

@@ -43,4 +43,18 @@ describe('example.config.toml', () => {
       'ユーザのことをご主人様と認識しています'
     );
   });
+
+  it('configures kiatsu with Open-Meteo coordinates instead of a location code', () => {
+    expect(example.kiatsu?.enabled).toBe(true);
+    expect(example.kiatsu?.latitude).toBe(36.3219);
+    expect(example.kiatsu?.longitude).toBe(139.0033);
+    expect(example.kiatsu?.locationName).toBe('高崎市');
+    expect(example.kiatsu?.alertThresholdHpa).toBe(-2);
+    expect(example.kiatsu?.hysteresisHpa).toBe(0.5);
+    expect(example.kiatsu?.maxPostsPerDay).toBe(1);
+    // 廃止したキーが残っていないこと
+    expect(example.kiatsu?.locationCode).toBeUndefined();
+    expect(example.kiatsu?.postIntervalMs).toBeUndefined();
+    expect(example.kiatsu?.minPostLevel).toBeUndefined();
+  });
 });

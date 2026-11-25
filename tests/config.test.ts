@@ -152,6 +152,108 @@ describe('resolveConfig', () => {
     });
     expect(config.host).toBe('https://example.com');
   });
+
+  it('keeps kiatsu settings as written (defaults live in the module)', () => {
+    const config = resolveConfig({
+      ...base,
+      kiatsu: {
+        enabled: true,
+        latitude: 36.3219,
+        longitude: 139.0033,
+        locationName: '高崎市',
+        requestTimeoutMs: 10000,
+        updateIntervalMs: 600000,
+        alertThresholdHpa: -2.0,
+        hysteresisHpa: 0.5,
+        maxPostsPerDay: 1,
+        maxErrorRetries: 5,
+        errorCooldownMs: 3600000,
+      },
+    });
+
+    expect(config.kiatsu?.latitude).toBe(36.3219);
+    expect(config.kiatsu?.longitude).toBe(139.0033);
+    expect(config.kiatsu?.locationName).toBe('高崎市');
+    expect(config.kiatsu?.alertThresholdHpa).toBe(-2.0);
+    expect(config.kiatsu?.hysteresisHpa).toBe(0.5);
+    expect(config.kiatsu?.maxPostsPerDay).toBe(1);
+  });
+
+  it('leaves kiatsu keys unset instead of injecting defaults', () => {
+    const config = resolveConfig({ ...base, kiatsu: { enabled: true } });
+    expect(config.kiatsu).toEqual({ enabled: true });
+  });
+
+  it('rejects out-of-range kiatsu coordinates', () => {
+    for (const coords of [
+      { latitude: 90.1 },
+      { latitude: -90.1 },
+      { longitude: 180.1 },
+      { longitude: -180.1 },
+      { latitude: '36.3' as never },
+    ]) {
+      expect(() => resolveConfig({ ...base, kiatsu: { ...coords } })).toThrow(
+        ConfigError
+      );
+    }
+
+    const config = resolveConfig({
+      ...base,
+      kiatsu: { latitude: 90, longitude: -180 },
+    });
+    expect(config.kiatsu?.latitude).toBe(90);
+    expect(config.kiatsu?.longitude).toBe(-180);
+  });
+
+  it('rejects a kiatsu alert threshold outside -10..0', () => {
+    for (const alertThresholdHpa of [0.1, 2, -10.1]) {
+      expect(() =>
+        resolveConfig({ ...base, kiatsu: { alertThresholdHpa } })
+      ).toThrow(ConfigError);
+    }
+
+    // 0（変化なし）と -10 は境界として受け付ける
+    for (const alertThresholdHpa of [0, -10, -2.0]) {
+      const config = resolveConfig({ ...base, kiatsu: { alertThresholdHpa } });
+      expect(config.kiatsu?.alertThresholdHpa).toBe(alertThresholdHpa);
+    }
+  });
+
+  it('rejects out-of-range kiatsu hysteresis and maxPostsPerDay', () => {
+    for (const kiatsu of [
+      { hysteresisHpa: -0.1 },
+      { hysteresisHpa: 5.1 },
+      { maxPostsPerDay: 0 },
+      { maxPostsPerDay: 1.5 },
+      { maxPostsPerDay: '1' as never },
+    ]) {
+      expect(() => resolveConfig({ ...base, kiatsu })).toThrow(ConfigError);
+    }
+
+    const config = resolveConfig({
+      ...base,
+      kiatsu: { hysteresisHpa: 0, maxPostsPerDay: 24 },
+    });
+    expect(config.kiatsu?.hysteresisHpa).toBe(0);
+    expect(config.kiatsu?.maxPostsPerDay).toBe(24);
+  });
+
+  it('ignores legacy kiatsu keys left in a local config.toml', () => {
+    // 移行前の config.toml をそのまま使っても起動できること
+    const config = resolveConfig({
+      ...base,
+      kiatsu: {
+        enabled: true,
+        latitude: 36.3219,
+        longitude: 139.0033,
+        locationCode: '13102',
+        postIntervalMs: 43200000,
+        minPostLevel: 2,
+      } as never,
+    });
+    expect(config.host).toBe('https://example.com');
+    expect(config.kiatsu?.latitude).toBe(36.3219);
+  });
 });
 
 describe('loadConfig', () => {

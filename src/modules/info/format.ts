@@ -87,7 +87,10 @@ export const CONFIG_LABELS = {
     minMagnitude: '弱震時の最小規模',
   },
   pressure: {
-    minPostLevel: '最小投稿レベル',
+    enabled: '気圧監視',
+    locationName: '地点名',
+    coordinates: '緯度経度',
+    alertThreshold: '投稿閾値 (3時間気圧変化)',
     updateInterval: '更新間隔',
   },
   others: {
@@ -283,11 +286,28 @@ export function formatPressureSettings(): string {
     ? Math.floor(config.kiatsu.updateIntervalMs / 60000) + '分'
     : FORMAT_DEFAULTS.notSet;
 
+  const latitude = config.kiatsu.latitude;
+  const longitude = config.kiatsu.longitude;
+  const coordinates =
+    latitude !== undefined && longitude !== undefined
+      ? `${latitude}, ${longitude}`
+      : FORMAT_DEFAULTS.notSet;
+
+  const alertThreshold =
+    config.kiatsu.alertThresholdHpa !== undefined
+      ? `${config.kiatsu.alertThresholdHpa} hPa`
+      : FORMAT_DEFAULTS.notSet;
+
   const lines: string[] = [
     CONFIG_LABELS.sections.pressure,
-    `- ${CONFIG_LABELS.pressure.minPostLevel}: ${safeConfigValue(
-      config.kiatsu.minPostLevel
+    `- ${CONFIG_LABELS.pressure.enabled}: ${formatBooleanSetting(
+      config.kiatsu.enabled
     )}`,
+    `- ${CONFIG_LABELS.pressure.locationName}: ${safeConfigValue(
+      config.kiatsu.locationName
+    )}`,
+    `- ${CONFIG_LABELS.pressure.coordinates}: ${coordinates}`,
+    `- ${CONFIG_LABELS.pressure.alertThreshold}: ${alertThreshold}`,
     `- ${CONFIG_LABELS.pressure.updateInterval}: ${updateIntervalMinutes}`,
   ];
 

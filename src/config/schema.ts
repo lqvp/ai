@@ -191,13 +191,19 @@ export type Config = {
     p2pWebSocketUrl?: string;
   };
   kiatsu?: {
-    locationCode?: string;
+    enabled?: boolean;
+    latitude?: number;
+    longitude?: number;
+    locationName?: string;
     requestTimeoutMs?: number;
-    maxErrorRetries?: number;
     updateIntervalMs?: number;
-    postIntervalMs?: number;
+    /** 3時間気圧変化 ΔP がこの値以下（より深い負値）になったら投稿する */
+    alertThresholdHpa?: number;
+    /** 投稿解除までの幅。閾値ちかくでの投稿の往復（チャタリング）を防ぐ */
+    hysteresisHpa?: number;
+    maxPostsPerDay?: number;
+    maxErrorRetries?: number;
     errorCooldownMs?: number;
-    minPostLevel?: number;
   };
   weatherAutoNotePref?: string;
   weatherAutoNoteHour?: number;
@@ -641,6 +647,50 @@ function validateAndResolve(input: RawConfig): Config {
         if (!Number.isFinite(Number(value)) || Number(value) <= 0) {
           issues.push(`${name}.${key} は正の数で指定してください`);
         }
+      }
+    }
+  }
+
+  // kiatsu は既定値をモジュール側（src/modules/kiatsu/index.ts）が持つため、
+  // ここでは範囲検査だけを行う（値の書き換えはしない）。
+  if (isObject(raw.kiatsu)) {
+    const kiatsu = raw.kiatsu;
+    // TOML で数値は数値型として書かれるため、文字列などは設定ミスとして弾く
+    const isNumber = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isFinite(value);
+
+    for (const [key, min, max] of [
+      ['latitude', -90, 90],
+      ['longitude', -180, 180],
+    ] as const) {
+      const value = kiatsu[key];
+      if (value === undefined) continue;
+      if (!isNumber(value) || value < min || value > max) {
+        issues.push(`kiatsu.${key} は ${min}〜${max} の数値で指定してください`);
+      }
+    }
+
+    if (kiatsu.alertThresholdHpa !== undefined) {
+      const value = kiatsu.alertThresholdHpa;
+      // 気圧は低下を負値で表すため、0（変化なし）を含む負値のみ受け付ける
+      if (!isNumber(value) || value > 0 || value < -10) {
+        issues.push(
+          'kiatsu.alertThresholdHpa は -10〜0 の負値で指定してください'
+        );
+      }
+    }
+
+    if (kiatsu.hysteresisHpa !== undefined) {
+      const value = kiatsu.hysteresisHpa;
+      if (!isNumber(value) || value < 0 || value > 5) {
+        issues.push('kiatsu.hysteresisHpa は 0〜5 で指定してください');
+      }
+    }
+
+    if (kiatsu.maxPostsPerDay !== undefined) {
+      const value = kiatsu.maxPostsPerDay;
+      if (!isNumber(value) || !Number.isInteger(value) || value < 1) {
+        issues.push('kiatsu.maxPostsPerDay は 1 以上の整数で指定してください');
       }
     }
   }
