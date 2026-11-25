@@ -1,6 +1,5 @@
 import type Message from '@/message.js';
-import { getLlmUsageGuard } from './llm-usage-guard.js';
-import { formatOperationalEvent } from './operational-log.js';
+import { LlmBudgetBlockedError } from './llm-usage-guard.js';
 import {
   genTextByGeminiDetailed,
   type ProviderContext,
@@ -33,42 +32,17 @@ export class TextGenerator {
   ): Promise<ProviderDetailedResponse> {
     this.ctx.log(`Using AI provider: ${provider}`);
 
-    const usageGuard = getLlmUsageGuard(this.ctx.log);
-    let budgetConsumed = false;
     try {
-      const budget = await usageGuard.tryAcquire();
-      if (!budget.allowed) {
-        this.ctx.log(
-          formatOperationalEvent('llm_budget_blocked', {
-            reason: budget.reason,
-          })
-        );
+      return provider === 'openai'
+        ? await genTextByOpenaiDetailed(aiChat, files, msg, this.ctx)
+        : await genTextByGeminiDetailed(aiChat, files, msg, this.ctx);
+    } catch (err: unknown) {
+      if (err instanceof LlmBudgetBlockedError) {
         return {
           error: true,
           errorCode: 429,
-          errorMessage: `LLM budget blocked: ${budget.reason}`,
+          errorMessage: err.message,
         };
-      }
-      budgetConsumed = true;
-    } catch (err: unknown) {
-      this.ctx.log(
-        `LLM予算状態を更新できないため今回は継続します: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-
-    try {
-      const result =
-        provider === 'openai'
-          ? await genTextByOpenaiDetailed(aiChat, files, msg, this.ctx)
-          : await genTextByGeminiDetailed(aiChat, files, msg, this.ctx);
-      if (budgetConsumed) {
-        const success = result != null && !('error' in result);
-        await usageGuard.recordOutcome(success).catch(() => undefined);
-      }
-      return result;
-    } catch (err: unknown) {
-      if (budgetConsumed) {
-        await usageGuard.recordOutcome(false).catch(() => undefined);
       }
       throw err;
     }

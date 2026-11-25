@@ -272,6 +272,13 @@ export class ReactionFollowUpHandler {
     }
 
     return this.runWithFollowUpLock(reactor.id, async () => {
+      if (this.deps.isBlockedUser?.(reactor) === true) return false;
+      const isMaster = this.deps.isMasterUser(reactor);
+      const entry = await this.deps.affinityStore.getEntry(reactor, {
+        isMaster,
+      });
+      if (entry.optedOut) return false;
+
       const cfg = this.deps.config ?? {};
       const cooldownMs = (cfg.userCooldownMinutes ?? 360) * MINUTES_TO_MS;
       const lastFollowUp = await this.getLastFollowUpAt(reactor.id);

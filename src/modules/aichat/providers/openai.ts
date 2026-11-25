@@ -2,6 +2,10 @@ import got from 'got';
 import config from '@/config/index.js';
 import type Message from '@/message.js';
 import {
+  acquireLlmCallBudget,
+  LlmBudgetBlockedError,
+} from '../llm-usage-guard.js';
+import {
   type OpenaiSettings,
   resolveOpenaiSettings,
 } from '../openai-settings.js';
@@ -40,7 +44,8 @@ type OpenaiChatCompletion = {
 /** 設定から解決した共通ヘッダとタイムアウトで chat/completions を呼ぶ。 */
 async function postChatCompletion(
   settings: OpenaiSettings,
-  body: OpenaiOptions
+  body: OpenaiOptions,
+  log?: (message: string) => void
 ): Promise<OpenaiChatCompletion> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -49,14 +54,22 @@ async function postChatCompletion(
     headers.Authorization = `Bearer ${settings.apiKey}`;
   }
 
-  return got
-    .post(settings.apiUrl, {
-      headers,
-      json: body,
-      responseType: 'json',
-      timeout: { request: settings.timeoutMs },
-    })
-    .json<OpenaiChatCompletion>();
+  const recordOutcome = await acquireLlmCallBudget(log);
+  try {
+    const result = await got
+      .post(settings.apiUrl, {
+        headers,
+        json: body,
+        responseType: 'json',
+        timeout: { request: settings.timeoutMs },
+      })
+      .json<OpenaiChatCompletion>();
+    await recordOutcome(true);
+    return result;
+  } catch (err: unknown) {
+    await recordOutcome(false);
+    throw err;
+  }
 }
 
 /** got のエラーから HTTP ステータスとメッセージを取り出す。 */
@@ -157,16 +170,20 @@ export async function genTextByOpenaiDetailed(
             { role: 'user', content: extraUserMessage },
           ] as OpenaiMessage[])
         : messages;
-      const res = await postChatCompletion(settings, {
-        ...baseOptions,
-        messages: finalMessages,
-        ...(toolRuntime.hasAnyTool
-          ? {
-              tools: toolRuntime.tools,
-              tool_choice: 'none' as const,
-            }
-          : {}),
-      });
+      const res = await postChatCompletion(
+        settings,
+        {
+          ...baseOptions,
+          messages: finalMessages,
+          ...(toolRuntime.hasAnyTool
+            ? {
+                tools: toolRuntime.tools,
+                tool_choice: 'none' as const,
+              }
+            : {}),
+        },
+        ctx.log
+      );
       const finalMessage = res.choices?.[0]?.message;
       return extractOpenaiContentText(finalMessage?.content);
     };
@@ -181,6 +198,7 @@ export async function genTextByOpenaiDetailed(
       }
       return text;
     } catch (err: unknown) {
+      if (err instanceof LlmBudgetBlockedError) throw err;
       if (err instanceof Error) {
         ctx.log(`最終応答取得エラー: ${err.name} ${err.message}`);
       }
@@ -202,12 +220,13 @@ export async function genTextByOpenaiDetailed(
 
     let resData: OpenaiChatCompletion;
     try {
-      resData = await postChatCompletion(settings, openaiOptions);
+      resData = await postChatCompletion(settings, openaiOptions, ctx.log);
 
       ctx.log(
         `OpenAI互換APIレスポンス(round=${round}): ${JSON.stringify(resData).slice(0, 1000)}`
       );
     } catch (err: unknown) {
+      if (err instanceof LlmBudgetBlockedError) throw err;
       ctx.log('Error By Call OpenAI Compatible API');
       if (err instanceof Error) {
         ctx.log(`${err.name}\n${err.message}\n${err.stack}`);

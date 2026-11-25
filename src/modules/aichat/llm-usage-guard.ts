@@ -59,6 +59,48 @@ function rollover(state: LlmUsageState, day: string): LlmUsageState {
   };
 }
 
+export class LlmBudgetBlockedError extends Error {
+  constructor(public readonly reason: 'daily_limit' | 'error_backoff') {
+    super(`LLM budget blocked: ${reason}`);
+    this.name = 'LlmBudgetBlockedError';
+  }
+}
+
+export type LlmOutcomeRecorder = (success: boolean) => Promise<void>;
+
+/**
+ * LLM API 1リクエスト分の予約を行い、成否記録用のコールバックを返す。
+ * 予算状態そのものを保存できない場合は可用性を優先して no-op 記録で継続する。
+ */
+export async function acquireLlmCallBudget(
+  log?: (message: string) => void
+): Promise<LlmOutcomeRecorder> {
+  const usageGuard = getLlmUsageGuard(log);
+  try {
+    const budget = await usageGuard.tryAcquire();
+    if (!budget.allowed) {
+      log?.(formatBlockedBudgetLog(budget.reason));
+      throw new LlmBudgetBlockedError(budget.reason);
+    }
+  } catch (err: unknown) {
+    if (err instanceof LlmBudgetBlockedError) throw err;
+    log?.(
+      `LLM予算状態を更新できないため今回は継続します: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return async () => {};
+  }
+
+  return async (success: boolean) => {
+    await usageGuard.recordOutcome(success).catch(() => undefined);
+  };
+}
+
+function formatBlockedBudgetLog(
+  reason: 'daily_limit' | 'error_backoff'
+): string {
+  return JSON.stringify({ event: 'llm_budget_blocked', reason });
+}
+
 /**
  * aichat が発行する LLM 呼び出し全体の日次予算と連続エラーバックオフ。
  * プロセス再起動後も `aichat-llm-usage.json` で保持する。

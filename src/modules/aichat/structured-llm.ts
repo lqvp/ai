@@ -2,12 +2,14 @@ import got from 'got';
 import config from '@/config/index.js';
 import { getGeminiApiUrl } from './constants.js';
 import { stripDangerousKeys } from './json-file-store.js';
-import { getLlmUsageGuard } from './llm-usage-guard.js';
+import {
+  acquireLlmCallBudget,
+  type LlmOutcomeRecorder,
+} from './llm-usage-guard.js';
 import {
   type OpenaiProviderConfig,
   resolveOpenaiSettings,
 } from './openai-settings.js';
-import { formatOperationalEvent } from './operational-log.js';
 import { findMatchingBrace } from './tool-call-parser.js';
 
 export type StructuredLlmCallOptions<T> = {
@@ -211,25 +213,21 @@ export async function callStructuredJson<T>(
   const log = options.log ?? (() => {});
   const provider = resolveProvider(options.provider);
   const temperature = options.temperature ?? 0.2;
-  const usageGuard = getLlmUsageGuard(log);
-  let budgetConsumed = false;
+  const geminiApiKey =
+    provider === 'gemini'
+      ? (options.geminiConfig?.apiKey ?? config.gemini?.apiKey)
+      : undefined;
+  if (provider === 'gemini' && !geminiApiKey) {
+    log('構造化LLM呼び出し: Gemini APIキーが未設定です');
+    return null;
+  }
 
+  let recordOutcome: LlmOutcomeRecorder;
   try {
-    const budget = await usageGuard.tryAcquire();
-    if (!budget.allowed) {
-      log(
-        formatOperationalEvent('llm_budget_blocked', {
-          reason: budget.reason,
-          structured: true,
-        })
-      );
-      return null;
-    }
-    budgetConsumed = true;
-  } catch (err: unknown) {
-    log(
-      `LLM予算状態を更新できないため今回は継続します: ${err instanceof Error ? err.message : String(err)}`
-    );
+    recordOutcome = await acquireLlmCallBudget(log);
+  } catch {
+    // acquire 側で構造化ログ済み。構造化呼び出しは失敗時 null 契約なので抑制する。
+    return null;
   }
 
   let rawText = '';
@@ -270,11 +268,7 @@ export async function callStructuredJson<T>(
 
       rawText = extractOpenaiContentText(res.choices?.[0]?.message?.content);
     } else {
-      const apiKey = options.geminiConfig?.apiKey ?? config.gemini?.apiKey;
-      if (!apiKey) {
-        log('構造化LLM呼び出し: Gemini APIキーが未設定です');
-        return null;
-      }
+      const apiKey = geminiApiKey!;
       const apiUrl = options.geminiConfig?.apiUrl ?? getGeminiApiUrl();
 
       const res = await got
@@ -304,13 +298,8 @@ export async function callStructuredJson<T>(
         .map((p) => p.text ?? '')
         .join('');
     }
-    if (budgetConsumed) {
-      await usageGuard.recordOutcome(true).catch(() => undefined);
-    }
   } catch (err: unknown) {
-    if (budgetConsumed) {
-      await usageGuard.recordOutcome(false).catch(() => undefined);
-    }
+    await recordOutcome(false);
     log(
       `構造化LLM呼び出しエラー: ${err instanceof Error ? err.message : String(err)}`
     );
@@ -319,13 +308,22 @@ export async function callStructuredJson<T>(
 
   const parsedObj = extractJsonObject(rawText);
   if (!parsedObj) {
+    await recordOutcome(false);
     log('構造化LLM: JSONオブジェクトの抽出に失敗しました');
     return null;
   }
 
   try {
-    return options.parse(parsedObj);
+    const parsed = options.parse(parsedObj);
+    if (parsed == null) {
+      await recordOutcome(false);
+      log('構造化LLM: JSONスキーマ検証に失敗しました');
+      return null;
+    }
+    await recordOutcome(true);
+    return parsed;
   } catch (err: unknown) {
+    await recordOutcome(false);
     log(
       `構造化LLM検証エラー: ${err instanceof Error ? err.message : String(err)}`
     );

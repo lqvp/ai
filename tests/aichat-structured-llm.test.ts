@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -185,5 +185,26 @@ describe('callStructuredJson', () => {
     });
 
     expect(res).toEqual({ ok: true });
+  });
+
+  it('counts malformed structured JSON as an LLM failure outcome', async () => {
+    nextResponse = {
+      choices: [{ message: { content: 'not-json-at-all' } }],
+    };
+
+    const res = await callStructuredJson<{ ok: boolean }>({
+      provider: 'openai',
+      openaiConfig: { baseUrl, model: 'local-glm' },
+      system: 'sys',
+      user: 'usr',
+      maxTokens: 256,
+      parse: (obj) => (typeof obj.ok === 'boolean' ? { ok: obj.ok } : null),
+    });
+
+    expect(res).toBeNull();
+    const usage = JSON.parse(
+      readFileSync(join(memoryDir, 'aichat-llm-usage.json'), 'utf8')
+    ) as { consecutiveErrors: number };
+    expect(usage.consecutiveErrors).toBe(1);
   });
 });

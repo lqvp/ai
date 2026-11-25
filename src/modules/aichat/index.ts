@@ -377,12 +377,7 @@ export default class extends Module {
     const nowMs = Date.now();
     const expired = this.history.findExpired(nowMs);
     for (const doc of expired) {
-      if (
-        !doc.fromMention &&
-        doc.ownerAcct &&
-        doc.ownerResponded !== true &&
-        (doc.history?.length ?? 0) <= 2
-      ) {
+      if (!doc.fromMention && doc.ownerAcct && doc.ownerResponded !== true) {
         const backoffMs =
           (config.aichat?.engagement?.noResponseBackoffMinutes ?? 720) *
           MINUTES_TO_MS;
@@ -510,14 +505,14 @@ export default class extends Module {
 
   private async checkPreLlmIgnore(msg: Message): Promise<boolean> {
     const isMaster = this.isMasterUser(msg);
-    if (isMaster) return false;
     if (isBlockedAichatUser(msg.user)) return true;
     const friend = this.ai.lookupFriend(msg.userId);
     const entry = await this.affinityStore.getEntry(msg.user, {
-      isMaster: false,
+      isMaster,
       initialLoveSeed: friend?.love,
     });
     if (entry.optedOut) return true;
+    if (isMaster) return false;
     if (config.aichat?.affinity?.enabled === false) return false;
     return this.affinityStore.getTier(entry.score, false) === 'ignore';
   }
@@ -694,6 +689,11 @@ export default class extends Module {
       const engagementResult = await this.handleEngagementCommand(msg);
       if (engagementResult) return engagementResult;
 
+      if (await this.checkPreLlmIgnore(msg)) {
+        this.log(`応答停止/好感度しきい値のため応答をスキップ: ${msg.userId}`);
+        return { reaction: null, immediate: true };
+      }
+
       const requireFollowing = config.aichat?.followingOnly !== false;
       if (
         requireFollowing &&
@@ -706,11 +706,6 @@ export default class extends Module {
             .reply('あなたはaichatを実行する権限がありません。')
             .catch(() => {});
         }
-        return { reaction: null, immediate: true };
-      }
-
-      if (await this.checkPreLlmIgnore(msg)) {
-        this.log(`好感度しきい値以下のため応答をスキップ: ${msg.userId}`);
         return { reaction: null, immediate: true };
       }
 
@@ -884,22 +879,6 @@ export default class extends Module {
           return false;
         }
 
-        const isBotInitiatedOwner =
-          !exist.fromMention && exist.ownerUserId === msg.userId;
-        const requireFollowing = config.aichat?.followingOnly !== false;
-        if (
-          requireFollowing &&
-          !this.isMasterUser(msg) &&
-          !isBotInitiatedOwner &&
-          !(await this.isFollowing(msg.userId))
-        ) {
-          this.log('The user is not following me: ' + msg.userId);
-          await msg
-            .reply('あなたはaichatを実行する権限がありません。')
-            .catch(() => {});
-          return { reaction: null, immediate: true };
-        }
-
         if (await this.checkPreLlmIgnore(msg)) {
           const ownsSession =
             exist.ownerUserId === msg.userId ||
@@ -915,6 +894,22 @@ export default class extends Module {
               `好感度しきい値以下の第三者入力を無視します: ${msg.userId}`
             );
           }
+          return { reaction: null, immediate: true };
+        }
+
+        const isBotInitiatedOwner =
+          !exist.fromMention && exist.ownerUserId === msg.userId;
+        const requireFollowing = config.aichat?.followingOnly !== false;
+        if (
+          requireFollowing &&
+          !this.isMasterUser(msg) &&
+          !isBotInitiatedOwner &&
+          !(await this.isFollowing(msg.userId))
+        ) {
+          this.log('The user is not following me: ' + msg.userId);
+          await msg
+            .reply('あなたはaichatを実行する権限がありません。')
+            .catch(() => {});
           return { reaction: null, immediate: true };
         }
 

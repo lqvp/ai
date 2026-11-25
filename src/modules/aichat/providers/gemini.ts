@@ -2,6 +2,7 @@ import got from 'got';
 import config from '@/config/index.js';
 import type Message from '@/message.js';
 import { isPrivateUrl } from '@/utils/private-url.js';
+import { acquireLlmCallBudget } from '../llm-usage-guard.js';
 import {
   buildBaseInstruction,
   buildGeminiContents,
@@ -132,6 +133,7 @@ export async function genTextByGeminiDetailed(
   }
 
   let resData: GeminiApiJson;
+  const recordOutcome = await acquireLlmCallBudget(ctx.log);
   try {
     resData = await got
       .post(aiChat.api, {
@@ -143,7 +145,9 @@ export async function genTextByGeminiDetailed(
         timeout: { request: 60_000 },
       })
       .json<GeminiApiJson>();
+    await recordOutcome(true);
   } catch (err: unknown) {
+    await recordOutcome(false);
     ctx.log('Error By Call Gemini');
     let errorCode: number | null = null;
     let errorMessage: string | null = null;

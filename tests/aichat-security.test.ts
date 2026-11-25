@@ -23,6 +23,7 @@ let nextOpenaiReply = '';
 let lastOpenaiRequestBody: Record<string, unknown> | null = null;
 let openaiRequestBodies: Array<Record<string, unknown>> = [];
 const tempDirs: string[] = [];
+let memoryDir = '';
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -57,10 +58,12 @@ beforeAll(async () => {
   const { port } = server.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${port}`;
 
+  memoryDir = mkdtempSync(join(tmpdir(), 'ai-aichat-security-'));
   initConfig(
     resolveConfig({
       host: baseUrl,
       i: 'token',
+      memoryDir,
       master: 'admin',
       masterUserId: 'master-uid',
       aiProvider: {
@@ -74,6 +77,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  rmSync(memoryDir, { recursive: true, force: true });
 });
 
 describe('Security invariants', () => {
@@ -194,6 +198,55 @@ describe('Security invariants', () => {
     expect(JSON.stringify(openaiRequestBodies[0].messages)).not.toContain(
       '"role":"tool"'
     );
+  });
+
+  it('enforces the LLM daily budget for each OpenAI API request round', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-openai-budget-'));
+    tempDirs.push(dir);
+    initConfig(
+      resolveConfig({
+        host: baseUrl,
+        i: 'token',
+        memoryDir: dir,
+        aiProvider: {
+          provider: 'openai',
+          openai: { baseUrl, model: 'test-model' },
+        },
+        aichat: { llmBudget: { maxCallsPerDay: 1 } },
+      })
+    );
+    openaiRequestBodies = [];
+    nextOpenaiReply = '';
+
+    const ctx: ProviderContext = {
+      log: () => {},
+      isMasterUser: () => false,
+      isYoutubeUrl: () => false,
+      collectUrlInfo: async () => ({
+        youtubeURLs: [],
+        hasYoutubeUrl: false,
+        fallbackUrlInfo: '',
+      }),
+      formatTimelineContext: () => '',
+    };
+
+    await expect(
+      genTextByOpenaiDetailed(
+        {
+          question: '返答して',
+          prompt: 'sys',
+          api: baseUrl,
+          key: '',
+          fromMention: true,
+          allowWebTools: false,
+        },
+        [],
+        undefined,
+        ctx
+      )
+    ).rejects.toMatchObject({ name: 'LlmBudgetBlockedError' });
+    // 1回目で空応答でも、最終応答の再取得は残り予算0なので送信しない
+    expect(openaiRequestBodies).toHaveLength(1);
   });
 
   it('blocks private/loopback/metadata URLs in jinaRead', async () => {
