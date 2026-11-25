@@ -764,4 +764,71 @@ describe('KiatsuModule (index.ts)', () => {
 
     mod.dispose();
   });
+
+  it('pressure_msl の欠測（ΔP3h=null）が連続した場合は回復扱いせず監視停止へ移行し、有効値取得後にのみ再開通知を出す', async () => {
+    const fetchSpy = vi
+      .spyOn(openMeteo, 'fetchForecast')
+      .mockImplementation(async () =>
+        buildForecastAt(new Date(), null, { currentNull: true })
+      );
+
+    const { mod, posts } = createHarness({
+      maxErrorRetries: 0,
+      updateIntervalMs: 600_000,
+      errorCooldownMs: 650_000,
+    });
+    mod.getHooks();
+
+    // 1回目の欠測は単発として許容
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toHaveLength(0);
+
+    // 2回目の連続欠測で停止バックオフへ移行
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain('一時停止しました');
+
+    // クールダウン明け初回もまだ欠測なら「再開しました」を誤投稿しない
+    await vi.advanceTimersByTimeAsync(650_000);
+    expect(posts).toHaveLength(1);
+
+    // 次の評価で有効な ΔP3h が得られた時点で初めて「再開しました」を投稿する
+    fetchSpy.mockImplementation(async () => buildForecastAt(new Date(), -0.6));
+    await vi.advanceTimersByTimeAsync(550_000);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toContain('気圧監視を再開しました');
+
+    mod.dispose();
+  });
+
+  it('画像アップロード成功後に message.reply が失敗した場合は孤立しないようドライブ画像を削除する', async () => {
+    vi.spyOn(openMeteo, 'fetchForecast').mockResolvedValueOnce(
+      buildForecastAt(new Date(), -1.1)
+    );
+
+    const { mod, api, upload, logs } = createHarness({
+      locationName: '高崎市',
+    });
+    upload.mockResolvedValueOnce({ id: 'file-orphan', name: 'kiatsu.png' });
+    api.mockRejectedValueOnce(new Error('drive delete error'));
+
+    const hooks = mod.getHooks();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const { message, reply } = makeMentionMessage();
+    reply.mockRejectedValueOnce(new Error('notes/create failed'));
+    await hooks.mentionHook!(message);
+    await Promise.resolve();
+
+    expect(api).toHaveBeenCalledWith('drive/files/delete', {
+      fileId: 'file-orphan',
+    });
+    expect(
+      logs.some((l) =>
+        l.includes('不要になった予報画像の削除に失敗しました: file-orphan')
+      )
+    ).toBe(true);
+
+    mod.dispose();
+  });
 });

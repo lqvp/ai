@@ -206,8 +206,8 @@ export default class extends Module<KiatsuData> {
 
   private errorCount = 0;
 
-  /** 現在時刻の予報点が見つからない状態が連続した回数。単発は許容し、連続時は障害扱いする。 */
-  private consecutiveMissingHours = 0;
+  /** 現在時刻の予報点欠落または ΔP3h 欠測が連続した回数。単発は許容し、連続時は障害扱いする。 */
+  private consecutiveMissingData = 0;
 
   /** 一時停止中は定期評価を素通りさせる。クールダウン中の再試行を防ぐ。 */
   private suspended = false;
@@ -337,7 +337,7 @@ export default class extends Module<KiatsuData> {
       this.log('気圧データの取得に失敗しました。');
       console.warn(error);
       if (countErrors) {
-        this.consecutiveMissingHours = 0;
+        this.consecutiveMissingData = 0;
         await this.handleError();
       }
       return;
@@ -355,8 +355,8 @@ export default class extends Module<KiatsuData> {
         `現在時刻 (${formatLocalHourKey(now)}) 付近の気圧データがありません。`
       );
       if (countErrors) {
-        this.consecutiveMissingHours++;
-        if (this.consecutiveMissingHours >= 2) {
+        this.consecutiveMissingData++;
+        if (this.consecutiveMissingData >= 2) {
           await this.handleError();
         }
       }
@@ -364,7 +364,6 @@ export default class extends Module<KiatsuData> {
     }
 
     this.lastFailedFetchAtMs = null;
-    this.consecutiveMissingHours = 0;
 
     // 使える時刻が見つかってから差し替える。先に保持すると、開始位置だけ
     // 古いまま新しい予報を描き、過去の列を「今」として出すことになる。
@@ -379,6 +378,7 @@ export default class extends Module<KiatsuData> {
     this.latestDelta3h = delta3h;
     this.latestObservedAtMs = parseLocalHourMs(observedAt);
     if (delta3h !== null) {
+      this.consecutiveMissingData = 0;
       this.lastAlertEvaluatedAtMs = now.getTime();
     }
 
@@ -418,7 +418,16 @@ export default class extends Module<KiatsuData> {
     }
 
     if (countErrors) {
-      await this.onRecovered();
+      if (delta3h === null) {
+        // pressure_msl の欠測が単発なら様子を見るが、連続して ΔP3h を算出できない場合は
+        // トレンド監視が機能していないため回復扱いせず失敗カウントへ進める。
+        this.consecutiveMissingData++;
+        if (this.consecutiveMissingData >= 2) {
+          await this.handleError();
+        }
+      } else {
+        await this.onRecovered();
+      }
     }
   }
 
@@ -601,7 +610,7 @@ export default class extends Module<KiatsuData> {
     this.later(backoffMs, () => {
       // 再開時にカウントを戻さないと、再開後の1回の失敗や単発の時刻ずれでまた閾値に達する。
       this.errorCount = 0;
-      this.consecutiveMissingHours = 0;
+      this.consecutiveMissingData = 0;
       this.suspended = false;
       // 「再開しました」は取得に成功した時点で出す。
       this.pendingResumeNotice = true;
@@ -906,6 +915,9 @@ export default class extends Module<KiatsuData> {
     } catch (error) {
       this.log('メンションへの返信に失敗しました。');
       console.warn(error);
+      if (replyFile !== undefined) {
+        void this.deleteDriveFileBestEffort(replyFile.id);
+      }
     }
 
     return true;
