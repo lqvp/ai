@@ -511,8 +511,9 @@ describe('aichat contextHook branching and ignore boundaries', () => {
   });
 
   it('keeps a session alive past its original expiry while generation is in flight', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-11-24T12:00:00Z'));
+    const nowSpy = vi
+      .spyOn(Date, 'now')
+      .mockReturnValue(Date.parse('2026-11-24T12:00:00Z'));
 
     const dir = createTempDir();
     const db = new loki('context-active-generation-test');
@@ -559,7 +560,7 @@ describe('aichat contextHook branching and ignore boundaries', () => {
       );
       await started;
 
-      vi.setSystemTime(startMs + 2000);
+      nowSpy.mockReturnValue(startMs + 2000);
       (
         mod as unknown as { sweepExpiredSessions: () => void }
       ).sweepExpiredSessions();
@@ -570,7 +571,7 @@ describe('aichat contextHook branching and ignore boundaries', () => {
     } finally {
       releaseLlm?.();
       mod.dispose();
-      vi.useRealTimers();
+      nowSpy.mockRestore();
     }
   });
 });
