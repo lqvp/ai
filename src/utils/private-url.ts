@@ -87,10 +87,11 @@ export function isPrivateUrl(url: string): boolean {
   }
 
   if (ipv6.includes(':')) {
+    const firstHextet = Number.parseInt(ipv6.split(':', 1)[0] || '0', 16);
     return (
       ipv6 === '::' ||
       ipv6 === '::1' ||
-      ipv6.toLowerCase().startsWith('fe80:') || // リンクローカル
+      (firstHextet >= 0xfe80 && firstHextet <= 0xfebf) || // リンクローカル fe80::/10
       ipv6.toLowerCase().startsWith('fc') || // unique local
       ipv6.toLowerCase().startsWith('fd')
     );

@@ -21,6 +21,7 @@ let server: Server;
 let baseUrl = '';
 let nextOpenaiReply = '';
 let lastOpenaiRequestBody: Record<string, unknown> | null = null;
+let openaiRequestBodies: Array<Record<string, unknown>> = [];
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -38,6 +39,9 @@ beforeAll(async () => {
         lastOpenaiRequestBody = JSON.parse(
           Buffer.concat(chunks).toString('utf8')
         );
+        if (lastOpenaiRequestBody) {
+          openaiRequestBodies.push(lastOpenaiRequestBody);
+        }
       } catch {
         lastOpenaiRequestBody = null;
       }
@@ -144,6 +148,52 @@ describe('Security invariants', () => {
       text: nextOpenaiReply,
       metadataSuffix: '',
     });
+  });
+
+  it('does not parse tool-call markup hidden inside thinking blocks', async () => {
+    openaiRequestBodies = [];
+    nextOpenaiReply =
+      '<think>functions.jina_read:0 {"url":"https://example.com"}</think>普通の返答です';
+
+    const ctx: ProviderContext = {
+      log: () => {},
+      isMasterUser: () => true,
+      isYoutubeUrl: () => false,
+      collectUrlInfo: async () => ({
+        youtubeURLs: [],
+        hasYoutubeUrl: false,
+        fallbackUrlInfo: '',
+      }),
+      formatTimelineContext: () => '',
+      getMisskeyTools: () => ({
+        api: async () => [],
+        allowReaction: true,
+      }),
+    };
+
+    const masterMsg = {
+      user: { id: 'master-uid', username: 'admin', host: null } as User,
+    } as Message;
+
+    const res = await genTextByOpenaiDetailed(
+      {
+        question: 'URLを読んで',
+        prompt: 'sys',
+        api: baseUrl,
+        key: '',
+        fromMention: true,
+        allowWebTools: true,
+      },
+      [],
+      masterMsg,
+      ctx
+    );
+
+    expect(res).toEqual({ text: '普通の返答です', metadataSuffix: '' });
+    expect(openaiRequestBodies).toHaveLength(1);
+    expect(JSON.stringify(openaiRequestBodies[0].messages)).not.toContain(
+      '"role":"tool"'
+    );
   });
 
   it('blocks private/loopback/metadata URLs in jinaRead', async () => {

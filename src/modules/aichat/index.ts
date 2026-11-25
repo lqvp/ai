@@ -237,6 +237,7 @@ export default class extends Module {
       subscribeReply: (key, isChat, noteId, data) =>
         this.subscribeReply(key, isChat, noteId, data),
       postNotPublic: config.postNotPublic,
+      affinityEnabled: config.aichat?.affinity?.enabled !== false,
       config: config.aichat?.reactionFollowUp,
       log: (m) => this.log(m),
     });
@@ -708,6 +709,10 @@ export default class extends Module {
   @bindThis
   private async contextHook(key: string | null, msg: Message, data?: unknown) {
     this.log('contextHook...');
+    if (!msg.isChat && msg.replyId) {
+      // 追いリプ待機中の本文返信を即時記録し、遅延送信との競合を止める
+      this.reactionFollowUp.markUserReply(msg.replyId, msg.userId);
+    }
     if (this.inFlightNoteIds.has(msg.id)) {
       return { reaction: null, immediate: true };
     }
@@ -716,39 +721,39 @@ export default class extends Module {
     try {
       const ctxData = (data ?? {}) as {
         sessionId?: string;
-        historyLength?: number;
       };
       const sessionId = ctxData.sessionId ?? key ?? undefined;
-
-      // チャットモードで終了コマンドが送られた場合
-      if (
-        msg.isChat &&
-        msg.text != null &&
-        (msg.includes(['aichat 終了']) ||
-          msg.includes(['aichat 終わり']) ||
-          msg.includes(['aichat やめる']) ||
-          msg.includes(['aichat 止めて']))
-      ) {
-        const exist =
-          (sessionId ? this.history.findBySessionId(sessionId) : null) ??
-          this.history.findChat(msg.userId);
-        if (exist != null) {
-          this.history.remove(exist);
-          if (key != null) this.unsubscribeReply(key);
-          if (exist.sessionId && exist.sessionId !== key) {
-            this.unsubscribeReply(exist.sessionId);
-          }
-          await msg
-            .reply(
-              '藍チャットを終了しました。また何かあればお声がけくださいね！'
-            )
-            .catch(() => {});
-          return { reaction: 'like' };
-        }
-      }
-
       const lockKey = sessionId ?? (msg.isChat ? `chat:${msg.userId}` : msg.id);
+
       return await this.runWithSessionLock(lockKey, async () => {
+        // チャットモードで終了コマンドが送られた場合。
+        // 進行中ターンと同じセッションロックを取ってから履歴を削除する。
+        if (
+          msg.isChat &&
+          msg.text != null &&
+          (msg.includes(['aichat 終了']) ||
+            msg.includes(['aichat 終わり']) ||
+            msg.includes(['aichat やめる']) ||
+            msg.includes(['aichat 止めて']))
+        ) {
+          const endingSession =
+            (sessionId ? this.history.findBySessionId(sessionId) : null) ??
+            this.history.findChat(msg.userId);
+          if (endingSession != null) {
+            this.history.remove(endingSession);
+            if (key != null) this.unsubscribeReply(key);
+            if (endingSession.sessionId && endingSession.sessionId !== key) {
+              this.unsubscribeReply(endingSession.sessionId);
+            }
+            await msg
+              .reply(
+                '藍チャットを終了しました。また何かあればお声がけくださいね！'
+              )
+              .catch(() => {});
+            return { reaction: 'like' };
+          }
+        }
+
         let exist: AiChatHist | null = sessionId
           ? this.history.findBySessionId(sessionId)
           : null;
@@ -796,35 +801,60 @@ export default class extends Module {
         }
 
         if (await this.checkPreLlmIgnore(msg)) {
-          if (key != null) this.unsubscribeReply(key);
-          if (exist.sessionId && exist.sessionId !== key) {
-            this.unsubscribeReply(exist.sessionId);
+          const ownsSession =
+            exist.ownerUserId === msg.userId ||
+            (msg.isChat && exist.chatUserId === msg.userId);
+          if (ownsSession) {
+            if (key != null) this.unsubscribeReply(key);
+            if (exist.sessionId && exist.sessionId !== key) {
+              this.unsubscribeReply(exist.sessionId);
+            }
+            this.history.remove(exist);
+          } else {
+            this.log(
+              `好感度しきい値以下の第三者入力を無視します: ${msg.userId}`
+            );
           }
-          this.history.remove(exist);
           return { reaction: null, immediate: true };
         }
 
-        // ノート上で別ユーザーから分岐返信、または古いターンへ分岐返信が来た場合は新セッションへ分岐する
-        const currentLen = exist.history?.length ?? 0;
-        const isBranch =
-          !msg.isChat &&
-          ((exist.ownerUserId != null && exist.ownerUserId !== msg.userId) ||
-            (ctxData.historyLength != null &&
-              ctxData.historyLength !== currentLen));
+        // ノート上で別ユーザーからの返信、または古いターンへの返信が来た場合は新セッションへ分岐する。
+        // 履歴長ではなく返信先ノートIDに紐付けたスナップショットを使い、履歴上限到達後の取り違えを防ぐ。
+        const replyTargetId = !msg.isChat ? (msg.replyId ?? null) : null;
+        const latestPostId = exist.latestPostId ?? exist.postId;
+        const isDifferentUser =
+          exist.ownerUserId != null && exist.ownerUserId !== msg.userId;
+        const isOldTurnReply = Boolean(
+          replyTargetId && replyTargetId !== latestPostId
+        );
+        const isBranch = Boolean(
+          replyTargetId && (isDifferentUser || isOldTurnReply)
+        );
 
-        const targetSession: AiChatHist = isBranch
-          ? {
-              ...exist,
-              sessionId: randomUUID(),
-              postIds: [],
-              ownerUserId: msg.userId,
-              followUpUsed: false,
-              history: (exist.history ?? []).slice(
-                0,
-                ctxData.historyLength ?? currentLen
-              ),
-            }
-          : exist;
+        let targetSession = exist;
+        if (isBranch && replyTargetId) {
+          const snapshot = exist.historySnapshots?.[replyTargetId];
+          const baseHistory =
+            snapshot ??
+            (replyTargetId === latestPostId ? exist.history : undefined);
+          if (!baseHistory) {
+            this.log(
+              `返信先ターン(${replyTargetId})の履歴スナップショットが保持範囲外のため分岐しません`
+            );
+            this.ai.repos.contexts.removeByNoteId(this.name, replyTargetId);
+            return { reaction: null, immediate: true };
+          }
+
+          targetSession = {
+            ...exist,
+            sessionId: randomUUID(),
+            postIds: [],
+            ownerUserId: msg.userId,
+            followUpUsed: false,
+            history: baseHistory.map((item) => ({ ...item })),
+            historySnapshots: {},
+          };
+        }
 
         return await this.executeChatTurn(targetSession, msg);
       });

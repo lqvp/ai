@@ -60,6 +60,12 @@ export type ChatHandleResult =
 
 const MAX_ACTIVE_POST_IDS = 3;
 
+function cloneHistoryItems<T extends { role: string; content: string }>(
+  items: T[]
+): T[] {
+  return items.map((item) => ({ ...item }));
+}
+
 /**
  * メンション / リプライ / チャット1件に対する返信生成〜投稿〜履歴コミットを担当する。
  */
@@ -76,9 +82,7 @@ export class ChatHandler {
   ): Promise<ChatHandleResult> {
     const { ai, history, log } = this.deps;
 
-    const explicitlyDisabledChat =
-      config.aichat?.enabled === undefined &&
-      config.gemini?.chat?.enabled === false;
+    const explicitlyDisabledChat = config.gemini?.chat?.enabled === false;
     if (exist.fromMention && explicitlyDisabledChat) {
       log('チャット機能が無効のためメンションをスキップします');
       return { status: 'failed' };
@@ -275,6 +279,13 @@ export class ChatHandler {
       }
     }
 
+    const nextSnapshots: NonNullable<AiChatHist['historySnapshots']> = {};
+    for (const postId of nextPostIds) {
+      const snapshot = exist.historySnapshots?.[postId];
+      if (snapshot) nextSnapshots[postId] = cloneHistoryItems(snapshot);
+    }
+    nextSnapshots[replyId] = cloneHistoryItems(historyItems);
+
     exist.sessionId = sessionId;
     exist.postId = replyId;
     exist.latestPostId = replyId;
@@ -283,6 +294,7 @@ export class ChatHandler {
     exist.expiresAt = nowMs + TIMEOUT_TIME;
     exist.api = aiChat.api;
     exist.history = historyItems;
+    exist.historySnapshots = nextSnapshots;
     exist.youtubeUrls = youtubeUrls.length > 0 ? youtubeUrls : undefined;
     exist.isChat = msg.isChat;
     exist.chatUserId = msg.isChat ? msg.userId : undefined;

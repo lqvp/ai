@@ -15,6 +15,7 @@ import {
   type AiChatHist,
   ChatHistoryRepository,
 } from '../src/modules/aichat/history-repository.js';
+import AiChatModule from '../src/modules/aichat/index.js';
 import { PlaybookLoader } from '../src/modules/aichat/playbook.js';
 import { ReactionFollowUpHandler } from '../src/modules/aichat/reaction-followup.js';
 
@@ -70,6 +71,96 @@ function createFakeMessage(
       if (replyResult instanceof Error) throw replyResult;
       return replyResult;
     },
+    ...overrides,
+  } as unknown as Message;
+}
+
+function installModuleForContextTest(dir: string, db: loki) {
+  initConfig(
+    resolveConfig({
+      host: 'https://example.com',
+      i: 'token',
+      master: 'admin',
+      memoryDir: dir,
+      gemini: { enabled: true, apiKey: 'g-key', chat: { enabled: true } },
+      aichat: {
+        enabled: true,
+        followingOnly: false,
+        wander: { enabled: false },
+        affinity: { enabled: false },
+        reactionFollowUp: { enabled: false },
+      },
+    })
+  );
+
+  const contexts = new ContextRepository(
+    db.getCollection('contexts') ??
+      db.addCollection('contexts', { indices: ['noteId', 'userId', 'module'] })
+  );
+  const fakeAi = {
+    account: { id: 'bot-id', username: 'ai', name: '藍' },
+    log: () => {},
+    repos: {
+      contexts,
+      moduleData: {
+        ensure: () => ({ module: 'aichat', data: {} }),
+        save: () => {},
+      },
+    },
+    getCollection: <T extends object>(
+      name: string,
+      opts?: { indices?: (keyof T)[] }
+    ) => db.getCollection<T>(name) ?? db.addCollection<T>(name, opts),
+    relationship: { isMaster: () => false, isFollowing: async () => true },
+    reactions: { react: async () => true },
+    lookupFriend: () => null,
+    subscribeReply: (
+      module: { name: string },
+      key: string | null,
+      isChat: boolean,
+      id: string,
+      data?: unknown
+    ) =>
+      contexts.subscribe({
+        isChat,
+        ...(isChat ? { userId: id } : { noteId: id }),
+        module: module.name,
+        key,
+        data,
+      }),
+    unsubscribeReply: (module: { name: string }, key: string | null) =>
+      contexts.removeByKey(module.name, key),
+    connection: {
+      useSharedConnection: () => ({ on: () => {}, dispose: () => {} }),
+    },
+    api: async () => ({ files: [] }),
+    post: async () => ({ id: 'unused-post' }),
+    sendMessage: async () => undefined,
+  } as unknown as 藍;
+
+  const mod = new AiChatModule();
+  mod.init(fakeAi);
+  const hooks = mod.getHooks();
+  return { mod, hooks, contexts };
+}
+
+function createReplyMessage(overrides: Partial<Message>): Message {
+  return {
+    id: 'reply-msg-1',
+    userId: 'u-alice',
+    user: {
+      id: 'u-alice',
+      username: 'alice',
+      host: null,
+      isBot: false,
+    } as User,
+    text: '続きです',
+    extractedText: '続きです',
+    isChat: false,
+    replyId: 'bot-reply-1',
+    includes: () => false,
+    reply: async () => ({ id: 'unused-reply' }),
+    friend: null,
     ...overrides,
   } as unknown as Message;
 }
@@ -148,6 +239,11 @@ describe('ChatHandler lifecycle, sentinels, image-only, and hashtags', () => {
 
     // 画像ファイルありのケース（quotedFiles 経由で添付）
     exist.postIds = ['p1', 'p2', 'p3'];
+    exist.historySnapshots = {
+      p1: [{ role: 'model', content: 'old-1' }],
+      p2: [{ role: 'model', content: 'old-2' }],
+      p3: [{ role: 'model', content: 'old-3' }],
+    };
     exist.quotedFiles = [{ type: 'image/png', base64: 'AAAA' }];
     let postedText = '';
     const msgImg = createFakeMessage('', { id: 'reply-4' });
@@ -167,7 +263,81 @@ describe('ChatHandler lifecycle, sentinels, image-only, and hashtags', () => {
     const saved = history.findBySessionId('sess-1');
     expect(saved?.history?.at(-1)?.content).toBe('画像ですね');
     expect(saved?.postIds).toEqual(['p2', 'p3', 'reply-4']);
+    expect(saved?.historySnapshots?.p1).toBeUndefined();
+    expect(saved?.historySnapshots?.p2).toEqual([
+      { role: 'model', content: 'old-2' },
+    ]);
+    expect(saved?.historySnapshots?.['reply-4']).toEqual(saved?.history);
     expect(removedContexts).toEqual(['p1']);
+  });
+
+  it('inserts a branched session copied from a Loki record as a separate document', () => {
+    const db = new loki('branch-insert-test');
+    const history = new ChatHistoryRepository(
+      db.addCollection<AiChatHist>('aichatHist', { indices: ['sessionId'] })
+    );
+
+    history.insert({
+      sessionId: 'sess-original',
+      postId: 'p1',
+      createdAt: 1,
+      type: 'gemini',
+      fromMention: true,
+      history: [{ role: 'user', content: 'hi' }],
+    });
+    const original = history.findBySessionId('sess-original');
+    expect(original).not.toBeNull();
+
+    const branch: AiChatHist = {
+      ...original!,
+      sessionId: 'sess-branch',
+      postIds: [],
+      ownerUserId: 'another-user',
+    };
+    expect(() => history.insert(branch)).not.toThrow();
+
+    expect(history.findBySessionId('sess-original')?.postId).toBe('p1');
+    expect(history.findBySessionId('sess-branch')?.ownerUserId).toBe(
+      'another-user'
+    );
+    expect(history.all()).toHaveLength(2);
+  });
+
+  it('honors gemini.chat.enabled=false even when aichat module is explicitly enabled', async () => {
+    initConfig(
+      resolveConfig({
+        host: 'https://example.com',
+        i: 'token',
+        master: 'admin',
+        gemini: { enabled: true, apiKey: 'g-key', chat: { enabled: false } },
+        aichat: { enabled: true },
+      })
+    );
+    const db = new loki('chat-disabled-test');
+    const history = new ChatHistoryRepository(
+      db.addCollection<AiChatHist>('aichatHist')
+    );
+    let llmCalled = false;
+    const handler = new ChatHandler({
+      ai: createFakeAi({ id: 'x' }) as unknown as 藍,
+      moduleName: 'aichat',
+      history,
+      log: () => {},
+      genTextDetailed: async () => {
+        llmCalled = true;
+        return { text: '応答', metadataSuffix: '' };
+      },
+      subscribeReply: () => {},
+      later: () => {},
+    });
+
+    const result = await handler.handle(
+      { postId: 'p1', createdAt: 0, type: 'gemini', fromMention: true },
+      createFakeMessage('aichat こんにちは', { id: 'x' })
+    );
+
+    expect(result.status).toBe('failed');
+    expect(llmCalled).toBe(false);
   });
 
   it('handles [[IGNORE]] and [[REACT_ONLY]] sentinels without posting', async () => {
@@ -206,6 +376,134 @@ describe('ChatHandler lifecycle, sentinels, image-only, and hashtags', () => {
     );
     expect(reactOnly.status).toBe('react_only');
     expect(replyCalled).toBe(false);
+  });
+});
+
+describe('aichat contextHook branching and ignore boundaries', () => {
+  it("does not delete another user's session when a low-affinity third party replies", async () => {
+    const dir = createTempDir();
+    const db = new loki('context-ignore-test');
+    const { mod, hooks } = installModuleForContextTest(dir, db);
+    const history = new ChatHistoryRepository(
+      db.getCollection<AiChatHist>('aichatHist')!
+    );
+    history.insert({
+      sessionId: 'sess-owner',
+      postId: 'bot-reply-1',
+      latestPostId: 'bot-reply-1',
+      postIds: ['bot-reply-1'],
+      createdAt: 1,
+      updatedAt: 1,
+      expiresAt: Date.now() + 60_000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: 'u-alice',
+      history: [{ role: 'model', content: '元の会話' }],
+    });
+
+    (
+      mod as unknown as {
+        checkPreLlmIgnore: (msg: Message) => Promise<boolean>;
+      }
+    ).checkPreLlmIgnore = async () => true;
+
+    const bobMsg = createReplyMessage({
+      id: 'bob-reply',
+      userId: 'u-bob',
+      user: {
+        id: 'u-bob',
+        username: 'bob',
+        host: null,
+        isBot: false,
+      } as User,
+    });
+    const result = await hooks.contextHook!('sess-owner', bobMsg, {
+      sessionId: 'sess-owner',
+    });
+
+    expect(result).toEqual({ reaction: null, immediate: true });
+    expect(history.findBySessionId('sess-owner')).not.toBeNull();
+    mod.dispose();
+  });
+
+  it('branches from the replied note snapshot instead of ambiguous history length', async () => {
+    const dir = createTempDir();
+    const db = new loki('context-branch-test');
+    const { mod, hooks } = installModuleForContextTest(dir, db);
+    const history = new ChatHistoryRepository(
+      db.getCollection<AiChatHist>('aichatHist')!
+    );
+    const firstTurn = [
+      { role: 'user', content: '最初の質問' },
+      { role: 'model', content: '最初の回答' },
+    ];
+    const currentTurn = [
+      ...firstTurn,
+      { role: 'user', content: '二つ目の質問' },
+      { role: 'model', content: '二つ目の回答' },
+    ];
+    history.insert({
+      sessionId: 'sess-branch-base',
+      postId: 'bot-reply-2',
+      latestPostId: 'bot-reply-2',
+      postIds: ['bot-reply-1', 'bot-reply-2'],
+      createdAt: 1,
+      updatedAt: 2,
+      expiresAt: Date.now() + 60_000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: 'u-alice',
+      history: currentTurn,
+      historySnapshots: {
+        'bot-reply-1': firstTurn,
+        'bot-reply-2': currentTurn,
+      },
+    });
+
+    const captured: AiChatHist[] = [];
+    (mod as unknown as { chatHandler: ChatHandler }).chatHandler = {
+      handle: async (hist: AiChatHist) => {
+        captured.push({
+          ...hist,
+          history: hist.history?.map((item) => ({ ...item })),
+        });
+        return { status: 'failed' };
+      },
+    } as unknown as ChatHandler;
+
+    const bobMsg = createReplyMessage({
+      id: 'bob-old-turn-reply',
+      userId: 'u-bob',
+      user: {
+        id: 'u-bob',
+        username: 'bob',
+        host: null,
+        isBot: false,
+      } as User,
+      replyId: 'bot-reply-1',
+    });
+    await hooks.contextHook!('sess-branch-base', bobMsg, {
+      sessionId: 'sess-branch-base',
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].sessionId).not.toBe('sess-branch-base');
+    expect(captured[0].ownerUserId).toBe('u-bob');
+    expect(captured[0].history).toEqual(firstTurn);
+    expect(captured[0].postIds).toEqual([]);
+
+    const aliceLatestMsg = createReplyMessage({
+      id: 'alice-latest-reply',
+      replyId: 'bot-reply-2',
+    });
+    await hooks.contextHook!('sess-branch-base', aliceLatestMsg, {
+      sessionId: 'sess-branch-base',
+    });
+
+    expect(captured).toHaveLength(2);
+    expect(captured[1].sessionId).toBe('sess-branch-base');
+    expect(captured[1].history).toEqual(currentTurn);
+    mod.dispose();
   });
 });
 
@@ -400,5 +698,52 @@ describe('ReactionFollowUpHandler', () => {
       '🎉'
     );
     expect(aborted).toBe(false);
+
+    // ユーザーの本文返信マーカーがある場合も、Bot投稿IDがまだ変わっていなくても中止する
+    history.insert({
+      sessionId: 'sess-f2',
+      postId: 'bot-note-2',
+      latestPostId: 'bot-note-2',
+      postIds: ['bot-note-2'],
+      createdAt: nowMs - 60_000,
+      updatedAt: nowMs - 60_000,
+      expiresAt: nowMs + 1_800_000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: 'u-alice',
+      history: [{ role: 'model', content: '別の会話' }],
+    });
+    handler.markUserReply('bot-note-2', alice.id);
+    const abortedByUserReply = await handler.executeFollowUp(
+      'sess-f2',
+      { id: 'bot-note-2', userId: 'bot-id', visibility: 'public' } as Note,
+      alice,
+      '🎉'
+    );
+    expect(abortedByUserReply).toBe(false);
+    expect(posts).toHaveLength(1);
+
+    // affinity 機能スイッチが無効なら、条件不成立の通知でも好感度微増を記録しない
+    const beforeDisabled = await affinityStore.getEntry(alice, {
+      isMaster: false,
+    });
+    const disabledAffinityHandler = new ReactionFollowUpHandler({
+      selfUserId: 'bot-id',
+      history,
+      affinityStore,
+      playbookLoader,
+      isMasterUser: () => false,
+      post: async () => ({ id: 'unused' }) as Note,
+      subscribeReply: () => {},
+      affinityEnabled: false,
+      config: { enabled: false },
+      now: () => nowMs,
+      rng: () => 0,
+    });
+    await disabledAffinityHandler.handleNotification(notif);
+    const afterDisabled = await affinityStore.getEntry(alice, {
+      isMaster: false,
+    });
+    expect(afterDisabled.score).toBe(beforeDisabled.score);
   });
 });

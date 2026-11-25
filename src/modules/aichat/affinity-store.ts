@@ -57,7 +57,13 @@ const REACTION_DEDUP_MAX = 500;
 const REACTION_DAILY_CAP = 3;
 const DAY_MS = 86_400_000;
 
-const VALID_ACCT_RE = /^@[a-z0-9_.-]+(?:@[a-z0-9.-]+)?$/;
+const VALID_USER_KEY_RE =
+  /^(?:@[a-z0-9_.-]+(?:@[a-z0-9.-]+)?|id:[a-z0-9][a-z0-9_-]*)$/;
+
+function collisionKeyForUserId(userId: string): string {
+  return `id:${userId.toLowerCase()}`;
+}
+
 const GENERIC_NOTE_RE =
   /^(?:なし|特になし|特にない|普通|優しい|良い人|いい人|会話した|不明|情報なし|none|null|n\/a|-)$/i;
 const INJECTION_NOTE_RE =
@@ -153,7 +159,7 @@ function normalizeAffinityFile(raw: unknown): AffinityFile {
   const users: Record<string, AffinityEntry> = {};
   for (const key of Object.keys(rawUsers)) {
     const normalizedKey = key.trim().toLowerCase();
-    if (!VALID_ACCT_RE.test(normalizedKey)) continue;
+    if (!VALID_USER_KEY_RE.test(normalizedKey)) continue;
     users[normalizedKey] = normalizeEntry(rawUsers[key]);
   }
 
@@ -281,7 +287,8 @@ export class AffinityStore {
             last: new Date(0).toISOString(),
           };
 
-      if (existing && existing.key !== targetAcct) {
+      const writeKey = this.resolveWriteKey(users, user, targetAcct);
+      if (existing && existing.key !== writeKey) {
         delete users[existing.key];
       }
 
@@ -336,7 +343,7 @@ export class AffinityStore {
         last: nowIso,
       };
 
-      users[targetAcct] = updated;
+      users[writeKey] = updated;
       return {
         next: { version: 1, users },
         result: updated,
@@ -369,7 +376,18 @@ export class AffinityStore {
       return false;
     }
 
-    const bumped = await this.store.update((file) => {
+    // 重複・日次上限の判定と記録は JsonFileStore の直列キュー内で行い、
+    // 同時到着したリアクションの両方が上限前の件数を読む競合を防ぐ。
+    return this.store.update((file) => {
+      this.pruneReactionDedup(nowMs);
+      if (this.reactionDedup.has(dedupKey)) {
+        return { next: file, result: false, write: false };
+      }
+      const serializedTodayCount = this.dailyReactionBumps.get(dayKey) ?? 0;
+      if (serializedTodayCount >= REACTION_DAILY_CAP) {
+        return { next: file, result: false, write: false };
+      }
+
       const users = cloneUsers(file.users);
       const existing = this.findEntryInUsers(users, user);
       const base: AffinityEntry = existing
@@ -389,7 +407,8 @@ export class AffinityStore {
         return { next: file, result: false, write: false };
       }
 
-      if (existing && existing.key !== targetAcct) {
+      const writeKey = this.resolveWriteKey(users, user, targetAcct);
+      if (existing && existing.key !== writeKey) {
         delete users[existing.key];
       }
 
@@ -397,7 +416,7 @@ export class AffinityStore {
         ? SCORE_MAX
         : clampInt(decayedScore + 1, SCORE_MIN, SCORE_MAX);
 
-      users[targetAcct] = {
+      users[writeKey] = {
         ...(user.id
           ? { userId: user.id }
           : base.userId
@@ -408,20 +427,21 @@ export class AffinityStore {
         last: new Date(nowMs).toISOString(),
       };
 
-      return { next: { version: 1, users }, result: true };
+      return {
+        next: { version: 1, users },
+        result: true,
+        commit: () => {
+          this.reactionDedup.set(dedupKey, nowMs);
+          this.dailyReactionBumps.set(dayKey, serializedTodayCount + 1);
+          // 日次マップの肥大化防止
+          if (this.dailyReactionBumps.size > 1000) {
+            const firstKey = this.dailyReactionBumps.keys().next().value;
+            if (firstKey !== undefined)
+              this.dailyReactionBumps.delete(firstKey);
+          }
+        },
+      };
     });
-
-    if (bumped) {
-      this.reactionDedup.set(dedupKey, nowMs);
-      this.dailyReactionBumps.set(dayKey, todayCount + 1);
-      // 日次マップの肥大化防止
-      if (this.dailyReactionBumps.size > 1000) {
-        const firstKey = this.dailyReactionBumps.keys().next().value;
-        if (firstKey !== undefined) this.dailyReactionBumps.delete(firstKey);
-      }
-    }
-
-    return bumped;
   }
 
   private seedScore(initialLoveSeed?: number): number {
@@ -475,9 +495,36 @@ export class AffinityStore {
     }
     const acct = normalizeAcct(user);
     if (Object.prototype.hasOwnProperty.call(users, acct)) {
-      return { key: acct, entry: users[acct] };
+      const entry = users[acct];
+      // 改名で空いた acct を別ユーザーが取得した場合、旧ユーザーの
+      // 好感度・メモを ID 不一致のまま引き継がない。userId を持たない
+      // 旧形式レコードだけは acct による移行対象として扱う。
+      if (user.id && entry.userId && entry.userId !== user.id) {
+        return null;
+      }
+      return { key: acct, entry };
     }
     return null;
+  }
+
+  /**
+   * 通常は現在の acct をキーに使う。改名先 acct が別 ID のレコードで
+   * 占有されている場合だけ、衝突避けの ID キーへ書き込む。
+   */
+  private resolveWriteKey(
+    users: Record<string, AffinityEntry>,
+    user: AffinityUserRef,
+    targetAcct: string
+  ): string {
+    const targetExisting = users[targetAcct];
+    const occupiedByOtherId = Boolean(
+      user.id && targetExisting?.userId && targetExisting.userId !== user.id
+    );
+    if (occupiedByOtherId && user.id) {
+      return collisionKeyForUserId(user.id);
+    }
+
+    return targetAcct;
   }
 
   private pruneReactionDedup(nowMs: number): void {

@@ -4,7 +4,10 @@ import type { Note, User } from '@/misskey/types.js';
 import { acct } from '@/utils/acct.js';
 import type { AffinityStore } from './affinity-store.js';
 import { DEFAULTS, MINUTES_TO_MS, TIMEOUT_TIME } from './constants.js';
-import type { ChatHistoryRepository } from './history-repository.js';
+import type {
+  AiChatHist,
+  ChatHistoryRepository,
+} from './history-repository.js';
 import type { PlaybookLoader } from './playbook.js';
 import {
   MISSKEY_FORMAT_CONSTRAINTS,
@@ -40,6 +43,8 @@ export type ReactionFollowUpDeps = {
     data?: unknown
   ) => void;
   postNotPublic?: boolean;
+  /** false の場合はリアクションによる好感度微増を行わない */
+  affinityEnabled?: boolean;
   config?: ReactionFollowUpConfig;
   log?: (message: string) => void;
   now?: () => number;
@@ -54,6 +59,7 @@ const RESTRICTED_VISIBILITIES = new Set(['specified', 'followers']);
 const CONVERSATION_ENDER_REACTIONS = new Set(['👍', '👌', '✅', '👀', 'like']);
 const FOLLOWUP_MAX_TOKENS = 256;
 const FOLLOWUP_TIMEOUT_MS = 15_000;
+const USER_REPLY_MARKER_TTL_MS = 60 * 60 * 1000;
 
 export function parseReactionFollowUpDecision(
   obj: Record<string, unknown>
@@ -79,11 +85,26 @@ export class ReactionFollowUpHandler {
   private readonly rng: () => number;
   private readonly userLastFollowUpAt = new Map<string, number>();
   private readonly pendingTimers = new Set<NodeJS.Timeout>();
+  private readonly userReplyMarkers = new Map<string, number>();
 
   constructor(private readonly deps: ReactionFollowUpDeps) {
     this.log = deps.log ?? (() => {});
     this.now = deps.now ?? (() => Date.now());
     this.rng = deps.rng ?? Math.random;
+  }
+
+  public markUserReply(noteId: string, userId: string): void {
+    const nowMs = this.now();
+    for (const [key, ts] of this.userReplyMarkers) {
+      if (nowMs - ts > USER_REPLY_MARKER_TTL_MS) {
+        this.userReplyMarkers.delete(key);
+      }
+    }
+    this.userReplyMarkers.set(`${noteId}:${userId}`, nowMs);
+  }
+
+  private hasUserReply(noteId: string, userId: string): boolean {
+    return this.userReplyMarkers.has(`${noteId}:${userId}`);
   }
 
   public dispose(): void {
@@ -104,7 +125,13 @@ export class ReactionFollowUpHandler {
     if (RESTRICTED_VISIBILITIES.has(note.visibility)) return false;
 
     const isMaster = this.deps.isMasterUser(reactor);
-    await this.deps.affinityStore.applyReactionBump(reactor, note.id, isMaster);
+    if (this.deps.affinityEnabled !== false) {
+      await this.deps.affinityStore.applyReactionBump(
+        reactor,
+        note.id,
+        isMaster
+      );
+    }
 
     const cfg = this.deps.config ?? {};
     if (cfg.enabled === false) return false;
@@ -186,7 +213,7 @@ export class ReactionFollowUpHandler {
       return false;
     }
     const latestId = session.latestPostId ?? session.postId;
-    if (latestId !== note.id) {
+    if (latestId !== note.id || this.hasUserReply(note.id, reactor.id)) {
       // 待機中にユーザーからテキスト返信が来たため追いリプは中止
       return false;
     }
@@ -234,7 +261,8 @@ export class ReactionFollowUpHandler {
     if (
       !fresh ||
       fresh.followUpUsed ||
-      (fresh.latestPostId ?? fresh.postId) !== note.id
+      (fresh.latestPostId ?? fresh.postId) !== note.id ||
+      this.hasUserReply(note.id, reactor.id)
     ) {
       return false;
     }
@@ -269,6 +297,15 @@ export class ReactionFollowUpHandler {
     const postIds = [...(fresh.postIds ?? [fresh.postId]), created.id].slice(
       -3
     );
+    const nextSnapshots: NonNullable<AiChatHist['historySnapshots']> = {};
+    for (const postId of postIds) {
+      const snapshot = fresh.historySnapshots?.[postId];
+      if (snapshot) {
+        nextSnapshots[postId] = snapshot.map((item) => ({ ...item }));
+      }
+    }
+    nextSnapshots[created.id] = nextHistory.map((item) => ({ ...item }));
+
     fresh.followUpUsed = true;
     fresh.postId = created.id;
     fresh.latestPostId = created.id;
@@ -276,6 +313,7 @@ export class ReactionFollowUpHandler {
     fresh.updatedAt = nowMs;
     fresh.expiresAt = nowMs + TIMEOUT_TIME;
     fresh.history = nextHistory;
+    fresh.historySnapshots = nextSnapshots;
     this.deps.history.update(fresh);
 
     const key = fresh.sessionId ?? sessionId;

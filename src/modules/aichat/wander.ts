@@ -491,6 +491,7 @@ export class WanderRunner {
       const target = picked[item.index];
       if (!target || !target.canReact) continue;
       if (reactedNoteSet.has(target.note.id)) continue;
+      if (reactedAccts.includes(target.acct)) continue;
 
       const isRemote = target.note.user.host != null;
       const validated = await this.deps.emojiCatalog.validateReaction(
@@ -510,7 +511,7 @@ export class WanderRunner {
       if (ok) {
         reactedNoteSet.add(target.note.id);
         actedNoteIds.push(target.note.id);
-        reactedAccts.push(target.acct);
+        if (!reactedAccts.includes(target.acct)) reactedAccts.push(target.acct);
         usedEmojis.push(finalEmoji);
         recentItems.push({
           at: nowIso,
@@ -572,6 +573,9 @@ export class WanderRunner {
               originalNoteId: target.note.id,
               ownerUserId: target.note.userId,
               history: historyItems,
+              historySnapshots: {
+                [created.id]: historyItems.map((item) => ({ ...item })),
+              },
             };
             this.deps.history.insert(record);
             this.deps.subscribeReply(sessionId, false, created.id, {
@@ -581,7 +585,10 @@ export class WanderRunner {
 
             if (
               decision.reply.reaction &&
-              !reactedNoteSet.has(target.note.id)
+              !reactedNoteSet.has(target.note.id) &&
+              reactedNoteSet.size < maxReactions &&
+              target.canReact &&
+              !reactedAccts.includes(target.acct)
             ) {
               const validatedReplyReaction =
                 await this.deps.emojiCatalog.validateReaction(
@@ -600,6 +607,9 @@ export class WanderRunner {
                 );
                 if (ok) {
                   reactedNoteSet.add(target.note.id);
+                  if (!reactedAccts.includes(target.acct)) {
+                    reactedAccts.push(target.acct);
+                  }
                   usedEmojis.push(validatedReplyReaction);
                 }
               }
@@ -652,6 +662,9 @@ export class WanderRunner {
             type: TYPE_GEMINI,
             fromMention: false,
             history: historyItems,
+            historySnapshots: {
+              [created.id]: historyItems.map((item) => ({ ...item })),
+            },
           };
           this.deps.history.insert(record);
           this.deps.subscribeReply(sessionId, false, created.id, {

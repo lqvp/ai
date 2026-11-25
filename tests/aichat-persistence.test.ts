@@ -1,15 +1,20 @@
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { JsonFileStore } from '../src/modules/aichat/json-file-store.js';
+import {
+  JsonFileStore,
+  JsonFileStoreError,
+} from '../src/modules/aichat/json-file-store.js';
 import { PlaybookLoader } from '../src/modules/aichat/playbook.js';
 
 type CounterDoc = {
@@ -122,16 +127,106 @@ describe('JsonFileStore', () => {
       now: () => 1700000000000,
     });
 
-    await store.update((cur) => ({
-      next: { ...cur, count: cur.count + 1 },
-      result: undefined,
-    }));
+    await expect(
+      store.update((cur) => ({
+        next: { ...cur, count: cur.count + 1 },
+        result: undefined,
+      }))
+    ).rejects.toThrow(JsonFileStoreError);
 
     expect(store.isCorrupted()).toBe(true);
     // 元の壊れたファイルは上書きされない
     expect(readFileSync(filePath, 'utf8')).toBe(corruptRaw);
     const files = readdirSync(dir);
     expect(files.some((f) => f.startsWith('state.json.bak.'))).toBe(true);
+  });
+
+  it('does not expose failed writes in memory and writes files as 0600', async () => {
+    const dir = createTempDir();
+    const filePath = join(dir, 'state.json');
+    const normalize = (raw: unknown): CounterDoc => {
+      const obj = (raw ?? {}) as Partial<CounterDoc>;
+      return {
+        count: typeof obj.count === 'number' ? obj.count : 0,
+        items: Array.isArray(obj.items) ? (obj.items as string[]) : [],
+      };
+    };
+    const store = new JsonFileStore<CounterDoc>({
+      filePath,
+      createDefault: () => ({ count: 0, items: [] }),
+      normalize,
+    });
+
+    await store.update((cur) => ({
+      next: { ...cur, count: 1 },
+      result: undefined,
+    }));
+    expect(statSync(filePath).mode & 0o777).toBe(0o600);
+
+    chmodSync(dir, 0o500);
+    try {
+      await expect(
+        store.update((cur) => {
+          // 永続化前に現在値を直接変更しても、失敗時は公開状態へ残らないこと
+          cur.count += 1;
+          return { next: cur, result: undefined };
+        })
+      ).rejects.toThrow();
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+
+    expect((await store.load()).count).toBe(1);
+    expect(
+      (JSON.parse(readFileSync(filePath, 'utf8')) as CounterDoc).count
+    ).toBe(1);
+
+    // 失敗した +1 を引きずらず、再試行は 1 -> 2 にだけ進む
+    await store.update((cur) => {
+      cur.count += 1;
+      return { next: cur, result: undefined };
+    });
+    expect(
+      (JSON.parse(readFileSync(filePath, 'utf8')) as CounterDoc).count
+    ).toBe(2);
+  });
+
+  it('aborts updates when an existing file cannot be read', async () => {
+    const dir = createTempDir();
+    const filePath = join(dir, 'state.json');
+    writeFileSync(
+      filePath,
+      JSON.stringify({ count: 7, items: ['kept'] }),
+      'utf8'
+    );
+
+    const store = new JsonFileStore<CounterDoc>({
+      filePath,
+      createDefault: () => ({ count: 0, items: [] }),
+      normalize: (raw) => {
+        const obj = (raw ?? {}) as Partial<CounterDoc>;
+        return {
+          count: typeof obj.count === 'number' ? obj.count : 0,
+          items: Array.isArray(obj.items) ? (obj.items as string[]) : [],
+        };
+      },
+    });
+
+    chmodSync(filePath, 0o000);
+    try {
+      await expect(
+        store.update((cur) => ({
+          next: { ...cur, count: 99 },
+          result: undefined,
+        }))
+      ).rejects.toThrow(JsonFileStoreError);
+    } finally {
+      chmodSync(filePath, 0o600);
+    }
+
+    expect(
+      (JSON.parse(readFileSync(filePath, 'utf8')) as CounterDoc).count
+    ).toBe(7);
   });
 
   it('strips __proto__, constructor and prototype keys on load', async () => {

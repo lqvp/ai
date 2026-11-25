@@ -229,10 +229,11 @@ export async function genTextByOpenaiDetailed(
       ? assistantMessage.tool_calls
       : undefined;
 
-    let contentText: string =
+    let contentText: string = stripThinkingTags(
       typeof assistantMessage.content === 'string'
         ? assistantMessage.content
-        : '';
+        : ''
+    );
 
     let effectiveToolCalls: OpenaiToolCall[] =
       allowedTools.size > 0 ? (structuredToolCalls ?? []) : [];

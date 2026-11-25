@@ -293,6 +293,16 @@ function validateAndResolve(input: RawConfig): Config {
   if (typeof raw.i !== 'string' || raw.i.trim() === '') {
     issues.push('i (アクセストークン) は必須です');
   }
+  if (raw.masterUserId !== undefined) {
+    if (
+      typeof raw.masterUserId !== 'string' ||
+      raw.masterUserId.trim() === ''
+    ) {
+      issues.push('masterUserId は空でない文字列で指定してください');
+    } else {
+      raw.masterUserId = raw.masterUserId.trim();
+    }
+  }
 
   const host = normalizeHost(
     typeof raw.host === 'string' ? raw.host : '',

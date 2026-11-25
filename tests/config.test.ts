@@ -131,6 +131,13 @@ describe('resolveConfig', () => {
         aichat: { playbookPath: 'bad\0path' },
       })
     ).toThrow(ConfigError);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        masterUserId: 123 as never,
+      })
+    ).toThrow(ConfigError);
   });
 
   it('tolerates legacy PR #511 aichat keys without throwing', () => {

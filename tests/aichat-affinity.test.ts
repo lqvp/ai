@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -205,5 +205,92 @@ describe('AffinityStore anti-runaway invariants', () => {
     );
     expect(formatted).toContain('[参考データ: ユーザーメモ');
     expect(formatted).toContain('user_note: 甘いものが好き');
+  });
+
+  it('serializes simultaneous reaction bumps inside the daily cap', async () => {
+    const store = new AffinityStore({ filePath: createTempPath() });
+    const user = { id: 'u-concurrent', username: 'concurrent', host: null };
+
+    const results = await Promise.all(
+      ['n1', 'n2', 'n3', 'n4', 'n5'].map((noteId) =>
+        store.applyReactionBump(user, noteId, false)
+      )
+    );
+
+    expect(results.filter(Boolean)).toHaveLength(3);
+    expect((await store.getEntry(user, { isMaster: false })).score).toBe(3);
+  });
+
+  it('does not inherit entries by acct when the userId belongs to another user', async () => {
+    const filePath = createTempPath();
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        users: {
+          '@alice': {
+            userId: 'old-user',
+            score: 80,
+            notes: '別人のメモ',
+            last: new Date().toISOString(),
+          },
+        },
+      }),
+      'utf8'
+    );
+    const store = new AffinityStore({ filePath });
+
+    const entry = await store.getEntry(
+      { id: 'new-user', username: 'alice', host: null },
+      { isMaster: false }
+    );
+
+    expect(entry.userId).toBe('new-user');
+    expect(entry.score).toBe(0);
+    expect(entry.notes).toBe('');
+  });
+
+  it('keeps both records when a rename target acct is occupied by another userId', async () => {
+    const filePath = createTempPath();
+    const store = new AffinityStore({ filePath });
+    const original = { id: 'rename-user', username: 'before', host: null };
+
+    await store.applyInteractionUpdate({
+      user: original,
+      isMaster: false,
+      delta: 5,
+      note: '引き継ぐメモ',
+      userText: '改名前の十分な長さの会話です',
+      source: 'chat',
+    });
+
+    const raw = JSON.parse(readFileSync(filePath, 'utf8')) as {
+      users: Record<string, unknown>;
+    };
+    raw.users['@after'] = {
+      userId: 'other-user',
+      score: 44,
+      notes: '別ユーザー',
+      last: new Date().toISOString(),
+    };
+    writeFileSync(filePath, JSON.stringify(raw), 'utf8');
+
+    await store.applyInteractionUpdate({
+      user: { id: 'rename-user', username: 'after', host: null },
+      isMaster: false,
+      delta: 1,
+      note: null,
+      userText: '改名後の十分な長さの会話です',
+      source: 'chat',
+    });
+
+    const saved = JSON.parse(readFileSync(filePath, 'utf8')) as {
+      users: Record<string, { userId?: string; score: number; notes: string }>;
+    };
+    expect(saved.users['@after']?.userId).toBe('other-user');
+    expect(saved.users['@after']?.score).toBe(44);
+    expect(saved.users['id:rename-user']?.userId).toBe('rename-user');
+    expect(saved.users['id:rename-user']?.notes).toBe('引き継ぐメモ');
+    expect(saved.users['@before']).toBeUndefined();
   });
 });

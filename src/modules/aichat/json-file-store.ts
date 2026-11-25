@@ -56,6 +56,13 @@ type FileSignature = {
   size: number;
 };
 
+export class JsonFileStoreError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'JsonFileStoreError';
+  }
+}
+
 /**
  * memoryDir 配下の JSON ファイル用ストア。
  *
@@ -112,23 +119,36 @@ export class JsonFileStore<T> {
    * 最新状態を元に更新を適用し、アトミックに保存する。
    */
   public async update<R>(
-    mutator: (current: T) => { next: T; result: R; write?: boolean }
+    mutator: (current: T) => {
+      next: T;
+      result: R;
+      write?: boolean;
+      commit?: () => void;
+    }
   ): Promise<R> {
     return this.enqueue(async () => {
-      await this.reloadIfChanged();
-      const { next, result, write = true } = mutator(this.state!);
-      const normalized = this.normalize(stripDangerousKeys(next));
-      this.state = normalized;
-
-      if (write) {
-        if (this.corruptedOnDisk) {
-          this.log(
-            `破損状態の ${path.basename(this.filePath)} への上書きをスキップしました（手動修正待ち）`
-          );
-        } else {
-          await this.atomicWrite(normalized);
-        }
+      await this.reloadIfChanged({ strict: true });
+      if (this.corruptedOnDisk) {
+        throw new JsonFileStoreError(
+          `破損状態の ${path.basename(this.filePath)} への更新を中止しました（手動修正待ち）`
+        );
       }
+
+      const {
+        next,
+        result,
+        write = true,
+        commit,
+      } = mutator(structuredClone(this.state!));
+      const normalized = this.normalize(stripDangerousKeys(next));
+
+      // 永続化が必要な更新は、書き込み成功後にのみメモリ状態へ反映する。
+      // 失敗時にメモリだけ進んで再試行で二重加算されるのを防ぐ。
+      if (write) {
+        await this.atomicWrite(normalized);
+      }
+      this.state = normalized;
+      commit?.();
 
       return result;
     });
@@ -143,7 +163,8 @@ export class JsonFileStore<T> {
     return run;
   }
 
-  private async reloadIfChanged(): Promise<void> {
+  private async reloadIfChanged(options?: { strict?: boolean }): Promise<void> {
+    const strict = options?.strict === true;
     let st: Awaited<ReturnType<typeof stat>> | null = null;
     try {
       st = await stat(this.filePath);
@@ -159,6 +180,11 @@ export class JsonFileStore<T> {
         return;
       }
       this.log(`stat failed for ${this.filePath}: ${String(err)}`);
+      if (strict) {
+        throw new JsonFileStoreError(
+          `${path.basename(this.filePath)} の状態を確認できないため更新を中止しました`
+        );
+      }
       if (this.state == null) {
         this.state = this.normalize(this.createDefault());
       }
@@ -167,6 +193,11 @@ export class JsonFileStore<T> {
 
     if (!st.isFile()) {
       this.log(`${this.filePath} は通常ファイルではありません`);
+      if (strict) {
+        throw new JsonFileStoreError(
+          `${path.basename(this.filePath)} が通常ファイルではないため更新を中止しました`
+        );
+      }
       if (this.state == null) {
         this.state = this.normalize(this.createDefault());
       }
@@ -187,6 +218,11 @@ export class JsonFileStore<T> {
       rawText = await readFile(this.filePath, 'utf8');
     } catch (err: unknown) {
       this.log(`readFile failed for ${this.filePath}: ${String(err)}`);
+      if (strict) {
+        throw new JsonFileStoreError(
+          `${path.basename(this.filePath)} を読み取れないため更新を中止しました`
+        );
+      }
       if (this.state == null) {
         this.state = this.normalize(this.createDefault());
       }
@@ -239,10 +275,11 @@ export class JsonFileStore<T> {
     const body = `${JSON.stringify(value, null, 2)}\n`;
 
     try {
-      await writeFile(tmpPath, body, 'utf8');
+      await writeFile(tmpPath, body, { encoding: 'utf8', mode: 0o600 });
       await rename(tmpPath, this.filePath);
-      const st = await stat(this.filePath);
-      this.lastStat = { mtimeMs: st.mtimeMs, size: st.size };
+      // rename 直後に運用者が編集した場合の署名取り違えを避けるため、
+      // 次回アクセス時に必ずディスクを読み直す。
+      this.lastStat = null;
     } catch (err: unknown) {
       await unlink(tmpPath).catch(() => undefined);
       throw err;

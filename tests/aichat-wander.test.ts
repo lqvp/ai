@@ -220,8 +220,9 @@ describe('WanderRunner', () => {
 
     await runner.runWanderNow();
 
-    // リモートへの localOnly 絵文字はフォールバック '👍' に置換される
-    expect(reactions).toContainEqual({ noteId: 'n-remote', emoji: '👍' });
+    // リモートへの localOnly 絵文字はフォールバック '👍' に置換される。
+    // 抽選済み予算は1件なので、返信に付随するリアクションは送信されない。
+    expect(reactions).toEqual([{ noteId: 'n-remote', emoji: '👍' }]);
     // リプライは1件のみで postNotPublic を尊重し #aichat や @carol を付けない
     expect(posts).toHaveLength(1);
     expect(posts[0]).toEqual({

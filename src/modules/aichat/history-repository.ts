@@ -17,6 +17,8 @@ export type AiChatHist = {
   type: string;
   api?: string;
   history?: ChatHistoryItem[];
+  /** 各返信ノート投稿時点の履歴スナップショット（古いターンへの分岐用） */
+  historySnapshots?: Record<string, ChatHistoryItem[]>;
   friendName?: string;
   originalNoteId?: string;
   fromMention: boolean;
@@ -90,7 +92,15 @@ export class ChatHistoryRepository {
   }
 
   public insert(record: AiChatHist): void {
-    this.collection.insertOne(record);
+    // 分岐セッションは元レコードの展開から作られることがある。
+    // LokiJS の内部識別子を引き継ぐと新規 insert を拒否されるため除去する。
+    const clean = { ...record } as AiChatHist & {
+      $loki?: number;
+      meta?: unknown;
+    };
+    delete clean.$loki;
+    delete clean.meta;
+    this.collection.insertOne(clean);
   }
 
   public update(record: AiChatHist): void {
