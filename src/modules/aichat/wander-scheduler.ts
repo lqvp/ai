@@ -199,16 +199,23 @@ function buildRemainingTickCandidates(
   return candidates;
 }
 
+type HourProgress = {
+  /** 確実に実行されたと記録されているスロット一覧（旧データでは undefined を維持し履歴を捏造しない） */
+  trackedExecutedSlots: number[] | undefined;
+  /** 上限超過を防ぐために差し引く消化スロット（tracked がある場合はその一覧、旧データでは lastRunAt 以前の予定枠すべて） */
+  accountedSlots: number[];
+};
+
 /**
- * 同一時間帯における実行済みスロット一覧を返す。
- * executedSlots が永続化されていない旧データでは、途中の未実行枠を誤って実行済み扱いしないよう lastRunAt に対応する1枠のみを実績とする。
+ * 同一時間帯の進捗を解決する。
+ * executedSlots を持たない旧データでは、上限超過を防ぐため lastRunAt 以前に予定されていた枠を保守的に消化扱いとしつつ、executedSlots 自体は捏造しない。
  */
-function resolveExecutedSlotsInHour(
+function resolveHourProgress(
   state: WanderScheduleState,
   hourStartMs: number,
   nowMs: number,
   tickMinute: number
-): number[] {
+): HourProgress {
   if (Array.isArray(state.executedSlots)) {
     const unique = new Set<number>();
     for (const s of state.executedSlots) {
@@ -216,20 +223,29 @@ function resolveExecutedSlotsInHour(
         unique.add(s);
       }
     }
-    return [...unique].sort((a, b) => a - b);
+    const tracked = [...unique].sort((a, b) => a - b);
+    return { trackedExecutedSlots: tracked, accountedSlots: tracked };
   }
   if (
     state.lastRunAt != null &&
     state.lastRunAt >= hourStartMs &&
-    state.lastRunAt <= nowMs
+    state.lastRunAt <= nowMs &&
+    Array.isArray(state.slots)
   ) {
-    const lastRunMin = Math.floor((state.lastRunAt - hourStartMs) / 60_000);
-    const lastRunSlot = Math.floor(lastRunMin / TICK_MINUTES) * TICK_MINUTES;
-    if (Array.isArray(state.slots) && state.slots.includes(lastRunSlot)) {
-      return [lastRunSlot];
-    }
+    const possible = [
+      ...new Set(
+        state.slots.filter(
+          (s) =>
+            Number.isInteger(s) &&
+            s >= 0 &&
+            s <= tickMinute &&
+            hourStartMs + s * 60_000 <= state.lastRunAt!
+        )
+      ),
+    ].sort((a, b) => a - b);
+    return { trackedExecutedSlots: undefined, accountedSlots: possible };
   }
-  return [];
+  return { trackedExecutedSlots: undefined, accountedSlots: [] };
 }
 
 export function drawHourlySlots(
@@ -322,21 +338,21 @@ export function decideWanderTick(
       lastRunAt,
     };
   } else if ((state.boundsKey ?? undefined) !== currentBoundsKey) {
-    // 設定変更を伴う同一時間帯の再起動時は、実行済みスロットを保持しつつ残余枠を再計算する
-    const completedSlots = resolveExecutedSlotsInHour(
+    // 設定変更を伴う同一時間帯の再起動時は、記録済みまたは保守的消化スロットを差し引いて残余枠を再計算する
+    const { trackedExecutedSlots, accountedSlots } = resolveHourProgress(
       state,
       hourStartMs,
       nowMs,
       tickMinute
     );
-    completedThisTick = completedSlots.includes(tickMinute);
+    completedThisTick = accountedSlots.includes(tickMinute);
 
     const totalTarget = pickSlotCount(
       rng,
       options.minRunsPerHour,
       options.maxRunsPerHour
     );
-    const remainingTarget = Math.max(0, totalTarget - completedSlots.length);
+    const remainingTarget = Math.max(0, totalTarget - accountedSlots.length);
     let futureSlots: number[] = [];
     if (remainingTarget > 0) {
       const startTick = completedThisTick
@@ -359,25 +375,29 @@ export function decideWanderTick(
 
     nextState = {
       hour: hourKey,
-      slots: [...completedSlots, ...futureSlots].sort((a, b) => a - b),
-      executedSlots: completedSlots,
+      slots: [...accountedSlots, ...futureSlots].sort((a, b) => a - b),
+      ...(trackedExecutedSlots !== undefined
+        ? { executedSlots: trackedExecutedSlots }
+        : {}),
       ...(currentBoundsKey !== undefined
         ? { boundsKey: currentBoundsKey }
         : {}),
       lastRunAt,
     };
   } else {
-    const completedSlots = resolveExecutedSlotsInHour(
+    const { trackedExecutedSlots, accountedSlots } = resolveHourProgress(
       state,
       hourStartMs,
       nowMs,
       tickMinute
     );
-    completedThisTick = completedSlots.includes(tickMinute);
+    completedThisTick = accountedSlots.includes(tickMinute);
     nextState = {
       hour: state.hour,
       slots: [...state.slots],
-      executedSlots: completedSlots,
+      ...(trackedExecutedSlots !== undefined
+        ? { executedSlots: trackedExecutedSlots }
+        : {}),
       ...(currentBoundsKey !== undefined
         ? { boundsKey: currentBoundsKey }
         : {}),
@@ -394,9 +414,11 @@ export function decideWanderTick(
       };
     }
     nextState.lastRunAt = nowMs;
-    nextState.executedSlots = [
-      ...new Set([...(nextState.executedSlots ?? []), tickMinute]),
-    ].sort((a, b) => a - b);
+    if (Array.isArray(nextState.executedSlots)) {
+      nextState.executedSlots = [
+        ...new Set([...nextState.executedSlots, tickMinute]),
+      ].sort((a, b) => a - b);
+    }
     return {
       run: true,
       reason: 'slot',

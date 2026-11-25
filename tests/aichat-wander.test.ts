@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import loki from 'lokijs';
@@ -319,6 +319,7 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
         {
           hour: '2026-11-24T12',
           slots: [15, 35],
+          executedSlots: [],
           boundsKey: '2..2',
         },
         {
@@ -513,35 +514,97 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       );
       expect(d35.state.executedSlots).toEqual(d35.run ? [0, 20, 35] : [0, 20]);
 
-      // executedSlots が無い旧データでも、途中の 0 や 10 を実行済み扱いせず lastRunAt の 20 のみを実績とみなす
+      // executedSlots が無い旧データからの移行時は、lastRunAt 以前の予定枠を保守的に消化扱いとしつつ履歴を捏造せず上限を超えない
+      const t1210_00 = Date.parse('2026-11-24T12:10:00+09:00');
+      const t1220_00 = Date.parse('2026-11-24T12:20:00+09:00');
+      const t1225_00 = Date.parse('2026-11-24T12:25:00+09:00');
       const legacyDec = decideWanderTick(
-        t1235_00,
+        t1225_00,
         {
           hour: '2026-11-24T12',
-          slots: [0, 10, 20],
-          boundsKey: '3..3',
-          lastRunAt: t1220_01,
+          slots: [0, 10],
+          lastRunAt: t1210_00,
         },
         {
           activeHoursStart: 9,
           activeHoursEnd: 23,
           minGapMinutes: 10,
-          minRunsPerHour: 4,
-          maxRunsPerHour: 4,
+          minRunsPerHour: 2,
+          maxRunsPerHour: 2,
         },
         () => 0.5
       );
-      expect(legacyDec.run).toBe(true);
-      expect(legacyDec.state.slots).toEqual([20, 35, 45, 55]);
-      expect(legacyDec.state.executedSlots).toEqual([20, 35]);
+      expect(legacyDec.run).toBe(false);
+      expect(legacyDec.state.slots).toEqual([0, 10]);
+      expect(legacyDec.state.executedSlots).toBeUndefined();
+
+      // WanderStore 経由でも、未変更の再起動を挟んでから 2..2 へ移行しても上限を超えず executedSlots を捏造しない
+      const legacyDir = createTempDir();
+      const legacyPath = join(legacyDir, 'aichat-wander.json');
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({
+          version: 1,
+          lastPostAt: null,
+          lastRunAt: t1210_00,
+          schedule: { hour: '2026-11-24T12', slots: [0, 10, 45] },
+          recent: [],
+          actedNoteIds: [],
+          userLastReplyAt: {},
+          userLastReactAt: {},
+          userNoResponseUntil: {},
+          recentEmojis: [],
+        }),
+        'utf8'
+      );
+      const legacyStore1 = new WanderStore({
+        filePath: legacyPath,
+        now: () => t1220_00,
+      });
+      const legacyUnchanged = await legacyStore1.checkAndCommitScheduleTick(
+        t1220_00,
+        { activeHoursStart: 9, activeHoursEnd: 23, minGapMinutes: 10 },
+        () => 0.5
+      );
+      expect(legacyUnchanged.run).toBe(false);
+      expect(legacyUnchanged.state.executedSlots).toBeUndefined();
+      expect((await legacyStore1.load()).schedule).toEqual({
+        hour: '2026-11-24T12',
+        slots: [0, 10, 45],
+      });
+
+      const legacyStore2 = new WanderStore({
+        filePath: legacyPath,
+        now: () => t1225_00,
+      });
+      const legacyMigrated = await legacyStore2.checkAndCommitScheduleTick(
+        t1225_00,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 2,
+          maxRunsPerHour: 2,
+        },
+        () => 0.5
+      );
+      expect(legacyMigrated.run).toBe(false);
+      expect(legacyMigrated.state.slots).toEqual([0, 10]);
+      expect(legacyMigrated.state.executedSlots).toBeUndefined();
+      expect((await legacyStore2.load()).schedule).toEqual({
+        hour: '2026-11-24T12',
+        slots: [0, 10],
+        boundsKey: '2..2',
+      });
     }
 
-    // 2. 枠の開始から +40s ずれて再起動しても、nowMs 基準で最短間隔を満たせば即座に2枠追加実行できる
+    // 2. 枠の開始から +40s ずれて再起動しても nowMs 基準で最短間隔を満たせば即座に2枠追加実行でき、早着ティックは min_gap で見送られる
     {
       const dir = createTempDir();
       const filePath = join(dir, 'aichat-wander.json');
       const t1235_20 = Date.parse('2026-11-24T12:35:20+09:00');
       const t1245_40 = Date.parse('2026-11-24T12:45:40+09:00');
+      const t1255_399 = Date.parse('2026-11-24T12:55:39.900+09:00');
       const t1255_40 = Date.parse('2026-11-24T12:55:40+09:00');
 
       const store1 = new WanderStore({ filePath, now: () => t1235_20 });
@@ -575,6 +638,23 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
       expect(d45.run).toBe(true);
       expect(d45.state.slots).toEqual([35, 45, 55]);
       expect(d45.state.executedSlots).toEqual([35, 45]);
+
+      // 見積もりより 0.1s 早く到達した 12:55 ティックは実行時の min_gap ガードで見送られる
+      const early55 = decideWanderTick(
+        t1255_399,
+        d45.state,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 10,
+          minRunsPerHour: 3,
+          maxRunsPerHour: 3,
+        },
+        () => 0.5
+      );
+      expect(early55.run).toBe(false);
+      expect(early55.reason).toBe('min_gap');
+      expect(early55.state.executedSlots).toEqual([35, 45]);
 
       const store3 = new WanderStore({ filePath, now: () => t1255_40 });
       const d55 = await store3.checkAndCommitScheduleTick(
