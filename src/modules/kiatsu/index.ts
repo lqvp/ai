@@ -367,9 +367,28 @@ export default class extends Module<KiatsuData> {
 
     // 送る直前に最新の変化量を使う。鮮度が切れていたら諦める
     // （前日の変化量を「直近3時間」として投稿しない）。
-    const delta3h = this.currentDelta();
-    if (delta3h === null) {
+    if (
+      this.latestObservedAtMs !== null &&
+      Date.now() - this.latestObservedAtMs > STALE_MS
+    ) {
       this.log('未送信の警報は鮮度が切れたため破棄します。');
+      this.pendingAlert = false;
+      this.pendingAlertAttempts = 0;
+      this.persistState();
+      return;
+    }
+
+    const delta3h = this.latestDelta3h;
+    if (delta3h === null) {
+      // 一時的な欠測。警報は解除されていないので、未送信のまま延期する
+      // （ここで捨てると、データが戻っても同じ低下の警報が届かなくなる）。
+      this.log('気圧データが欠測しているため、警報の送信を延期します。');
+      return;
+    }
+
+    if (delta3h >= 0) {
+      // 気圧が上昇に転じている。「下がってきています」とは言えないので捨てる。
+      this.log('気圧が上昇しているため、未送信の警報を破棄します。');
       this.pendingAlert = false;
       this.pendingAlertAttempts = 0;
       this.persistState();
@@ -519,9 +538,9 @@ export default class extends Module<KiatsuData> {
     // 持ち越すと、新しい地点で最初の低下を取りこぼす。
     if (data.spot !== undefined && data.spot !== this.spotKey) {
       this.log('地点が変わったため、警報状態は引き継ぎません。');
+      // 日次投稿枠は地点に依存しない（同じ日に地点を変えても上限は超えない）。
       this.alertState = { alerting: false };
-      this.postsToday = 0;
-      this.postsTodayKey = null;
+      this.pendingAlert = false;
       this.persistState();
       return;
     }

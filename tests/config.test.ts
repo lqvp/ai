@@ -370,3 +370,23 @@ describe('廃止キーの後方互換', () => {
     expect(config.kiatsu?.latitude).toBeUndefined();
   });
 });
+
+describe('kiatsu のヒステリシス', () => {
+  it('解除の境界が 0 以上になる幅を拒否する', () => {
+    // しきい値 -2.0 に幅 3.0 を足すと +1.0 になり、気圧が上昇しても
+    // 解除されず「下がってきています」と上昇量を投稿しうる。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -2, hysteresisHpa: 3 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/絶対値以下/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { alertThresholdHpa: -2, hysteresisHpa: 2 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).not.toThrow();
+  });
+});

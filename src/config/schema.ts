@@ -699,6 +699,17 @@ function validateAndResolve(input: RawConfig): Config {
       const value = kiatsu.hysteresisHpa;
       if (!isNumber(value) || value < 0 || value > 5) {
         issues.push('kiatsu.hysteresisHpa は 0〜5 で指定してください');
+      } else {
+        // 解除の境界（しきい値 + 幅）が 0 以上になると、気圧が上昇しても
+        // 警報が解除されず「下がってきています」と上昇量を投稿しうる。
+        const threshold = isNumber(kiatsu.alertThresholdHpa)
+          ? kiatsu.alertThresholdHpa
+          : -2;
+        if (threshold + value > 0) {
+          issues.push(
+            'kiatsu.hysteresisHpa は警報しきい値の絶対値以下にしてください（例: しきい値 -2.0 なら 2.0 以下）'
+          );
+        }
       }
     }
 
