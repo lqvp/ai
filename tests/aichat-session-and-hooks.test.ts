@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import loki from 'lokijs';
@@ -671,6 +671,12 @@ describe('ReactionFollowUpHandler', () => {
       }),
     });
 
+    const reactionNote = {
+      id: 'bot-note-1',
+      userId: 'bot-id',
+      visibility: 'public',
+      text: '元気ですか？',
+    } as Note;
     const notif = {
       id: 'notif-1',
       createdAt: new Date(nowMs).toISOString(),
@@ -678,12 +684,7 @@ describe('ReactionFollowUpHandler', () => {
       user: alice,
       userId: alice.id,
       reaction: '🎉',
-      note: {
-        id: 'bot-note-1',
-        userId: 'bot-id',
-        visibility: 'public',
-        text: '元気ですか？',
-      },
+      note: reactionNote,
     } as unknown as Misskey.entities.Notification;
 
     expect(await handler.handleNotification(notif)).toBe(true);
@@ -745,5 +746,52 @@ describe('ReactionFollowUpHandler', () => {
       isMaster: false,
     });
     expect(afterDisabled.score).toBe(beforeDisabled.score);
+
+    // 好感度JSONが構文破損していても、保存済みの状態で追いリプ判定は継続する
+    const bob = {
+      id: 'u-bob',
+      username: 'bob',
+      host: null,
+      isBot: false,
+    } as User;
+    await affinityStore.applyInteractionUpdate({
+      user: bob,
+      isMaster: false,
+      delta: 5,
+      note: null,
+      userText: '破損前の好感度ベース作成用メッセージです',
+      source: 'chat',
+    });
+    history.insert({
+      sessionId: 'sess-f3',
+      postId: 'bot-note-3',
+      latestPostId: 'bot-note-3',
+      postIds: ['bot-note-3'],
+      createdAt: nowMs - 60_000,
+      updatedAt: nowMs - 60_000,
+      expiresAt: nowMs + 1_800_000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: 'u-bob',
+      history: [{ role: 'model', content: '破損時の会話' }],
+    });
+    writeFileSync(join(dir, 'aichat-affinity.json'), '{ broken json', 'utf8');
+
+    const bobNotif = {
+      ...notif,
+      id: 'notif-bob',
+      user: bob,
+      userId: bob.id,
+      note: {
+        ...reactionNote,
+        id: 'bot-note-3',
+      },
+    } as unknown as Misskey.entities.Notification;
+    expect(await handler.handleNotification(bobNotif)).toBe(true);
+    expect(posts).toHaveLength(2);
+    expect(posts[1].text).toBe('@bob 嬉しいリアクションありがとう！');
+    expect(readFileSync(join(dir, 'aichat-affinity.json'), 'utf8')).toBe(
+      '{ broken json'
+    );
   });
 });

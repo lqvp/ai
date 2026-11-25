@@ -466,16 +466,24 @@ export default class extends Module {
     });
 
     if (config.aichat?.affinity?.enabled !== false) {
-      await this.affinityStore.applyInteractionUpdate({
-        user: msg.user,
-        isMaster,
-        delta: audit.delta,
-        note: audit.note,
-        userText,
-        source: 'chat',
-        turnSeq,
-        initialLoveSeed: friend?.love,
-      });
+      try {
+        await this.affinityStore.applyInteractionUpdate({
+          user: msg.user,
+          isMaster,
+          delta: audit.delta,
+          note: audit.note,
+          userText,
+          source: 'chat',
+          turnSeq,
+          initialLoveSeed: friend?.love,
+        });
+      } catch (err: unknown) {
+        // 破損ファイルの保全を優先しつつ、保存失敗だけで
+        // リアクション選択まで止めない。
+        this.log(
+          `好感度更新をスキップしました: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
 
     if (!options.allowReaction) return null;

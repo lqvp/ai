@@ -126,11 +126,19 @@ export class ReactionFollowUpHandler {
 
     const isMaster = this.deps.isMasterUser(reactor);
     if (this.deps.affinityEnabled !== false) {
-      await this.deps.affinityStore.applyReactionBump(
-        reactor,
-        note.id,
-        isMaster
-      );
+      try {
+        await this.deps.affinityStore.applyReactionBump(
+          reactor,
+          note.id,
+          isMaster
+        );
+      } catch (err: unknown) {
+        // 手動編集で好感度JSONが壊れている場合でも、保存済みの
+        // 最終状態を使って追いリプ判定自体は継続する。
+        this.log(
+          `好感度リアクション反映をスキップしました: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
 
     const cfg = this.deps.config ?? {};
