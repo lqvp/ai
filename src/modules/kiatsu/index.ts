@@ -82,6 +82,8 @@ type KiatsuData = {
   /** 状態を保存したときの地点。地点を変えたら状態は引き継がない */
   spot?: string;
   alerting?: boolean;
+  /** 未送信の警報が残っているか（再起動で取りこぼさないため） */
+  pending?: boolean;
   postsToday?: number;
   postsTodayKey?: string | null;
 };
@@ -132,13 +134,13 @@ export default class extends Module<KiatsuData> {
   private alertState: AlertState = { alerting: false };
 
   /**
-   * 送信待ちの警報（ΔP3h）。投稿に失敗したら次回以降に再試行する。
+   * 送信待ちの警報があるか。投稿に失敗したら次回以降に再試行する。
    *
-   * 判定状態（alerting）とは分けて持つ。状態を進めたうえで投稿だけ失敗した
-   * 場合に、状態を巻き戻すと「受理されたのに応答が落ちた」ケースで二重投稿に
-   * なる。判定は進め、未送信だけを別に抱える。
+   * 値ではなくフラグで持つのは、送る直前に**そのときの**変化量を使うため。
+   * 日次上限で見送ったまま日付が変わると、前日の変化量を「直近3時間」として
+   * 投稿してしまう。
    */
-  private pendingAlert: number | null = null;
+  private pendingAlert = false;
 
   /** 未送信警報の試行回数。無限に再試行しないための上限。 */
   private pendingAlertAttempts = 0;
@@ -295,9 +297,10 @@ export default class extends Module<KiatsuData> {
 
     // 警報が解除されたら未送信の警報も捨てる。解除済みの古い警報を
     // あとから投稿するのは、状況と食い違う。
-    if (!state.alerting) {
-      this.pendingAlert = null;
+    if (!state.alerting && this.pendingAlert) {
+      this.pendingAlert = false;
       this.pendingAlertAttempts = 0;
+      this.persistState();
     }
 
     this.log(
@@ -306,9 +309,10 @@ export default class extends Module<KiatsuData> {
       } (警報中: ${state.alerting})`
     );
 
-    if (trigger && delta3h !== null && this.pendingAlert === null) {
-      this.pendingAlert = delta3h;
+    if (trigger && delta3h !== null && !this.pendingAlert) {
+      this.pendingAlert = true;
       this.pendingAlertAttempts = 0;
+      this.persistState();
     }
 
     if (allowPost) {
@@ -359,7 +363,18 @@ export default class extends Module<KiatsuData> {
    */
   @bindThis
   private async flushPendingAlert(): Promise<void> {
-    if (this.pendingAlert === null || this.posting) return;
+    if (!this.pendingAlert || this.posting) return;
+
+    // 送る直前に最新の変化量を使う。鮮度が切れていたら諦める
+    // （前日の変化量を「直近3時間」として投稿しない）。
+    const delta3h = this.currentDelta();
+    if (delta3h === null) {
+      this.log('未送信の警報は鮮度が切れたため破棄します。');
+      this.pendingAlert = false;
+      this.pendingAlertAttempts = 0;
+      this.persistState();
+      return;
+    }
 
     // 日付をまたいだ直後に前日の枠で判定しないよう、投稿直前に同期する。
     this.syncPostDay();
@@ -374,10 +389,11 @@ export default class extends Module<KiatsuData> {
 
     try {
       await this.ai.post({
-        text: buildAlertMessage(this.locationName, this.pendingAlert),
+        text: buildAlertMessage(this.locationName, delta3h),
       });
-      this.pendingAlert = null;
+      this.pendingAlert = false;
       this.pendingAlertAttempts = 0;
+      this.persistState();
       // 投稿できたときだけ枠を消費する（失敗で枠だけ減るのを避ける）。
       this.recordPost();
     } catch (error) {
@@ -390,8 +406,9 @@ export default class extends Module<KiatsuData> {
       if (this.pendingAlertAttempts >= MAX_ALERT_ATTEMPTS) {
         // 何度試しても通らないなら諦める。古い警報を延々と抱えない。
         this.log('警報の投稿を諦めます。');
-        this.pendingAlert = null;
+        this.pendingAlert = false;
         this.pendingAlertAttempts = 0;
+        this.persistState();
       }
     } finally {
       this.posting = false;
@@ -510,6 +527,7 @@ export default class extends Module<KiatsuData> {
     }
 
     this.alertState = { alerting: data.alerting === true };
+    this.pendingAlert = data.pending === true;
     this.postsToday = typeof data.postsToday === 'number' ? data.postsToday : 0;
     this.postsTodayKey = data.postsTodayKey ?? null;
 
@@ -522,6 +540,7 @@ export default class extends Module<KiatsuData> {
     this.setData({
       spot: this.spotKey,
       alerting: this.alertState.alerting,
+      pending: this.pendingAlert,
       postsToday: this.postsToday,
       postsTodayKey: this.postsTodayKey,
     });
