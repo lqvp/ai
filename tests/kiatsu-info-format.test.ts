@@ -54,7 +54,7 @@ describe('/info の気圧設定表示', () => {
     expect(text).not.toContain('❌');
   });
 
-  it('kiatsu セクション未定義なら空文字、空白地名は未設定、秒単位間隔は 0分 に潰さない', () => {
+  it('kiatsu セクション未定義なら空文字、空白地名は未設定として整形する', () => {
     initConfig(resolveConfig({ ...BASE }));
     expect(formatPressureSettings()).toBe('');
 
@@ -62,11 +62,11 @@ describe('/info の気圧設定表示', () => {
       enabled: false,
       locationName: '   ',
       alertThresholdHpa: -2.5,
-      updateIntervalMs: 30_000,
+      updateIntervalMs: 300_000,
     });
     expect(text).toContain('❌');
     expect(text).toContain('未設定');
     expect(text).toContain('-2.5 hPa');
-    expect(text).toContain('30秒');
+    expect(text).toContain('5分');
   });
 });

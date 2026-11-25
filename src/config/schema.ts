@@ -663,14 +663,19 @@ function validateAndResolve(input: RawConfig): Config {
     const isNumber = (value: unknown): value is number =>
       typeof value === 'number' && Number.isFinite(value);
 
+    // open-meteo.ts は models=jma_msm かつ timezone=Asia/Tokyo に固定しているため、
+    // 気象庁 MSM の提供領域（北緯 22.4〜47.6°・東経 120〜150°）外の座標は API が恒久的に
+    // HTTP 400 を返す。起動時の検証で弾き、運用中の停止ループを防ぐ。
     for (const [key, min, max] of [
-      ['latitude', -90, 90],
-      ['longitude', -180, 180],
+      ['latitude', 22.4, 47.6],
+      ['longitude', 120, 150],
     ] as const) {
       const value = kiatsu[key];
       if (value === undefined) continue;
       if (!isNumber(value) || value < min || value > max) {
-        issues.push(`kiatsu.${key} は ${min}〜${max} の数値で指定してください`);
+        issues.push(
+          `kiatsu.${key} は JMA MSM の提供範囲（${min}〜${max}）の数値で指定してください`
+        );
       }
     }
 
@@ -732,20 +737,20 @@ function validateAndResolve(input: RawConfig): Config {
     }
 
     // *Ms は正の数値（32-bit タイマー上限以下）として扱う。
-    // TOML で "3600000" と書くと文字列になり、タイマー計算（backoffDelayMs など）で
-    // 例外になって監視が再開できなくなる。
+    // updateIntervalMs は Open-Meteo 無料枠（10,000 calls/日）を枯渇させないよう
+    // 最小 60,000ms（1分＝最大 1,440 calls/日）を下限とする。
     // 検証するのは現行スキーマのキーだけ。廃止キー（postIntervalMs など）は
     // 無視するのが約束なので、型や値を理由に起動を止めてはいけない。
-    for (const key of [
-      'requestTimeoutMs',
-      'updateIntervalMs',
-      'errorCooldownMs',
+    for (const [key, minMs] of [
+      ['requestTimeoutMs', 1],
+      ['updateIntervalMs', 60_000],
+      ['errorCooldownMs', 1],
     ] as const) {
       const value = kiatsu[key];
       if (value === undefined) continue;
-      if (!isNumber(value) || value <= 0 || value > maxTimerMs) {
+      if (!isNumber(value) || value < minMs || value > maxTimerMs) {
         issues.push(
-          `kiatsu.${key} は 1〜${maxTimerMs} の正の数値で指定してください（クォートで囲まない）`
+          `kiatsu.${key} は ${minMs}〜${maxTimerMs} の正の数値で指定してください（クォートで囲まない）`
         );
       }
     }

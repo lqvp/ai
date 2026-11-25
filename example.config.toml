@@ -200,11 +200,11 @@ p2pWebSocketUrl = "wss://api.p2pquake.net/v2/ws" # P2P地震情報WebSocket（�
 # 気圧監視設定（Open-Meteo / 気象庁MSM）
 [kiatsu]
 enabled = true                 # 気圧監視を有効化
-latitude = 36.3219             # 地点の緯度（longitude とセットで指定）
-longitude = 139.0033           # 地点の経度（省略時は東京都中央区）
+latitude = 36.3219             # 地点の緯度（JMA MSM 範囲: 22.4〜47.6、longitude とセットで指定）
+longitude = 139.0033           # 地点の経度（JMA MSM 範囲: 120〜150、省略時は東京都中央区）
 locationName = "高崎市"         # 投稿文・画像に出す地名（省略時は座標を公開せず地名なしで表示）
 requestTimeoutMs = 10000       # API取得のタイムアウト (ミリ秒)
-updateIntervalMs = 600000      # 10分ごとに再取得
+updateIntervalMs = 600000      # 10分ごとに再取得（最小 60000 ミリ秒）
 alertThresholdHpa = -2.0       # 3時間でこの値以上下がったら投稿（-10 以上 0 未満の負値。例: -2.0）
 hysteresisHpa = 0.5            # 解除の幅（0〜5、かつ |alertThresholdHpa| 以下）
 maxPostsPerDay = 1             # 1日の投稿上限

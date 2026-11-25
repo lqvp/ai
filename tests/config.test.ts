@@ -190,25 +190,33 @@ describe('resolveConfig', () => {
     expect(config.kiatsu).toEqual({ enabled: true });
   });
 
-  it('rejects out-of-range kiatsu coordinates', () => {
+  it('rejects kiatsu coordinates outside JMA MSM coverage (22.4..47.6N, 120..150E)', () => {
     for (const coords of [
-      { latitude: 90.1 },
-      { latitude: -90.1 },
-      { longitude: 180.1 },
-      { longitude: -180.1 },
-      { latitude: '36.3' as never },
+      { latitude: 90.1, longitude: 139 },
+      { latitude: -90.1, longitude: 139 },
+      { latitude: 22.3, longitude: 139 },
+      { latitude: 47.7, longitude: 139 },
+      { latitude: 35.6, longitude: 119.9 },
+      { latitude: 35.6, longitude: 150.1 },
+      { latitude: 0, longitude: 0 },
+      { latitude: '36.3' as never, longitude: 139 },
     ]) {
       expect(() => resolveConfig({ ...base, kiatsu: { ...coords } })).toThrow(
         ConfigError
       );
     }
 
-    const config = resolveConfig({
-      ...base,
-      kiatsu: { latitude: 90, longitude: -180 },
-    });
-    expect(config.kiatsu?.latitude).toBe(90);
-    expect(config.kiatsu?.longitude).toBe(-180);
+    for (const coords of [
+      { latitude: 22.4, longitude: 120 },
+      { latitude: 47.6, longitude: 150 },
+    ]) {
+      const config = resolveConfig({
+        ...base,
+        kiatsu: coords,
+      });
+      expect(config.kiatsu?.latitude).toBe(coords.latitude);
+      expect(config.kiatsu?.longitude).toBe(coords.longitude);
+    }
   });
 
   it('rejects a kiatsu alert threshold that is zero or outside -10..0', () => {
@@ -411,8 +419,8 @@ describe('kiatsu の追加型・範囲検証', () => {
     expect(ok.kiatsu?.maxErrorRetries).toBe(0);
   });
 
-  it('*Ms が 0 以下や 32-bit タイマー上限超えなら拒否し、重複エラーを出さない', () => {
-    for (const updateIntervalMs of [0, -100, 2_147_483_648]) {
+  it('*Ms が下限未満や 32-bit タイマー上限超えなら拒否し、重複エラーを出さない', () => {
+    for (const updateIntervalMs of [0, -100, 1000, 59_999, 2_147_483_648]) {
       expect(() =>
         resolveConfig({
           ...base,
@@ -420,6 +428,11 @@ describe('kiatsu の追加型・範囲検証', () => {
         })
       ).toThrow(ConfigError);
     }
+
+    expect(
+      resolveConfig({ ...base, kiatsu: { updateIntervalMs: 60_000 } }).kiatsu
+        ?.updateIntervalMs
+    ).toBe(60_000);
 
     try {
       resolveConfig({

@@ -719,12 +719,25 @@ export default class extends Module<KiatsuData> {
     return usesDefaultCoordinates ? DEFAULTS.locationName : undefined;
   }
 
+  private isSnapshotFresh(
+    snapshot: ForecastSnapshot,
+    nowMs: number = Date.now()
+  ): boolean {
+    return (
+      snapshot.forecast !== null &&
+      snapshot.fetchedAtMs !== null &&
+      nowMs - snapshot.fetchedAtMs <= STALE_MS &&
+      snapshot.observedAtMs !== null &&
+      nowMs - snapshot.observedAtMs <= STALE_MS
+    );
+  }
+
   /**
    * メンション応答の前に、必要なら予報を更新する。
    *
    * - 進行中の評価があればそれに相乗りする。
-   * - 直近 `updateIntervalMs` 以内に取得済みで鮮度も有効なら再取得せず即座に返す
-   *   （連続メンションで外部 API を叩き続けたり、応答が遅れるのを防ぐ）。
+   * - 直近 `updateIntervalMs` 以内に取得済みで、現在時刻に対するスナップショットも
+   *   鮮度内なら再取得せず即座に返す（連続メンションで外部 API を叩き続けたり、応答が遅れるのを防ぐ）。
    */
   private async ensureFreshForMention(): Promise<void> {
     if (this.inFlightEvaluation) {
@@ -735,12 +748,11 @@ export default class extends Module<KiatsuData> {
     const updateIntervalMs =
       config.kiatsu?.updateIntervalMs ?? DEFAULTS.updateIntervalMs;
     const nowMs = Date.now();
+    const snapshot = this.captureSnapshot(new Date(nowMs));
     const recentlyFetched =
-      this.latestForecast !== null &&
       this.latestForecastFetchedAtMs !== null &&
       nowMs - this.latestForecastFetchedAtMs < updateIntervalMs &&
-      this.latestObservedAtMs !== null &&
-      nowMs - this.latestObservedAtMs <= STALE_MS;
+      this.isSnapshotFresh(snapshot, nowMs);
 
     if (recentlyFetched) return;
 
@@ -830,21 +842,11 @@ export default class extends Module<KiatsuData> {
 
     const snapshot = this.captureSnapshot();
     const locationName = this.displayLocationName;
-    const isFreshNow = (): boolean => {
-      const nowMs = Date.now();
-      return (
-        snapshot.forecast !== null &&
-        snapshot.fetchedAtMs !== null &&
-        nowMs - snapshot.fetchedAtMs <= STALE_MS &&
-        snapshot.observedAtMs !== null &&
-        nowMs - snapshot.observedAtMs <= STALE_MS
-      );
-    };
 
     // 予報自体が鮮度切れのときは古い画像を添付しない（本文「取得できませんでした」との矛盾と
     // 出典 URL 欠落を同時に防ぐ）。
     let file: DriveFile | undefined;
-    if (isFreshNow()) {
+    if (this.isSnapshotFresh(snapshot)) {
       try {
         file = await this.generateForecastImageFile(snapshot, locationName);
       } catch (error) {
@@ -854,7 +856,7 @@ export default class extends Module<KiatsuData> {
     }
 
     // 画像アップロード中に鮮度上限（STALE_MS）を超えることがあるため、返信直前に再判定して揃える。
-    const replyIsFresh = isFreshNow();
+    const replyIsFresh = this.isSnapshotFresh(snapshot);
     if (file !== undefined && !replyIsFresh) {
       await this.deleteDriveFileBestEffort(file.id);
     }

@@ -478,8 +478,8 @@ export function renderKiatsuImage(
   ] as const;
 
   const contentWidth = leftLabelWidth + columns.length * colWidth;
-  // 列数が少ない（例: maxColumns: 4）場合はフッターの左右テキストが重なるため2段に分ける
-  const stackFooter = contentWidth < 620;
+  // 列数が少ない場合は提供元・ライセンス URL を含むフッターが1行に収まらないため段積みする
+  const stackFooter = contentWidth < 980;
   const footerAreaHeight = stackFooter ? 64 : 44;
 
   const tableHeight = rows.reduce((sum, row) => sum + row.height, 0);
@@ -750,17 +750,28 @@ export function renderKiatsuImage(
   }
 
   const rangeText = `表示範囲: ${formatRangeText(columns)}`;
-  const sourceText = 'source: Open-Meteo (JMA MSM) / CC-BY 4.0';
+  const providerUrlText = 'Open-Meteo (JMA MSM) https://open-meteo.com/';
+  const licenseUrlText =
+    'CC-BY 4.0 https://creativecommons.org/licenses/by/4.0/';
+  const sourceText = `source: ${providerUrlText} / ${licenseUrlText}`;
 
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#5b7085';
-  ctx.font = font(15);
 
   if (stackFooter) {
     ctx.textAlign = 'left';
-    ctx.fillText(rangeText, contentX, rowY + 20);
-    ctx.fillText(sourceText, contentX, rowY + 44);
+    ctx.font = font(13);
+    ctx.fillText(rangeText, contentX, rowY + 14, contentWidth);
+    ctx.font = font(12);
+    ctx.fillText(
+      `source: ${providerUrlText}`,
+      contentX,
+      rowY + 33,
+      contentWidth
+    );
+    ctx.fillText(licenseUrlText, contentX, rowY + 50, contentWidth);
   } else {
+    ctx.font = font(14);
     ctx.textAlign = 'left';
     ctx.fillText(rangeText, contentX, rowY + footerAreaHeight / 2);
     ctx.textAlign = 'right';

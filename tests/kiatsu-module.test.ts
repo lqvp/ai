@@ -527,10 +527,10 @@ describe('KiatsuModule (index.ts)', () => {
         }, // 21:00 Δ3h = -1.7
         {
           timeLocal: '2026-11-25T22:00',
-          pressureMsl: 1013.0,
+          pressureMsl: 1012.9,
           temperatureC: 10,
           weatherCode: 2,
-        },
+        }, // 22:00 Δ3h = -2.1
       ],
     };
     const fetchSpy = vi
@@ -539,7 +539,7 @@ describe('KiatsuModule (index.ts)', () => {
 
     const { mod } = createHarness({
       locationName: '高崎市',
-      updateIntervalMs: 600_000, // 10分間隔（次は 21:08 JST）
+      updateIntervalMs: 10_800_000, // 3時間間隔（22:01 時点でも取得から 1h03m でキャッシュ有効）
     });
     const hooks = mod.getHooks();
     await vi.advanceTimersByTimeAsync(0);
@@ -552,13 +552,14 @@ describe('KiatsuModule (index.ts)', () => {
     expect(m1.reply.mock.calls[0]?.[0]).toContain('-0.6 hPa');
     expect(m1.reply.mock.calls[0]?.[0]).toContain('20:00時点');
 
-    // 21:03 JST のメンション（まだキャッシュ有効） → API 再取得なしで 21:00 時点 (-1.7 hPa) に進む
-    vi.setSystemTime(new Date('2026-11-25T12:03:00Z'));
+    // 22:01 JST のメンション（取得 20:58 から 1h03m 経過、当時の 20:00 点からは 2h01m 超だが 22:00 点は新鮮）
+    // → API 再取得なしで 22:00 時点 (-2.1 hPa) を返す
+    vi.setSystemTime(new Date('2026-11-25T13:01:00Z'));
     const m2 = makeMentionMessage();
     await hooks.mentionHook!(m2.message);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(m2.reply.mock.calls[0]?.[0]).toContain('-1.7 hPa');
-    expect(m2.reply.mock.calls[0]?.[0]).toContain('21:00時点');
+    expect(m2.reply.mock.calls[0]?.[0]).toContain('-2.1 hPa');
+    expect(m2.reply.mock.calls[0]?.[0]).toContain('22:00時点');
 
     mod.dispose();
   });
