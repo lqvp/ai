@@ -126,6 +126,11 @@ enabled = true  # デフォルト: true
 allowReaction = true  # リアクションツールを有効にするか (デフォルト: true)
 
 # 好感度・1行メモ - memoryDir/aichat-affinity.json にユーザーごとの好感度(-100..100)と1行メモを保存
+[aichat.step2Audit]
+# Step2監査（各メッセージごとに構造化LLM呼び出しを行い、リアクション選定と好感度メモ更新を行う）
+# false にするとLLM呼び出し回数がほぼ半減するが、自動リアクションと好感度メモの更新は停止する
+# enabled = true
+
 [aichat.affinity]
 enabled = true
 ignoreThreshold = -30 # この値以下の相手は反応・返信しない

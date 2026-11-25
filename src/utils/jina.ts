@@ -91,9 +91,11 @@ export async function jinaSearch(
         timeout: { request: JINA_TIMEOUT_MS },
         responseType: 'json',
       }
-    ).json<JinaSearchResultItem[]>();
+    ).json<JinaSearchResultItem[] | { data?: JinaSearchResultItem[] }>();
 
-    const items = Array.isArray(data) ? data.slice(0, maxResults) : [];
+    // s.jina.ai のJSON応答は { code, status, data: [...] } にネストされている。
+    const list = Array.isArray(data) ? data : (data.data ?? []);
+    const items = list.slice(0, maxResults);
     if (items.length === 0) {
       return 'jina search returned no results.';
     }
@@ -145,14 +147,18 @@ export async function jinaRead(
   }
 
   try {
-    const data = await got
+    const raw = await got
       .post(JINA_READ_ENDPOINT, {
         form: { url },
         headers,
         timeout: { request: JINA_TIMEOUT_MS },
         responseType: 'json',
       })
-      .json<JinaReadResponse>();
+      .json<JinaReadResponse & { data?: JinaReadResponse }>();
+
+    // r.jina.ai のJSON応答は { code, status, data: {...} } にネストされている。
+    // フラット形式も将来の互換のため許容する。
+    const data = raw.data ?? raw;
 
     const body =
       data.content || data.description || data.title || '(no content)';

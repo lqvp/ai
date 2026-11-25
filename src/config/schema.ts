@@ -98,6 +98,10 @@ export type Config = {
       enabled?: boolean;
       allowReaction?: boolean;
     };
+    /** Step2監査（各メッセージごとの構造化LLM呼び出しでリアクション選定＋好感度メモ更新。無効化でLLMコスト約半減、ただし自動リアクションと好感度メモ更新は停止） */
+    step2Audit?: {
+      enabled?: boolean;
+    };
     /** 好感度・1行メモ管理（aichat-affinity.json） */
     affinity?: {
       enabled?: boolean;
