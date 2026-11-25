@@ -665,14 +665,16 @@ function validateAndResolve(input: RawConfig): Config {
 
     const isExplicitlyDisabled = kiatsu.enabled === false;
 
-    // open-meteo.ts は models=jma_msm（格子間隔: 緯度 0.05°・経度 0.0625°、格子中心:
-    // 北緯 22.4〜47.6°・東経 120〜150°）に固定している。Open-Meteo が受理する
-    // 外縁境界 [22.35, 47.65) × [119.9375, 150.0625) に合わせ、境界付近で HTTP 200 に
-    // なる座標（例: 47.61°N）を誤拒否せず、HTTP 400 になる領域外座標だけを起動時に弾く。
+    // open-meteo.ts は models=jma_msm（格子中心: 北緯 22.4〜47.6° [0.05°刻み・505点]、
+    // 東経 120〜150° [0.0625°刻み・481点]）に固定している。Open-Meteo（Swift Float32 実装）は
+    // 格子添字 `(Float32(coord) - Float32(origin)) / Float32(step)` が開区間 `(-1, count)` に
+    // 入るときだけ HTTP 200 を返し、等号境界（例: 119.9375° や Float32 丸めで 150.0625° に
+    // 落ちる 150.062499°）は HTTP 400 にする。同じ Float32 演算で正確に一致させる。
     // なお enabled = false で明示的に無効化されている場合は WGS84 範囲と型だけを見る。
-    for (const [key, wgsMin, wgsMax, msmMin, msmMaxExclusive] of [
-      ['latitude', -90, 90, 22.35, 47.65],
-      ['longitude', -180, 180, 119.9375, 150.0625],
+    const f32 = Math.fround;
+    for (const [key, wgsMin, wgsMax, origin, step, count, labelRange] of [
+      ['latitude', -90, 90, 22.4, 0.05, 505, '北緯約 22.35〜47.65°'],
+      ['longitude', -180, 180, 120, 0.0625, 481, '東経約 119.9375〜150.0625°'],
     ] as const) {
       const value = kiatsu[key];
       if (value === undefined) continue;
@@ -680,13 +682,13 @@ function validateAndResolve(input: RawConfig): Config {
         issues.push(
           `kiatsu.${key} は ${wgsMin}〜${wgsMax} の数値で指定してください`
         );
-      } else if (
-        !isExplicitlyDisabled &&
-        (value < msmMin || value >= msmMaxExclusive)
-      ) {
-        issues.push(
-          `kiatsu.${key} は JMA MSM の提供範囲（${msmMin} 以上 ${msmMaxExclusive} 未満）で指定してください`
-        );
+      } else if (!isExplicitlyDisabled) {
+        const gridIndex = f32(f32(f32(value) - f32(origin)) / f32(step));
+        if (!(gridIndex > -1 && gridIndex < count)) {
+          issues.push(
+            `kiatsu.${key} は JMA MSM の提供範囲（${labelRange}）で指定してください`
+          );
+        }
       }
     }
 

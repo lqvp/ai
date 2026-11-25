@@ -591,8 +591,9 @@ export default class extends Module<KiatsuData> {
 
     // クールダウンタイマーは通知投稿の成否に関わらず先に仕掛ける
     this.later(backoffMs, () => {
-      // 再開時にカウントを戻さないと、再開後の1回の失敗でまた閾値に達する。
+      // 再開時にカウントを戻さないと、再開後の1回の失敗や単発の時刻ずれでまた閾値に達する。
       this.errorCount = 0;
+      this.consecutiveMissingHours = 0;
       this.suspended = false;
       // 「再開しました」は取得に成功した時点で出す。
       this.pendingResumeNotice = true;

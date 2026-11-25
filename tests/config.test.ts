@@ -190,14 +190,17 @@ describe('resolveConfig', () => {
     expect(config.kiatsu).toEqual({ enabled: true });
   });
 
-  it('rejects kiatsu coordinates outside JMA MSM outer grid coverage ([22.35, 47.65) × [119.9375, 150.0625))', () => {
+  it('rejects kiatsu coordinates outside Open-Meteo JMA MSM Float32 grid acceptance', () => {
+    // 実 API で HTTP 400 になる境界値（Float32 等号境界の 119.9375, 119.937501, 150.062499 等を含む）を弾く
     for (const coords of [
       { latitude: 90.1, longitude: 139 },
       { latitude: -90.1, longitude: 139 },
-      { latitude: 22.34, longitude: 139 },
+      { latitude: 22.349999, longitude: 139 },
       { latitude: 47.65, longitude: 139 },
-      { latitude: 35.6, longitude: 119.937 },
-      { latitude: 35.6, longitude: 150.063 },
+      { latitude: 35.6, longitude: 119.9375 },
+      { latitude: 35.6, longitude: 119.937501 },
+      { latitude: 35.6, longitude: 150.062499 },
+      { latitude: 35.6, longitude: 150.0625 },
       { latitude: 0, longitude: 0 },
       { latitude: '36.3' as never, longitude: 139 },
     ]) {
@@ -206,11 +209,11 @@ describe('resolveConfig', () => {
       );
     }
 
-    // 格子外縁付近で Open-Meteo が HTTP 200 を返す座標（47.61°N 等）は許可する
+    // 実 API で HTTP 200 になる境界すぐ内側の座標は許可する
     for (const coords of [
-      { latitude: 22.35, longitude: 119.9375 },
+      { latitude: 22.35, longitude: 119.93751 },
       { latitude: 47.61, longitude: 139 },
-      { latitude: 47.649, longitude: 150.062 },
+      { latitude: 47.649998, longitude: 150.06249 },
     ]) {
       const config = resolveConfig({
         ...base,
