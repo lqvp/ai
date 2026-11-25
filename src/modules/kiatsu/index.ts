@@ -556,21 +556,25 @@ export default class extends Module<KiatsuData> {
   private restoreState(): void {
     const data = this.getData();
 
-    // 地点が変わっていたら、前の地点の警報状態は持ち越さない。
-    // 持ち越すと、新しい地点で最初の低下を取りこぼす。
-    if (data.spot !== undefined && data.spot !== this.spotKey) {
+    // 日次投稿枠は地点に依存しないので、地点が変わっても必ず読み戻す。
+    // ここを地点判定のあとに置くと、地点変更＋再起動で当日の投稿数が
+    // 0 に戻り、同じ日に上限を超えて投稿できてしまう。
+    this.postsToday = typeof data.postsToday === 'number' ? data.postsToday : 0;
+    this.postsTodayKey = data.postsTodayKey ?? null;
+
+    const spotChanged = data.spot !== undefined && data.spot !== this.spotKey;
+
+    if (spotChanged) {
+      // 警報状態だけは地点にひも付く。前の地点の低下を引き継ぐと、
+      // 新しい地点で最初の低下を取りこぼす。
       this.log('地点が変わったため、警報状態は引き継ぎません。');
-      // 日次投稿枠は地点に依存しない（同じ日に地点を変えても上限は超えない）。
       this.alertState = { alerting: false };
       this.pendingAlert = false;
       this.persistState();
-      return;
+    } else {
+      this.alertState = { alerting: data.alerting === true };
+      this.pendingAlert = data.pending === true;
     }
-
-    this.alertState = { alerting: data.alerting === true };
-    this.pendingAlert = data.pending === true;
-    this.postsToday = typeof data.postsToday === 'number' ? data.postsToday : 0;
-    this.postsTodayKey = data.postsTodayKey ?? null;
 
     // 日付が変わっていれば上限はリセットされる（syncPostDay と同じ規則）。
     this.syncPostDay();
