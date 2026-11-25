@@ -144,4 +144,33 @@ describe('LlmUsageGuard', () => {
       reason: 'error_backoff',
     });
   });
+
+  it('resets the shared consecutive error count when a structured call succeeds', async () => {
+    const dir = createTempDir();
+    initConfig(
+      resolveConfig({
+        host: 'https://example.com',
+        i: 'token',
+        aichat: {
+          llmBudget: {
+            maxCallsPerDay: 10,
+            maxConsecutiveErrors: 2,
+            errorBackoffMinutes: 10,
+          },
+        },
+      })
+    );
+    const guard = new LlmUsageGuard({
+      filePath: join(dir, 'aichat-llm-usage.json'),
+      now: () => Date.parse('2026-11-24T12:00:00Z'),
+    });
+
+    expect(await guard.tryAcquire()).toEqual({ allowed: true });
+    await guard.recordOutcome(false);
+    expect(await guard.tryAcquire('structured')).toEqual({ allowed: true });
+    await guard.recordOutcome(true, 'structured');
+    expect(await guard.tryAcquire()).toEqual({ allowed: true });
+    await guard.recordOutcome(false);
+    expect(await guard.tryAcquire()).toEqual({ allowed: true });
+  });
 });
