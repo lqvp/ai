@@ -357,3 +357,16 @@ describe('kiatsu の座標指定', () => {
     ).not.toThrow();
   });
 });
+
+describe('廃止キーの後方互換', () => {
+  it('旧 postIntervalMs が文字列でも起動を止めない', () => {
+    // 旧設定では postIntervalMs = "43200000" のように書かれていた。
+    // 廃止キーは無視するのが約束なので、型を理由に起動を失敗させない。
+    const config = resolveConfig({
+      ...base,
+      kiatsu: { postIntervalMs: '43200000', locationCode: '13102' },
+    } as unknown as Parameters<typeof resolveConfig>[0]);
+
+    expect(config.kiatsu?.latitude).toBeUndefined();
+  });
+});

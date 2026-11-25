@@ -79,6 +79,8 @@ const LEGACY_KEYS = ['locationCode', 'postIntervalMs', 'minPostLevel'] as const;
 
 /** 再起動をまたいで保持する状態（日次上限と警報フラグ）。 */
 type KiatsuData = {
+  /** 状態を保存したときの地点。地点を変えたら状態は引き継がない */
+  spot?: string;
   alerting?: boolean;
   postsToday?: number;
   postsTodayKey?: string | null;
@@ -485,9 +487,27 @@ export default class extends Module<KiatsuData> {
     this.log(`気圧警報を投稿しました（本日 ${this.postsToday} 件目）。`);
   }
 
+  /** 設定されている地点を表すキー。地点変更の検出に使う。 */
+  private get spotKey(): string {
+    const latitude = config.kiatsu?.latitude ?? DEFAULTS.latitude;
+    const longitude = config.kiatsu?.longitude ?? DEFAULTS.longitude;
+    return `${latitude},${longitude}`;
+  }
+
   /** 再起動をまたいだ状態を読み戻す。 */
   private restoreState(): void {
     const data = this.getData();
+
+    // 地点が変わっていたら、前の地点の警報状態は持ち越さない。
+    // 持ち越すと、新しい地点で最初の低下を取りこぼす。
+    if (data.spot !== undefined && data.spot !== this.spotKey) {
+      this.log('地点が変わったため、警報状態は引き継ぎません。');
+      this.alertState = { alerting: false };
+      this.postsToday = 0;
+      this.postsTodayKey = null;
+      this.persistState();
+      return;
+    }
 
     this.alertState = { alerting: data.alerting === true };
     this.postsToday = typeof data.postsToday === 'number' ? data.postsToday : 0;
@@ -500,6 +520,7 @@ export default class extends Module<KiatsuData> {
   /** 再起動をまたいで保持したい状態を保存する。 */
   private persistState(): void {
     this.setData({
+      spot: this.spotKey,
       alerting: this.alertState.alerting,
       postsToday: this.postsToday,
       postsTodayKey: this.postsTodayKey,
