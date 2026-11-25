@@ -203,8 +203,12 @@ export class LlmUsageGuard {
         return {
           next: {
             ...current,
-            consecutiveErrors: 0,
-            structuredConsecutiveErrors: 0,
+            consecutiveErrors:
+              failureKind === 'general' ? 0 : current.consecutiveErrors,
+            structuredConsecutiveErrors:
+              failureKind === 'structured'
+                ? 0
+                : current.structuredConsecutiveErrors,
           },
           result: undefined,
         };

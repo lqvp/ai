@@ -315,7 +315,20 @@ export async function genTextByOpenaiDetailed(
 
     // 副作用のあるツールを実行する前に、結果を文章化する次のAPI枠を確保する。
     // 確保できない場合はリアクション等を実行せず予算エラーで終了する。
-    reservedNextRequest = await acquireLlmCallBudget(ctx.log);
+    try {
+      reservedNextRequest = await acquireLlmCallBudget(ctx.log);
+    } catch (err: unknown) {
+      if (
+        err instanceof LlmBudgetBlockedError &&
+        messages.some((message) => message.role === 'tool')
+      ) {
+        return {
+          text: 'ツール実行は完了しましたが、LLM予算上限のため結果の要約を生成できませんでした。',
+          metadataSuffix: '',
+        };
+      }
+      throw err;
+    }
 
     const results = await Promise.all(
       effectiveToolCalls.map(async (call) => {

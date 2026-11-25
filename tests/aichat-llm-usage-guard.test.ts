@@ -138,5 +138,10 @@ describe('LlmUsageGuard', () => {
       reason: 'error_backoff',
     });
     expect(await guard.tryAcquire('general')).toEqual({ allowed: true });
+    await guard.recordOutcome(true, 'general');
+    expect(await guard.tryAcquire('structured')).toEqual({
+      allowed: false,
+      reason: 'error_backoff',
+    });
   });
 });
