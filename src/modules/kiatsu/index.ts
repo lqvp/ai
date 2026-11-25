@@ -55,10 +55,24 @@ const FALLBACK_HOURS = 1;
  */
 const NOTICE_LIMIT = 2;
 
+/** 未送信の警報を諦めるまでの試行回数。 */
+const MAX_ALERT_ATTEMPTS = 3;
+
 /** これより古い ΔP はメンション応答に出さない（鮮度切れ）。 */
 const STALE_MS = 2 * 60 * 60 * 1000;
 
 const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * `YYYY-MM-DDTHH:mm` を Asia/Tokyo のミリ秒へ変換する。
+ *
+ * 予報の時刻はタイムゾーン表記を持たないローカル時刻なので、`new Date(str)` に
+ * 渡すと実行環境のタイムゾーンで解釈されてしまう。明示的に +09:00 を付ける。
+ */
+function parseLocalHourMs(timeLocal: string): number | null {
+  const ms = Date.parse(`${timeLocal}:00+09:00`);
+  return Number.isNaN(ms) ? null : ms;
+}
 
 /** 旧設定キー。読み込まれても使われないため、起動時に警告する。 */
 const LEGACY_KEYS = ['locationCode', 'postIntervalMs', 'minPostLevel'] as const;
@@ -96,8 +110,13 @@ export default class extends Module<KiatsuData> {
   /** 直近の ΔP3h。計算できないときは null。 */
   private latestDelta3h: number | null = null;
 
-  /** `latestDelta3h` を観測した時刻（ミリ秒）。鮮度切れの判定に使う。 */
-  private latestDeltaAt: number | null = null;
+  /**
+   * 評価した予報点の時刻（ミリ秒）。
+   *
+   * 鮮度は「取得時刻」ではなく**予報点の時刻**から測る。20:50 に 20:00 の点を
+   * 取った場合、22:40 の時点で予報は 2時間40分前のものだから。
+   */
+  private latestObservedAtMs: number | null = null;
 
   /** `latestDelta3h` の観測時刻（ローカル時刻キー）。返信に添える。 */
   private latestObservedAt: string | null = null;
@@ -109,6 +128,21 @@ export default class extends Module<KiatsuData> {
    * 同じ警報で毎回 trigger してしまう。
    */
   private alertState: AlertState = { alerting: false };
+
+  /**
+   * 送信待ちの警報（ΔP3h）。投稿に失敗したら次回以降に再試行する。
+   *
+   * 判定状態（alerting）とは分けて持つ。状態を進めたうえで投稿だけ失敗した
+   * 場合に、状態を巻き戻すと「受理されたのに応答が落ちた」ケースで二重投稿に
+   * なる。判定は進め、未送信だけを別に抱える。
+   */
+  private pendingAlert: number | null = null;
+
+  /** 未送信警報の試行回数。無限に再試行しないための上限。 */
+  private pendingAlertAttempts = 0;
+
+  /** 投稿処理の多重実行を防ぐ（タイマーと他の経路が重なったとき）。 */
+  private posting = false;
 
   private errorCount = 0;
 
@@ -243,7 +277,7 @@ export default class extends Module<KiatsuData> {
     const observedAt = forecast.hours[currentIndex].timeLocal;
 
     this.latestDelta3h = delta3h;
-    this.latestDeltaAt = now.getTime();
+    this.latestObservedAtMs = parseLocalHourMs(observedAt);
     this.latestObservedAt = observedAt;
 
     const { state, trigger } = evaluateAlert(
@@ -252,11 +286,17 @@ export default class extends Module<KiatsuData> {
       this.alertOptions
     );
 
-    const previousAlertState = this.alertState;
-
     // 投稿の有無に関わらず状態は進める（同じ警報の再 trigger を防ぐ）。
+    // 送信に失敗したときは、状態とは別に「未送信」として抱える。
     this.alertState = state;
     this.persistState();
+
+    // 警報が解除されたら未送信の警報も捨てる。解除済みの古い警報を
+    // あとから投稿するのは、状況と食い違う。
+    if (!state.alerting) {
+      this.pendingAlert = null;
+      this.pendingAlertAttempts = 0;
+    }
 
     this.log(
       `気圧トレンドを更新しました: Δ3h=${
@@ -264,15 +304,13 @@ export default class extends Module<KiatsuData> {
       } (警報中: ${state.alerting})`
     );
 
-    if (allowPost && trigger && delta3h !== null) {
-      const result = await this.postAlert(delta3h);
+    if (trigger && delta3h !== null && this.pendingAlert === null) {
+      this.pendingAlert = delta3h;
+      this.pendingAlertAttempts = 0;
+    }
 
-      // 投稿に失敗したら状態を巻き戻し、次の評価で再試行させる。
-      // 進めたままだと、気圧が戻るまで同じ警報が出せなくなる。
-      if (result === 'failed') {
-        this.alertState = previousAlertState;
-        this.persistState();
-      }
+    if (allowPost) {
+      await this.flushPendingAlert();
     }
 
     // 取得と判定まで通ったので、失敗カウントと連続停止をリセットする。
@@ -312,35 +350,49 @@ export default class extends Module<KiatsuData> {
   }
 
   /**
-   * 警報を投稿する。
+   * 未送信の警報があれば送る。
    *
-   * 戻り値で「投稿した / 上限で見送った / 失敗した」を区別する。
-   * 失敗だけ状態を巻き戻す対象なので、見送りと混ぜない。
+   * 投稿処理は多重実行しない。タイマーとメンション経由の更新が重なると、
+   * 同じ警報を2回送ってしまうため。
    */
   @bindThis
-  private async postAlert(
-    delta3h: number
-  ): Promise<'posted' | 'skipped' | 'failed'> {
+  private async flushPendingAlert(): Promise<void> {
+    if (this.pendingAlert === null || this.posting) return;
+
     // 日付をまたいだ直後に前日の枠で判定しないよう、投稿直前に同期する。
     this.syncPostDay();
 
     if (!this.canPostToday()) {
-      // 日次上限に達している場合も状態遷移は進めているので、ここは見送るだけ。
+      // 日次上限に達している場合も判定は進めているので、ここは見送るだけ。
       this.log('本日の投稿上限に達しているため、警報の投稿は見送ります。');
-      return 'skipped';
+      return;
     }
+
+    this.posting = true;
 
     try {
       await this.ai.post({
-        text: buildAlertMessage(this.locationName, delta3h),
+        text: buildAlertMessage(this.locationName, this.pendingAlert),
       });
+      this.pendingAlert = null;
+      this.pendingAlertAttempts = 0;
       // 投稿できたときだけ枠を消費する（失敗で枠だけ減るのを避ける）。
       this.recordPost();
-      return 'posted';
     } catch (error) {
-      this.log('警報の投稿に失敗しました。');
+      this.pendingAlertAttempts++;
+      this.log(
+        `警報の投稿に失敗しました（${this.pendingAlertAttempts}/${MAX_ALERT_ATTEMPTS} 回目）。`
+      );
       console.warn(error);
-      return 'failed';
+
+      if (this.pendingAlertAttempts >= MAX_ALERT_ATTEMPTS) {
+        // 何度試しても通らないなら諦める。古い警報を延々と抱えない。
+        this.log('警報の投稿を諦めます。');
+        this.pendingAlert = null;
+        this.pendingAlertAttempts = 0;
+      }
+    } finally {
+      this.posting = false;
     }
   }
 
@@ -426,6 +478,8 @@ export default class extends Module<KiatsuData> {
 
   @bindThis
   private recordPost(): void {
+    // 送信中に日付が変わった場合に備え、確定時点の日付で数える。
+    this.syncPostDay();
     this.postsToday++;
     this.persistState();
     this.log(`気圧警報を投稿しました（本日 ${this.postsToday} 件目）。`);
@@ -490,9 +544,11 @@ export default class extends Module<KiatsuData> {
 
   /** 鮮度の切れた ΔP は返信に出さない（古い値を断定しない）。 */
   private currentDelta(): number | null {
-    if (this.latestDelta3h === null || this.latestDeltaAt === null) return null;
+    if (this.latestDelta3h === null || this.latestObservedAtMs === null) {
+      return null;
+    }
 
-    return Date.now() - this.latestDeltaAt > STALE_MS
+    return Date.now() - this.latestObservedAtMs > STALE_MS
       ? null
       : this.latestDelta3h;
   }
@@ -509,6 +565,7 @@ export default class extends Module<KiatsuData> {
       startIndex: this.latestForecastStart,
       thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
       fetchedAtLocal: this.latestForecastFetchedAt ?? undefined,
+      nowLocal: formatLocalHourKey(new Date()),
     });
 
     return await this.ai.upload(image, {

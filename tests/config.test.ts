@@ -331,3 +331,29 @@ describe('kiatsu の数値型', () => {
     ).toThrow(/数値で指定してください/);
   });
 });
+
+describe('kiatsu の座標指定', () => {
+  it('片側だけの座標指定を拒否する', () => {
+    // longitude が未指定だと既定値と組み合わされ、意図しない地点になる。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { latitude: 36.3219 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/両方そろえて/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { longitude: 139.0033 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/両方そろえて/);
+
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { latitude: 36.3219, longitude: 139.0033 },
+      } as Parameters<typeof resolveConfig>[0])
+    ).not.toThrow();
+  });
+});

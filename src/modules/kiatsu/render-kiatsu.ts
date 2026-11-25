@@ -13,6 +13,8 @@ export interface RenderKiatsuOptions {
   maxColumns?: number;
   /** タイトルに出す地点名。渡されない場合は緯度経度で代替する。 */
   locationName?: string;
+  /** 描画時点のローカル時刻（`YYYY-MM-DDTHH:00`）。相対日付の基準に使う */
+  nowLocal?: string;
   /**
    * 表示を開始する `hours` の添字。既定 0。
    *
@@ -120,6 +122,13 @@ function parseHourlyTime(timeLocal: string): ParsedHourlyTime | null {
   };
 }
 
+/**
+ * 日付ラベル。
+ *
+ * 基準は「描画時点の日付」でなければならない。予報の先頭を基準にすると、
+ * 前日の予報を描いたときに 25日を「今日」と表示してしまう（日付をまたいで
+ * 取得に失敗した場合に起こる）。基準が取れないときだけ先頭基準に戻す。
+ */
 function formatDayLabel(dayOffset: number): string {
   switch (dayOffset) {
     case 0:
@@ -128,8 +137,10 @@ function formatDayLabel(dayOffset: number): string {
       return '明日';
     case 2:
       return '明後日';
+    case -1:
+      return '昨日';
     default:
-      return dayOffset > 2 ? `${dayOffset}日後` : '今日';
+      return dayOffset > 2 ? `${dayOffset}日後` : `${-dayOffset}日前`;
   }
 }
 
@@ -149,11 +160,12 @@ function isPointMissing(point: HourlyPoint | null): boolean {
 function buildForecastColumns(
   hours: readonly HourlyPoint[],
   maxColumns: number,
-  startIndex: number
+  startIndex: number,
+  base: ParsedHourlyTime | null
 ): ForecastColumn[] {
   const startPoint = hours[startIndex] ?? null;
   const start =
-    startPoint == null ? null : parseHourlyTime(startPoint.timeLocal);
+    base ?? (startPoint == null ? null : parseHourlyTime(startPoint.timeLocal));
 
   const columns: ForecastColumn[] = [];
 
@@ -406,7 +418,16 @@ export function renderKiatsuImage(
 
   const startIndex = normalizeStartIndex(options?.startIndex, hours.length);
   const thresholdHpa = normalizeThresholdHpa(options?.thresholdHpa);
-  const columns = buildForecastColumns(hours, maxColumns, startIndex);
+  // 「今日」の基準は描画時点の日付。渡されない場合は予報の先頭を使う。
+  const nowParsed = options?.nowLocal
+    ? parseHourlyTime(options.nowLocal)
+    : null;
+  const columns = buildForecastColumns(
+    hours,
+    maxColumns,
+    startIndex,
+    nowParsed
+  );
 
   const padding = 32;
   const panelPadding = 18;

@@ -670,6 +670,16 @@ function validateAndResolve(input: RawConfig): Config {
       }
     }
 
+    // 片側だけの座標指定は拒否する。片方だけだと既定値と組み合わされ、
+    // 利用者が意図していない地点の予報を投稿してしまう。
+    if (
+      (kiatsu.latitude === undefined) !== (kiatsu.longitude === undefined)
+    ) {
+      issues.push(
+        'kiatsu.latitude と kiatsu.longitude は両方そろえて指定してください'
+      );
+    }
+
     if (kiatsu.alertThresholdHpa !== undefined) {
       const value = kiatsu.alertThresholdHpa;
       // 気圧の低下を負値で表す。0 は「常時警報」になり判定が成立しないため弾く
