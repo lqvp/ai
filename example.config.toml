@@ -267,5 +267,5 @@ precision = 2
 # これらの設定は、外部APIやWebSocket接続時に送信されるUser-Agentを制御します
 # サーバー管理者がボットの識別を容易にし、適切なレート制限を設定できるようになります
 [userAgent]
-http = "藍 (Ai) Bot/3.3.0-lqvp (+https://github.com/your-repo/ai-bot)"
-websocket = "藍 (Ai) Bot/3.3.0-lqvp (+https://github.com/your-repo/ai-bot)"
+http = "藍 (Ai) Bot/3.4.0-lqvp (+https://github.com/your-repo/ai-bot)"
+websocket = "藍 (Ai) Bot/3.4.0-lqvp (+https://github.com/your-repo/ai-bot)"
