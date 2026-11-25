@@ -51,14 +51,6 @@ function pad2(value: number): string {
 }
 
 /**
- * 設定ミスを黙って通さないための検証。
- *
- * - threshold が 0 以上だと「下回ったら警報」が成立しない（0 は常時警報になる）。
- * - 解除幅が負だと解除条件が閾値より下になり、警報に入った直後に解除され続ける。
- * - NaN / Infinity は比較が常に false になるため、判定が静かに壊れる。
- * いずれも呼び出し側の設定バグなので、既定値で握りつぶさず例外にする。
- */
-/**
  * 閾値設定の妥当性を検証する。
  *
  * `evaluateAlert` は毎回検証するが、設定ミスは起動時に検出したい
@@ -68,6 +60,14 @@ export function validateAlertOptions(options: AlertOptions): void {
   assertValidOptions(options);
 }
 
+/**
+ * 設定ミスを黙って通さないための検証。
+ *
+ * - threshold が 0 以上だと「下回ったら警報」が成立しない（0 は常時警報になる）。
+ * - 解除幅が負だと解除条件が閾値より下になり、警報に入った直後に解除され続ける。
+ * - NaN / Infinity は比較が常に false になるため、判定が静かに壊れる。
+ * いずれも呼び出し側の設定バグなので、既定値で握りつぶさず例外にする。
+ */
 function assertValidOptions(options: AlertOptions): void {
   const { thresholdHpa, hysteresisHpa } = options;
 
