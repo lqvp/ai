@@ -596,6 +596,72 @@ describe('decideWanderTick (ADR 0002 scheduler)', () => {
         slots: [0, 10],
         boundsKey: '2..2',
       });
+
+      // lastRunAt が前の時間帯にあり当時間帯の実績ゼロが確定できる旧予定は、空配列から追跡を開始して途中の min_gap 見送りを過大計上しない
+      const zeroRunDir = createTempDir();
+      const zeroRunPath = join(zeroRunDir, 'aichat-wander.json');
+      const t1155_00 = Date.parse('2026-11-24T11:55:00+09:00');
+      const t1210_zero = Date.parse('2026-11-24T12:10:00+09:00');
+      const t1230_zero = Date.parse('2026-11-24T12:30:00+09:00');
+      const t1235_zero = Date.parse('2026-11-24T12:35:00+09:00');
+      writeFileSync(
+        zeroRunPath,
+        JSON.stringify({
+          version: 1,
+          lastPostAt: null,
+          lastRunAt: t1155_00,
+          schedule: { hour: '2026-11-24T12', slots: [10, 30] },
+          recent: [],
+          actedNoteIds: [],
+          userLastReplyAt: {},
+          userLastReactAt: {},
+          userNoResponseUntil: {},
+          recentEmojis: [],
+        }),
+        'utf8'
+      );
+
+      const zeroStore1 = new WanderStore({
+        filePath: zeroRunPath,
+        now: () => t1210_zero,
+      });
+      const zeroSkip = await zeroStore1.checkAndCommitScheduleTick(
+        t1210_zero,
+        { activeHoursStart: 9, activeHoursEnd: 23, minGapMinutes: 20 },
+        () => 0.5
+      );
+      expect(zeroSkip.run).toBe(false);
+      expect(zeroSkip.reason).toBe('min_gap');
+      expect(zeroSkip.state.executedSlots).toEqual([]);
+      expect((await zeroStore1.load()).schedule?.executedSlots).toEqual([]);
+
+      const zeroRun = await zeroStore1.checkAndCommitScheduleTick(
+        t1230_zero,
+        { activeHoursStart: 9, activeHoursEnd: 23, minGapMinutes: 20 },
+        () => 0.5
+      );
+      expect(zeroRun.run).toBe(true);
+      expect(zeroRun.state.executedSlots).toEqual([30]);
+
+      const zeroStore2 = new WanderStore({
+        filePath: zeroRunPath,
+        now: () => t1235_zero,
+      });
+      const zeroMigrated = await zeroStore2.checkAndCommitScheduleTick(
+        t1235_zero,
+        {
+          activeHoursStart: 9,
+          activeHoursEnd: 23,
+          minGapMinutes: 20,
+          minRunsPerHour: 2,
+          maxRunsPerHour: 2,
+        },
+        () => 0.5
+      );
+      expect(zeroMigrated.state.slots).toHaveLength(2);
+      expect(zeroMigrated.state.slots![0]).toBe(30);
+      expect(zeroMigrated.state.slots![1]).toBeGreaterThanOrEqual(50);
+      expect(zeroMigrated.state.executedSlots).toEqual([30]);
     }
 
     // 2. 枠の開始から +40s ずれて再起動しても nowMs 基準で最短間隔を満たせば即座に2枠追加実行でき、早着ティックは min_gap で見送られる

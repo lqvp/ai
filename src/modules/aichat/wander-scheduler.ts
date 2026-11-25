@@ -200,15 +200,16 @@ function buildRemainingTickCandidates(
 }
 
 type HourProgress = {
-  /** 確実に実行されたと記録されているスロット一覧（旧データでは undefined を維持し履歴を捏造しない） */
+  /** 確実に確定できる実行済みスロット一覧（当時間帯の実行有無が不確定な旧データでは undefined を維持し履歴を捏造しない） */
   trackedExecutedSlots: number[] | undefined;
-  /** 上限超過を防ぐために差し引く消化スロット（tracked がある場合はその一覧、旧データでは lastRunAt 以前の予定枠すべて） */
+  /** 上限超過を防ぐために差し引く消化スロット（確定できる場合はその一覧、不確定な旧データでは lastRunAt 以前の予定枠すべて） */
   accountedSlots: number[];
 };
 
 /**
  * 同一時間帯の進捗を解決する。
- * executedSlots を持たない旧データでは、上限超過を防ぐため lastRunAt 以前に予定されていた枠を保守的に消化扱いとしつつ、executedSlots 自体は捏造しない。
+ * executedSlots を持たない旧データのうち、lastRunAt が無い・または前の時間帯であれば当時間帯の実績ゼロが確定するため空配列で追跡を開始する。
+ * 当時間帯に既に lastRunAt がある旧データでは、上限超過を防ぐため lastRunAt 以前の予定枠を保守的に消化扱いとしつつ executedSlots 自体は捏造しない。
  */
 function resolveHourProgress(
   state: WanderScheduleState,
@@ -226,23 +227,30 @@ function resolveHourProgress(
     const tracked = [...unique].sort((a, b) => a - b);
     return { trackedExecutedSlots: tracked, accountedSlots: tracked };
   }
-  if (
-    state.lastRunAt != null &&
-    state.lastRunAt >= hourStartMs &&
-    state.lastRunAt <= nowMs &&
-    Array.isArray(state.slots)
-  ) {
-    const possible = [
-      ...new Set(
-        state.slots.filter(
-          (s) =>
-            Number.isInteger(s) &&
-            s >= 0 &&
-            s <= tickMinute &&
-            hourStartMs + s * 60_000 <= state.lastRunAt!
-        )
-      ),
-    ].sort((a, b) => a - b);
+  if (state.lastRunAt == null || state.lastRunAt < hourStartMs) {
+    return { trackedExecutedSlots: [], accountedSlots: [] };
+  }
+  if (state.lastRunAt <= nowMs) {
+    const lastRunSlot =
+      Math.floor((state.lastRunAt - hourStartMs) / (TICK_MINUTES * 60_000)) *
+      TICK_MINUTES;
+    const possibleSet = new Set<number>();
+    if (lastRunSlot >= 0 && lastRunSlot <= tickMinute) {
+      possibleSet.add(lastRunSlot);
+    }
+    if (Array.isArray(state.slots)) {
+      for (const s of state.slots) {
+        if (
+          Number.isInteger(s) &&
+          s >= 0 &&
+          s <= tickMinute &&
+          hourStartMs + s * 60_000 <= state.lastRunAt
+        ) {
+          possibleSet.add(s);
+        }
+      }
+    }
+    const possible = [...possibleSet].sort((a, b) => a - b);
     return { trackedExecutedSlots: undefined, accountedSlots: possible };
   }
   return { trackedExecutedSlots: undefined, accountedSlots: [] };
