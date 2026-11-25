@@ -63,7 +63,14 @@ const HOUR_MS = 60 * 60 * 1000;
 /** 旧設定キー。読み込まれても使われないため、起動時に警告する。 */
 const LEGACY_KEYS = ['locationCode', 'postIntervalMs', 'minPostLevel'] as const;
 
-export default class extends Module {
+/** 再起動をまたいで保持する状態（日次上限と警報フラグ）。 */
+type KiatsuData = {
+  alerting?: boolean;
+  postsToday?: number;
+  postsTodayKey?: string | null;
+};
+
+export default class extends Module<KiatsuData> {
   public readonly name = 'kiatsu';
 
   /** 画像生成に使う直近の予報。取得に失敗したときは前回の値を残す。 */
@@ -128,6 +135,7 @@ export default class extends Module {
     if (config.kiatsu?.enabled === false) return false;
 
     this.warnLegacyKeys();
+    this.restoreState();
 
     // 設定ミスは起動時に落とす。ティックごとに evaluateAlert が例外を投げると、
     // エラーログだけが出て機能が静かに止まる。
@@ -178,6 +186,17 @@ export default class extends Module {
 
   @bindThis
   private async update(): Promise<void> {
+    await this.evaluate(true);
+  }
+
+  /**
+   * 予報を取り直して判定する。
+   *
+   * `allowPost` が false のときは投稿しない（メンション応答用）。
+   * 話しかけられただけで警報が出ると、利用者の意図しないタイミングで
+   * タイムラインに投稿してしまうため、返信のための更新では投稿しない。
+   */
+  private async evaluate(allowPost: boolean): Promise<void> {
     // 停止中の呼び出し（mentionHook 経由を含む）では何もしない。
     // ここで失敗を数えると、再開直後の1回でまた閾値に達してしまう。
     if (this.suspended) return;
@@ -233,8 +252,11 @@ export default class extends Module {
       this.alertOptions
     );
 
+    const previousAlertState = this.alertState;
+
     // 投稿の有無に関わらず状態は進める（同じ警報の再 trigger を防ぐ）。
     this.alertState = state;
+    this.persistState();
 
     this.log(
       `気圧トレンドを更新しました: Δ3h=${
@@ -242,8 +264,15 @@ export default class extends Module {
       } (警報中: ${state.alerting})`
     );
 
-    if (trigger && delta3h !== null) {
-      await this.postAlert(delta3h);
+    if (allowPost && trigger && delta3h !== null) {
+      const result = await this.postAlert(delta3h);
+
+      // 投稿に失敗したら状態を巻き戻し、次の評価で再試行させる。
+      // 進めたままだと、気圧が戻るまで同じ警報が出せなくなる。
+      if (result === 'failed') {
+        this.alertState = previousAlertState;
+        this.persistState();
+      }
     }
 
     // 取得と判定まで通ったので、失敗カウントと連続停止をリセットする。
@@ -282,13 +311,23 @@ export default class extends Module {
     return -1;
   }
 
-  /** 警報を投稿する。日次上限に達していれば見送る。 */
+  /**
+   * 警報を投稿する。
+   *
+   * 戻り値で「投稿した / 上限で見送った / 失敗した」を区別する。
+   * 失敗だけ状態を巻き戻す対象なので、見送りと混ぜない。
+   */
   @bindThis
-  private async postAlert(delta3h: number): Promise<void> {
+  private async postAlert(
+    delta3h: number
+  ): Promise<'posted' | 'skipped' | 'failed'> {
+    // 日付をまたいだ直後に前日の枠で判定しないよう、投稿直前に同期する。
+    this.syncPostDay();
+
     if (!this.canPostToday()) {
       // 日次上限に達している場合も状態遷移は進めているので、ここは見送るだけ。
       this.log('本日の投稿上限に達しているため、警報の投稿は見送ります。');
-      return;
+      return 'skipped';
     }
 
     try {
@@ -297,9 +336,11 @@ export default class extends Module {
       });
       // 投稿できたときだけ枠を消費する（失敗で枠だけ減るのを避ける）。
       this.recordPost();
+      return 'posted';
     } catch (error) {
       this.log('警報の投稿に失敗しました。');
       console.warn(error);
+      return 'failed';
     }
   }
 
@@ -372,6 +413,7 @@ export default class extends Module {
 
     this.postsTodayKey = today;
     this.postsToday = 0;
+    this.persistState();
   }
 
   @bindThis
@@ -385,7 +427,29 @@ export default class extends Module {
   @bindThis
   private recordPost(): void {
     this.postsToday++;
+    this.persistState();
     this.log(`気圧警報を投稿しました（本日 ${this.postsToday} 件目）。`);
+  }
+
+  /** 再起動をまたいだ状態を読み戻す。 */
+  private restoreState(): void {
+    const data = this.getData();
+
+    this.alertState = { alerting: data.alerting === true };
+    this.postsToday = typeof data.postsToday === 'number' ? data.postsToday : 0;
+    this.postsTodayKey = data.postsTodayKey ?? null;
+
+    // 日付が変わっていれば上限はリセットされる（syncPostDay と同じ規則）。
+    this.syncPostDay();
+  }
+
+  /** 再起動をまたいで保持したい状態を保存する。 */
+  private persistState(): void {
+    this.setData({
+      alerting: this.alertState.alerting,
+      postsToday: this.postsToday,
+      postsTodayKey: this.postsTodayKey,
+    });
   }
 
   /** 判定に使う閾値。評価と起動時検証で同じ値を使う。 */
@@ -396,9 +460,32 @@ export default class extends Module {
     };
   }
 
-  /** 投稿文に出す地点名。未設定でも既定地点で動く。 */
+  /**
+   * 投稿文に出す地点名。
+   *
+   * `locationName` が未設定でも既定名（中央区）を出してはいけない。
+   * 利用者が緯度経度だけを設定した場合、実際には別の地点の予報なのに
+   * 「中央区」と名乗ることになる。名前が無ければ座標で示す。
+   */
   private get locationName(): string {
-    return config.kiatsu?.locationName ?? DEFAULTS.locationName;
+    const configured = config.kiatsu?.locationName?.trim();
+    if (configured) return configured;
+
+    const latitude = config.kiatsu?.latitude ?? DEFAULTS.latitude;
+    const longitude = config.kiatsu?.longitude ?? DEFAULTS.longitude;
+
+    const isDefaultSpot =
+      latitude === DEFAULTS.latitude && longitude === DEFAULTS.longitude;
+
+    return isDefaultSpot
+      ? DEFAULTS.locationName
+      : `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
+  }
+
+  /** 画像の地点ラベル。未設定ならレンダラに座標を描かせる。 */
+  private get renderLocationName(): string | undefined {
+    const configured = config.kiatsu?.locationName?.trim();
+    return configured ? configured : undefined;
   }
 
   /** 鮮度の切れた ΔP は返信に出さない（古い値を断定しない）。 */
@@ -418,7 +505,7 @@ export default class extends Module {
     // 配列を切り出す方式だと先頭3列の ΔP3h が計算できなくなるため、
     // 過去分（past_days=1）を残したまま開始位置だけ渡す。
     const image = renderKiatsuImage(this.latestForecast, {
-      locationName: this.locationName,
+      locationName: this.renderLocationName,
       startIndex: this.latestForecastStart,
       thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
       fetchedAtLocal: this.latestForecastFetchedAt ?? undefined,
@@ -434,7 +521,7 @@ export default class extends Module {
   private async mentionHook(message: Message) {
     if (!message.includes(['気圧', 'きあつ', 'kiatsu'])) return false;
 
-    await this.update();
+    await this.evaluate(false);
 
     let file: DriveFile | undefined;
 

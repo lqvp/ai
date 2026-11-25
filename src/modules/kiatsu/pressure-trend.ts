@@ -46,6 +46,16 @@ export const DEFAULT_ALERT_OPTIONS: AlertOptions = Object.freeze({
   hysteresisHpa: 0.5,
 });
 
+/**
+ * 比較の許容差（hPa）。
+ *
+ * 気圧は 0.1 hPa 刻みで返るが、引き算は二進小数の誤差を含む。例えば
+ * 1012.4 − 1010.1 は 2.2999999999999545 になり、しきい値 −2.3 と比べると
+ * 「下回っていない」と判定されて警報が落ちる。倍精度の誤差は 1e-12 程度
+ * なので、その桁だけ吸収する（表示値を丸めるわけではない）。
+ */
+const COMPARISON_EPSILON = 1e-9;
+
 function pad2(value: number): string {
   return String(value).padStart(2, '0');
 }
@@ -153,7 +163,7 @@ export function evaluateAlert(
   }
 
   if (!state.alerting) {
-    const trigger = delta3h <= options.thresholdHpa;
+    const trigger = delta3h <= options.thresholdHpa + COMPARISON_EPSILON;
     return { state: { alerting: trigger }, trigger };
   }
 

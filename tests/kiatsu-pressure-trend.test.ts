@@ -293,3 +293,49 @@ describe('連続停止のバックオフと通知上限', () => {
     expect(() => shouldNotifySuspension(0, -1)).toThrow();
   });
 });
+
+describe('境界の浮動小数', () => {
+  it('0.1 hPa 刻みの引き算の誤差で警報を落とさない', () => {
+    // 1012.4 - 1010.1 は 2.2999999999999545 になり、素朴な比較では
+    // しきい値 -2.3 を「下回っていない」と誤判定する。
+    const hours = [
+      {
+        timeLocal: '2026-11-25T17:00',
+        pressureMsl: 1012.4,
+        temperatureC: null,
+        weatherCode: null,
+      },
+      {
+        timeLocal: '2026-11-25T18:00',
+        pressureMsl: null,
+        temperatureC: null,
+        weatherCode: null,
+      },
+      {
+        timeLocal: '2026-11-25T19:00',
+        pressureMsl: null,
+        temperatureC: null,
+        weatherCode: null,
+      },
+      {
+        timeLocal: '2026-11-25T20:00',
+        pressureMsl: 1010.1,
+        temperatureC: null,
+        weatherCode: null,
+      },
+    ];
+
+    const raw = hours[3].pressureMsl! - hours[0].pressureMsl!;
+    expect(raw).toBeLessThan(2.3); // 誤差で 2.3 に届かないことを確認
+
+    const delta = deltaOverHours(hours, 3, 3);
+    expect(delta).not.toBeNull();
+    expect(
+      evaluateAlert(
+        delta,
+        { alerting: false },
+        { thresholdHpa: -2.3, hysteresisHpa: 0.5 }
+      ).trigger
+    ).toBe(true);
+  });
+});

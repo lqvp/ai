@@ -694,6 +694,17 @@ function validateAndResolve(input: RawConfig): Config {
       }
     }
 
+    // *Ms は数値として扱う。TOML で "3600000" と書くと文字列になり、
+    // タイマー計算（backoffDelayMs など）で例外になって監視が再開できなくなる。
+    for (const [key, value] of Object.entries(kiatsu)) {
+      if (!key.endsWith('Ms') || value === undefined) continue;
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        issues.push(
+          `kiatsu.${key} は数値で指定してください（クォートで囲まない）`
+        );
+      }
+    }
+
     if (kiatsu.maxPostsPerDay !== undefined) {
       const value = kiatsu.maxPostsPerDay;
       if (!isNumber(value) || !Number.isInteger(value) || value < 1) {

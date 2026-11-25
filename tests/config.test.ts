@@ -318,3 +318,16 @@ describe('loadConfig', () => {
     expect(() => loadConfig(file)).toThrow(ConfigError);
   });
 });
+
+describe('kiatsu の数値型', () => {
+  it('クォートされたミリ秒指定を拒否する', () => {
+    // TOML で errorCooldownMs = "3600000" と書くと文字列になり、
+    // タイマー計算で例外になって監視が再開できなくなる。
+    expect(() =>
+      resolveConfig({
+        ...base,
+        kiatsu: { errorCooldownMs: '3600000' },
+      } as Parameters<typeof resolveConfig>[0])
+    ).toThrow(/数値で指定してください/);
+  });
+});

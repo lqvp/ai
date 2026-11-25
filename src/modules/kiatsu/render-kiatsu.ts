@@ -319,8 +319,13 @@ function formatFetchedTime(fetchedAtLocal?: string): string | null {
   if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
   if (hour > 23 || minute > 59) return null;
 
+  // 日付も出す。取得に失敗して前日の予報を描いたとき、時刻だけだと
+  // 「今の予報」に見えてしまう（列の「今日」もデータ基準でしか動かない）。
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+
   // 正規表現で2桁固定なので、先頭ゼロを保つため元の文字列を使う
-  return `${match[4]}:${match[5]}`;
+  return `${month}/${day} ${match[4]}:${match[5]}`;
 }
 
 function formatCoordinate(

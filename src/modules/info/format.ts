@@ -89,7 +89,6 @@ export const CONFIG_LABELS = {
   pressure: {
     enabled: '気圧監視',
     locationName: '地点名',
-    coordinates: '緯度経度',
     alertThreshold: '投稿閾値 (3時間気圧変化)',
     updateInterval: '更新間隔',
   },
@@ -286,13 +285,6 @@ export function formatPressureSettings(): string {
     ? Math.floor(config.kiatsu.updateIntervalMs / 60000) + '分'
     : FORMAT_DEFAULTS.notSet;
 
-  const latitude = config.kiatsu.latitude;
-  const longitude = config.kiatsu.longitude;
-  const coordinates =
-    latitude !== undefined && longitude !== undefined
-      ? `${latitude}, ${longitude}`
-      : FORMAT_DEFAULTS.notSet;
-
   const alertThreshold =
     config.kiatsu.alertThresholdHpa !== undefined
       ? `${config.kiatsu.alertThresholdHpa} hPa`
@@ -305,10 +297,11 @@ export function formatPressureSettings(): string {
     `- ${CONFIG_LABELS.pressure.enabled}: ${formatBooleanSetting(
       config.kiatsu.enabled ?? true
     )}`,
+    // 座標は出さない。公開ノートへの返信に設定値が載ると、監視地点が
+    // 第三者に特定されてしまう（locationName は利用者が自分で決めた表示名）。
     `- ${CONFIG_LABELS.pressure.locationName}: ${safeConfigValue(
       config.kiatsu.locationName
     )}`,
-    `- ${CONFIG_LABELS.pressure.coordinates}: ${coordinates}`,
     `- ${CONFIG_LABELS.pressure.alertThreshold}: ${alertThreshold}`,
     `- ${CONFIG_LABELS.pressure.updateInterval}: ${updateIntervalMinutes}`,
   ];
