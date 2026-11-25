@@ -227,9 +227,21 @@ export class ReactionFollowUpHandler {
       return false;
     }
 
-    return this.runWithFollowUpLock(reactor.id, () =>
-      this.executeFollowUpInner(session, sessionId, note, reactor, reaction)
-    );
+    return this.runWithFollowUpLock(reactor.id, async () => {
+      const cfg = this.deps.config ?? {};
+      const cooldownMs = (cfg.userCooldownMinutes ?? 360) * MINUTES_TO_MS;
+      const lastFollowUp = this.userLastFollowUpAt.get(reactor.id);
+      if (lastFollowUp != null && this.now() - lastFollowUp < cooldownMs) {
+        return false;
+      }
+      return this.executeFollowUpInner(
+        session,
+        sessionId,
+        note,
+        reactor,
+        reaction
+      );
+    });
   }
 
   private async runWithFollowUpLock<T>(
