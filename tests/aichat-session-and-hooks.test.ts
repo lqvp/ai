@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import loki from 'lokijs';
 import type * as Misskey from 'misskey-js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 藍, { type HandlerResult } from '../src/ai.js';
 import { initConfig, resolveConfig } from '../src/config/index.js';
 import { ContextRepository } from '../src/database/repositories.js';
@@ -508,6 +508,70 @@ describe('aichat contextHook branching and ignore boundaries', () => {
       Date.now() + TIMEOUT_TIME - 1000
     );
     mod.dispose();
+  });
+
+  it('keeps a session alive past its original expiry while generation is in flight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-24T12:00:00Z'));
+
+    const dir = createTempDir();
+    const db = new loki('context-active-generation-test');
+    const { mod, hooks } = installModuleForContextTest(dir, db);
+    const history = new ChatHistoryRepository(
+      db.getCollection<AiChatHist>('aichatHist')!
+    );
+    const startMs = Date.now();
+    history.insert({
+      sessionId: 'sess-active-generation',
+      postId: 'bot-reply-active',
+      latestPostId: 'bot-reply-active',
+      postIds: ['bot-reply-active'],
+      createdAt: startMs - 30 * 60_000,
+      updatedAt: startMs - 1000,
+      expiresAt: startMs + 1000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: 'u-alice',
+      history: [{ role: 'model', content: '元の会話' }],
+    });
+
+    let releaseLlm!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const llmGate = new Promise<void>((resolve) => {
+      releaseLlm = resolve;
+    });
+    (mod as unknown as { chatHandler: ChatHandler }).chatHandler = {
+      handle: async () => {
+        markStarted();
+        await llmGate;
+        return { status: 'failed' };
+      },
+    } as unknown as ChatHandler;
+
+    try {
+      const pending = hooks.contextHook!(
+        'sess-active-generation',
+        createReplyMessage({ replyId: 'bot-reply-active' }),
+        { sessionId: 'sess-active-generation' }
+      );
+      await started;
+
+      vi.setSystemTime(startMs + 2000);
+      (
+        mod as unknown as { sweepExpiredSessions: () => void }
+      ).sweepExpiredSessions();
+
+      expect(history.findBySessionId('sess-active-generation')).not.toBeNull();
+      releaseLlm();
+      await pending;
+    } finally {
+      releaseLlm?.();
+      mod.dispose();
+      vi.useRealTimers();
+    }
   });
 });
 
