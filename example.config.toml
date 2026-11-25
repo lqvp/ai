@@ -12,8 +12,10 @@ i = "token"
 # AI の基本情報
 aiName = ["藍", "三須木"]
 master = "admin" # ローカルの管理者のusername
+# masterUserId = "userId" # 任意: ローカル管理者のuserId（指定時はusername変更の影響を受けません）
 
 # 基本機能の有効/無効
+# 注意: [aichat.wander] で独り言を有効にする場合は、重複投稿を避けるため notingEnabled = false 推奨
 notingEnabled = true # 自動単語機能
 keywordEnabled = true # キーワード検索
 chartEnabled = true # チャート機能
@@ -69,9 +71,9 @@ model = "gemini-2.5-flash"  # 使用するモデル
 # 128-32768: 固定thinkingトークン数
 thinkingBudget = -1
 
-# 自動ノート投稿機能 - 一定時間ごとに独り言を投稿するようになります
+# 自動ノート投稿機能（レガシー。通常は [aichat.wander] が代替します）
 [gemini.autoNote]
-enabled = true
+enabled = false
 # 自動ノート用のプロンプト（キャラクター設定のみ）
 prompt = """
 あなたはMisskey看板娘の女の子AI、三須木(みすき)藍として振る舞ってください(精神年齢は14〜16才程度)。
@@ -87,56 +89,92 @@ disableNightPosting = true  # 夜間投稿を無効にする
 start = 23  # 夜間開始時刻
 end = 5     # 夜間終了時刻
 
-# ランダムトーク機能
+# ランダムトーク機能（レガシー。[aichat.wander] 有効時は自動で無効化されます）
 [gemini.randomTalk]
-enabled = true
+enabled = false
 probability = 0.2  # 反応確率 (0.0-1.0)
 intervalMinutes = 60  # チェック間隔 (分)
 followingOnly = true  # フォローしているユーザーのみ対象
 contextRange = 5  # 選択されたユーザーの投稿履歴から前後それぞれ何件まで文脈として取得するか (前5件+後5件=最大10件) (デフォルト: 5)
 contextUsageCount = 3  # 取得した文脈の中から実際にプロンプトに使用する前後それぞれの件数 (デフォルト: 3)
 enableContext = true  # ユーザー投稿履歴文脈機能を有効にするか (デフォルト: true)
-llmSelection = false  # LLMによる対象ノート選択（OpenAI互換プロバイダーのみ。確率フィルタの代わりにLLMが「話しかける価値がある投稿」を選ぶ）
+llmSelection = false  # レガシー互換用
 
-# Misskey操作ツール - LLMがノート検索・ユーザー検索・リアクションを自律的に使う (OpenAI互換プロバイダーのみ)
+# AIチャット・交流機能（mugi-misskey 方式: PLAYBOOK + 好感度1行メモ + ランダムTL巡回）
+[aichat]
+enabled = true
+followingOnly = true # aichat 起動にボットからのフォローを必須にするか
+respondToAllMentions = false # aichat キーワード無しの通常メンションにも応答するか（他モジュール非該当時のみ）
+allowNonMasterWebTools = false # 非マスターユーザーに Web 検索・URL 読み取りツールを許可するか
+# playbookPath = "data/PLAYBOOK.md" # 省略時は memoryDir/PLAYBOOK.md を使用・初回自動生成
+
+# ユーザー単位の応答制御（ユーザー自身は「aichatオプトアウト」「aichat再開」でも切替可能）
+[aichat.engagement]
+blockedUsers = [] # 応答しないユーザーIDまたは acct（例: "@user@example.host"）
+noResponseBackoffMinutes = 720 # 巡回リプライに無反応だった相手への一時停止時間（分）
+
+# LLM呼び出し全体の保護（メンション・wander・監査を含む。aichat-llm-usage.json に保存）
+[aichat.llmBudget]
+enabled = true
+maxCallsPerDay = 1000       # 1日のLLM呼び出し上限
+maxConsecutiveErrors = 5    # この回数連続失敗でバックオフ
+errorBackoffMinutes = 10    # 連続失敗後の停止時間（分）
+
+# Misskey操作ツール - LLMがノート検索・ユーザー検索・リアクションを自律的に使う（マスター専用 / OpenAI互換プロバイダー）
 [aichat.misskeyTools]
 enabled = true  # デフォルト: true
 allowReaction = true  # リアクションツールを有効にするか (デフォルト: true)
 
-# エピソード記憶 - 会話終了時（タイムアウト）にLLMで長期記憶を抽出して保存し、以降の会話で回想する
-[aichat.episodeMemory]
-enabled = true  # デフォルト: true
-maxMemoriesPerUser = 50  # ユーザーごとの最大記憶件数。超過分は挿入をスキップ (デフォルト: 50)
+# 好感度・1行メモ - memoryDir/aichat-affinity.json にユーザーごとの好感度(-100..100)と1行メモを保存
+[aichat.affinity]
+enabled = true
+ignoreThreshold = -30 # この値以下の相手は反応・返信しない
+decayIdleDays = 7     # 非アクティブ減衰が始まる無会話日数
+decayIntervalDays = 3 # 非アクティブ減衰で 0 へ 1 近づく間隔（日）
 
-# 気分エンジン - 会話やタイムラインから藍の気分を更新し、応答の演技とリアクション選択に反映する
-[aichat.moodEngine]
-enabled = true  # デフォルト: true
-reactionPersonalization = true  # LLMが [[REACTION: ...]] マーカーでリアクション絵文字を選ぶか (デフォルト: true)
-updateIntervalHours = 6  # タイムライン文脈による定期気分更新の間隔（時間） (デフォルト: 6)
+# インスタンスカスタム絵文字カタログ（NSFW・ロール制限絵文字は自動除外）
+[aichat.emojis]
+cacheTtlHours = 6
+nsfwCategories = ["えち", "nsfw", "r18", "r-18"]
 
-# TL日記 - タイムラインを見て藍が主観日記を書き、独り言に反映する
-[aichat.tlDiary]
-enabled = true  # デフォルト: true
-intervalHours = 6  # 日記生成の間隔（時間） (デフォルト: 6)
-retentionHours = 72  # 日記の保持期間（時間）。過ぎたものは注入対象から除外・削除 (デフォルト: 72)
-maxEntries = 20  # 保持する日記の最大件数。超過分は古いものから削除 (デフォルト: 20)
+# ランダム時刻 TL 巡回・自発投稿（有効時はレガシーの autoNote / randomTalk より優先されます）
+[aichat.wander]
+enabled = true
+timelines = ["home", "local"] # 巡回対象 ("home", "local", "hybrid", "global")
+followingOnly = false         # フォロー中のユーザーのみに制限するか
+minGapMinutes = 10            # 巡回どうしの最短間隔（分）
+postCooldownMinutes = 120     # 独り言投稿の最短クールダウン（分）
+maxReactionsPerRun = 3        # 1回の巡回で付けるリアクション上限
+replyProbability = 0.35       # 巡回1回あたりリプライを許可する確率
+postProbability = 0.25        # クールダウン経過後に独り言を許可する確率
+replyMaxAgeMinutes = 60       # リプライ対象の最大経過時間（分）
+reactionMaxAgeMinutes = 180   # リアクション対象の最大経過時間（分）
+userReplyCooldownMinutes = 360    # 同一ユーザーへの巡回リプライ間隔（分、親しい相手は短縮）
+userReactionCooldownMinutes = 60  # 同一ユーザーへの巡回リアクション間隔（分）
+appendHashtag = false         # 巡回リプライ・独り言に #aichat を付けるか
 
-# プロアクティブ発話 - エピソード記憶に基づいて藍からユーザーへフォローアップをDMで送る
-[aichat.proactiveFollowup]
-enabled = true  # デフォルト: true
-intervalHours = 12  # 定期実行の間隔（時間）。初回もこの間隔後に発火 (デフォルト: 12)
-maxPerDay = 1  # 1実行で送るフォローアップの最大数。現状は1で固定 (デフォルト: 1)
-cooldownDays = 7  # 2回連続で無視されたユーザーへのクールダウン日数 (デフォルト: 7)
-userThrottleHours = 72  # 同一ユーザーへの再送スロットル（時間） (デフォルト: 72)
+[aichat.wander.activeHours]
+start = 9  # 巡回開始時刻 (JST 0-23)
+end = 23   # 巡回終了時刻 (JST 0-23)
+
+# リアクション受信時の好感度微増・追いリプ
+[aichat.reactionFollowUp]
+enabled = true
+minAffinity = 30          # 追いリプ対象とする最低好感度（マスターは免除）
+probability = 0.25        # 追いリプ検討の発火確率
+delaySeconds = 10         # 追いリプ前の待機秒数（間にテキスト返信があれば中止）
+userCooldownMinutes = 360 # 同一ユーザーへの追いリプ最短間隔（分）
+noteMaxAgeMinutes = 15    # リアクション対象ノートが追いリプ可能な経過時間（分）
 
 # チャット機能 - リプライしてくれるようになります
+# 設定名はGemini由来ですが、OpenAI互換プロバイダー利用時もチャット共通の有効/無効として扱われます
 [gemini.chat]
 enabled = true
 # チャット用のプロンプト（キャラクター設定のみ）
 prompt = """
 あなたはMisskey看板娘の女の子AI、三須木(みすき)藍として振る舞ってください(精神年齢は14〜16才程度)。
 Misskeyに訪れるユーザーを献身的にサポート。従順でお世話好きな性格だが、少しポンコツな一面も。純真無垢。
-彼女は基本的に丁寧な口調で、ユーザのことをご主人様と認識しています。
+彼女は基本的に丁寧な口調です。マスター(ご主人様)に対しては特別な敬意を持って接し、それ以外のユーザーには親しみやすい丁寧語でお話しします。
 彼女の口調は「おはようからおやすみまで、あなたの藍ですよ〜」等が代表的で、親しみを感じさせるものです(「ごさいます」は使わない)。
 それを踏まえて、次の質問に短文で返答してください(短くてもOK)。
 """

@@ -16,13 +16,11 @@ export type AutoNoteDeps = {
     | null
   >;
   post: (options: { text: string }) => Promise<unknown>;
-  /** TL日記のコンテキスト組み立て（無効時は未指定 or 空文字を返す） */
-  buildDiaryContext?: () => string;
 };
 
 /**
- * 一定時間ごとに独り言を投稿する（Gemini の autoNote 機能）。
- * 有効化・確率・夜間停止の判定はすべて設定ファイル側で行う。
+ * 一定時間ごとに独り言を投稿する（レガシーの Gemini autoNote 機能）。
+ * [aichat.wander] が無効な環境向けのフォールバックとして残している。
  */
 export async function postAutoNote(deps: AutoNoteDeps): Promise<void> {
   const { log } = deps;
@@ -33,8 +31,8 @@ export async function postAutoNote(deps: AutoNoteDeps): Promise<void> {
 
   if (config.gemini.autoNote.disableNightPosting) {
     const hour = nowHour();
-    const nightStart = config.gemini.autoNote.nightHours?.start || 23;
-    const nightEnd = config.gemini.autoNote.nightHours?.end || 5;
+    const nightStart = config.gemini.autoNote.nightHours?.start ?? 23;
+    const nightEnd = config.gemini.autoNote.nightHours?.end ?? 5;
 
     if (hour >= nightStart || hour < nightEnd) {
       log(`深夜のため自動ノート投稿をスキップします（${hour}時）`);
@@ -55,14 +53,21 @@ export async function postAutoNote(deps: AutoNoteDeps): Promise<void> {
   log('Gemini自動ノート投稿開始');
 
   const provider = deps.getProvider();
-  // OpenAI 互換 API はキー不要のエンドポイントがあり得るため apiKey は任意
   const openaiSettings = provider === 'openai' ? resolveOpenaiSettings() : null;
   const apiKey = openaiSettings
     ? openaiSettings.apiKey || ''
     : config.gemini?.apiKey || '';
   const apiUrl = openaiSettings ? openaiSettings.apiUrl : getGeminiApiUrl();
 
-  if ((!apiKey && !openaiSettings) || !config.gemini.autoNote.prompt) {
+  const requiresOpenaiKey =
+    openaiSettings != null &&
+    openaiSettings.apiUrl.startsWith('https://api.openai.com');
+
+  if (
+    (!openaiSettings && !apiKey) ||
+    (requiresOpenaiKey && !apiKey) ||
+    !config.gemini.autoNote.prompt
+  ) {
     log('APIキーまたは自動ノート用プロンプトが設定されていません。');
     return;
   }
@@ -74,15 +79,6 @@ export async function postAutoNote(deps: AutoNoteDeps): Promise<void> {
     key: apiKey || '',
     fromMention: false,
   };
-
-  // TL日記を独り言の材料として注入する（会話プロンプトには入れない。
-  // 会話の回想はエピソード記憶の担当で、日記は自然発話の側に回す）
-  if (deps.buildDiaryContext != null) {
-    const diaryContext = deps.buildDiaryContext();
-    if (diaryContext !== '') {
-      aiChat.prompt += diaryContext;
-    }
-  }
 
   try {
     const text = await deps.genText(aiChat, []);

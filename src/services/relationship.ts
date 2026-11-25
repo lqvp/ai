@@ -11,15 +11,18 @@ export class RelationshipService {
   private readonly api: Pick<APIClient, 'api'>;
   private readonly accountId: string;
   private readonly masterUsername?: string;
+  private readonly masterUserId?: string;
 
   constructor(
     api: Pick<APIClient, 'api'>,
     accountId: string,
-    masterUsername?: string
+    masterUsername?: string,
+    masterUserId?: string
   ) {
     this.api = api;
     this.accountId = accountId;
     this.masterUsername = masterUsername;
+    this.masterUserId = masterUserId;
   }
 
   /**
@@ -39,12 +42,17 @@ export class RelationshipService {
   }
 
   /**
-   * `master` 設定のローカルユーザーかどうか。
+   * `master` / `masterUserId` 設定のローカルユーザーかどうか。
    */
   public isMaster(
-    user: Pick<User, 'username' | 'host'> | null | undefined
+    user: (Pick<User, 'username' | 'host'> & { id?: string }) | null | undefined
   ): boolean {
-    if (!user || !this.masterUsername) return false;
-    return user.username === this.masterUsername && user.host == null;
+    if (!user || user.host != null) return false;
+    const configuredId = this.masterUserId?.trim();
+    if (configuredId) {
+      return user.id === configuredId;
+    }
+    if (!this.masterUsername) return false;
+    return user.username === this.masterUsername;
   }
 }

@@ -31,12 +31,14 @@ export type AiChat = {
   grounding?: boolean;
   history?: ChatHistoryItem[];
   timelineContext?: TimelineContext;
-  /** エピソード記憶の回想コンテキスト（chat-handler で組み立てる） */
-  memoryRecallContext?: string;
-  /** 現在の気分を演技として反映するためのコンテキスト（chat-handler で組み立てる） */
-  moodContext?: string;
-  /** パーソナライズドリアクションのマーカー出力を要求するか */
-  reactionMarkerEnabled?: boolean;
+  /** PLAYBOOK.md から読み込んだ交流ルール */
+  playbookText?: string;
+  /** 好感度ティアと隔離された1行メモ */
+  affinityContext?: string;
+  /** Web検索・URLコンテキストツールをこのターンで許可するか */
+  allowWebTools?: boolean;
+  /** [[IGNORE]] / [[REACT_ONLY]] センチネル出力を許可するか */
+  allowSentinels?: boolean;
 };
 
 export type GeminiPart = {
@@ -49,6 +51,7 @@ export type GeminiPart = {
     fileUri: string;
   };
   text?: string;
+  thought?: boolean;
 };
 
 export type GeminiParts = GeminiPart[];
@@ -82,6 +85,16 @@ export type ApiErrorResponse = {
   errorCode: number | null;
   errorMessage: string | null;
 };
+
+export type ProviderTextSuccess = {
+  text: string;
+  metadataSuffix: string;
+};
+
+export type ProviderDetailedResponse =
+  | ProviderTextSuccess
+  | ApiErrorResponse
+  | null;
 
 export type GeminiApiResponse = string | ApiErrorResponse | null;
 

@@ -33,4 +33,14 @@ describe('example.config.toml', () => {
     expect(example.host).toMatch(/^https?:\/\//);
     expect(typeof example.i).toBe('string');
   });
+
+  it('configures mugi-misskey style aichat.wander and disables legacy autoNote/randomTalk', () => {
+    expect(example.gemini?.autoNote?.enabled).toBe(false);
+    expect(example.gemini?.randomTalk?.enabled).toBe(false);
+    expect(example.aichat?.wander?.enabled).toBe(true);
+    expect(example.aichat?.episodeMemory).toBeUndefined();
+    expect(example.gemini?.chat?.prompt).not.toContain(
+      'ユーザのことをご主人様と認識しています'
+    );
+  });
 });

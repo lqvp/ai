@@ -26,7 +26,7 @@ interface RawMatch {
   rawJson: string;
 }
 
-function findMatchingBrace(content: string, jsonStart: number): number {
+export function findMatchingBrace(content: string, jsonStart: number): number {
   let depth = 1;
   let inString = false;
   let escapeNext = false;

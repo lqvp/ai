@@ -21,19 +21,28 @@ export type OpenaiToolRuntime = {
   maxRounds: number;
 };
 
+export type BuildOpenaiToolsOptions = {
+  allowWebTools?: boolean;
+  allowMisskeyTools?: boolean;
+};
+
 /**
  * Exa / Jina / Misskey の設定から OpenAI 互換 API 用のツール定義を組み立てる。
- * ツールが1つも有効でない場合は `tools` が空配列になる。
+ * 権限が許可されないツール群は定義自体を除外する。
  */
 export function buildOpenaiTools(
   exaConfig: Config['exa'],
   jinaConfig: Config['jina'],
-  misskeyTools?: MisskeyToolContext | null
+  misskeyTools?: MisskeyToolContext | null,
+  options: BuildOpenaiToolsOptions = {}
 ): OpenaiToolRuntime {
-  const exaEnabled = exaConfig?.enabled === true;
+  const allowWebTools = options.allowWebTools ?? true;
+  const allowMisskeyTools = options.allowMisskeyTools ?? true;
+
+  const exaEnabled = allowWebTools && exaConfig?.enabled === true;
   const exaApiKey = exaConfig?.apiKey;
   const exaSearchEnabled = exaConfig?.search?.enabled !== false;
-  const jinaEnabled = jinaConfig?.enabled === true;
+  const jinaEnabled = allowWebTools && jinaConfig?.enabled === true;
   const readEnabled = jinaConfig?.read?.enabled !== false;
   const includeExaSearchTool = exaEnabled && exaSearchEnabled && !!exaApiKey;
   const includeReadTool = jinaEnabled && readEnabled;
@@ -80,8 +89,8 @@ export function buildOpenaiTools(
     });
   }
 
-  // Misskey 操作ツール（読み取り系 + リアクション）
-  if (misskeyTools) {
+  // Misskey 操作ツール（読み取り系 + リアクション、マスター専用）
+  if (allowMisskeyTools && misskeyTools) {
     tools.push(...buildMisskeyToolSpecs(misskeyTools));
   }
 
@@ -103,8 +112,12 @@ export async function executeToolCall(
   call: OpenaiToolCall,
   exaConfig: Config['exa'],
   jinaConfig: Config['jina'],
-  misskeyTools?: MisskeyToolContext | null
+  misskeyTools?: MisskeyToolContext | null,
+  allowedTools?: ReadonlySet<string>
 ): Promise<string> {
+  if (allowedTools && !allowedTools.has(call.function.name)) {
+    return `Error: tool "${call.function.name}" is not allowed.`;
+  }
   if (call.function.name === EXA_TOOL_SEARCH) {
     return executeExaSearchCall(call, exaConfig);
   }

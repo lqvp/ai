@@ -1,5 +1,6 @@
 import got from 'got';
 import log from '@/utils/log.js';
+import { isPrivateUrl } from '@/utils/private-url.js';
 
 const JINA_TIMEOUT_MS = 30_000;
 const JINA_SEARCH_ENDPOINT = 'https://s.jina.ai/';
@@ -128,6 +129,9 @@ export async function jinaRead(
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return 'Error: only http/https URLs are supported.';
+  }
+  if (isPrivateUrl(url)) {
+    return 'Error: private or local URLs are not allowed.';
   }
 
   const headers: Record<string, string> = {

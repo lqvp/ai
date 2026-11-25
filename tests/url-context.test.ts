@@ -44,7 +44,10 @@ describe('isPrivateUrl', () => {
 
   it('rejects IPv6 link-local and unique local addresses', () => {
     expect(isPrivateUrl('http://[fe80::1]/')).toBe(true);
+    expect(isPrivateUrl('http://[fe90::1]/')).toBe(true);
+    expect(isPrivateUrl('http://[febf::1]/')).toBe(true);
     expect(isPrivateUrl('http://[fd12::1]/')).toBe(true);
+    expect(isPrivateUrl('http://[fec0::1]/')).toBe(false);
   });
 
   it('rejects IPv4-mapped IPv6 addresses', () => {

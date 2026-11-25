@@ -10,6 +10,7 @@ export type Config = {
   i: string;
   aiName?: string[];
   master?: string;
+  masterUserId?: string;
   wsUrl: string;
   apiUrl: string;
   userAgent?: {
@@ -33,6 +34,7 @@ export type Config = {
       temperature?: number;
       maxTokens?: number;
       timeoutMs?: number;
+      jsonMode?: 'none' | 'json_object';
     };
   };
   gemini?: {
@@ -69,36 +71,73 @@ export type Config = {
     };
   };
   aichat?: {
-    /** Misskey操作ツール（ノート検索・ユーザー検索・リアクション等） */
+    /** aichat モジュールの明示的な有効化/無効化（省略時はプロバイダー設定に従う） */
+    enabled?: boolean;
+    /** aichat 起動にフォロー関係（Botが相手をフォロー中）を必須にするか */
+    followingOnly?: boolean;
+    /** aichat キーワード無しで通常メンションにも応答するか */
+    respondToAllMentions?: boolean;
+    /** 非マスターユーザーにWeb検索/URL参照ツールを許可するか（デフォルト false） */
+    allowNonMasterWebTools?: boolean;
+    /** 交流ルール PLAYBOOK.md のパス（省略時は memoryDir/PLAYBOOK.md） */
+    playbookPath?: string;
+    /** ユーザー単位の応答制御 */
+    engagement?: {
+      blockedUsers?: string[];
+      noResponseBackoffMinutes?: number;
+    };
+    /** LLM呼び出し全体の日次予算と連続エラー時バックオフ */
+    llmBudget?: {
+      enabled?: boolean;
+      maxCallsPerDay?: number;
+      maxConsecutiveErrors?: number;
+      errorBackoffMinutes?: number;
+    };
+    /** Misskey操作ツール（ノート検索・ユーザー検索・リアクション等、マスター専用） */
     misskeyTools?: {
       enabled?: boolean;
       allowReaction?: boolean;
     };
-    /** エピソード記憶（会話終了時にLLMで長期記憶を抽出・保存） */
-    episodeMemory?: {
+    /** 好感度・1行メモ管理（aichat-affinity.json） */
+    affinity?: {
       enabled?: boolean;
-      maxMemoriesPerUser?: number;
+      ignoreThreshold?: number;
+      decayIdleDays?: number;
+      decayIntervalDays?: number;
     };
-    /** 気分エンジン（会話・タイムラインから藍の気分を更新し、演技とリアクションに反映） */
-    moodEngine?: {
-      enabled?: boolean;
-      reactionPersonalization?: boolean;
-      updateIntervalHours?: number;
+    /** インスタンスカスタム絵文字カタログ */
+    emojis?: {
+      cacheTtlHours?: number;
+      nsfwCategories?: string[];
     };
-    /** TL日記（タイムラインを見て藍の主観日記を生成し、独り言に反映） */
-    tlDiary?: {
+    /** ランダム時刻TL巡回・独り言（mugi-misskey ADR 0002 相当） */
+    wander?: {
       enabled?: boolean;
-      intervalHours?: number;
-      retentionHours?: number;
-      maxEntries?: number;
+      timelines?: ('home' | 'local' | 'hybrid' | 'global')[];
+      followingOnly?: boolean;
+      activeHours?: {
+        start?: number;
+        end?: number;
+      };
+      minGapMinutes?: number;
+      postCooldownMinutes?: number;
+      maxReactionsPerRun?: number;
+      replyProbability?: number;
+      postProbability?: number;
+      replyMaxAgeMinutes?: number;
+      reactionMaxAgeMinutes?: number;
+      userReplyCooldownMinutes?: number;
+      userReactionCooldownMinutes?: number;
+      appendHashtag?: boolean;
     };
-    /** プロアクティブ発話（エピソード記憶に基づき藍からフォローアップを送る） */
-    proactiveFollowup?: {
+    /** リアクション受信時の好感度微増・追いリプ */
+    reactionFollowUp?: {
       enabled?: boolean;
-      intervalHours?: number;
-      maxPerDay?: number;
-      cooldownDays?: number;
-      userThrottleHours?: number;
+      minAffinity?: number;
+      probability?: number;
+      delaySeconds?: number;
+      userCooldownMinutes?: number;
+      noteMaxAgeMinutes?: number;
     };
   };
   jina?: {
@@ -266,6 +305,16 @@ function validateAndResolve(input: RawConfig): Config {
   if (typeof raw.i !== 'string' || raw.i.trim() === '') {
     issues.push('i (アクセストークン) は必須です');
   }
+  if (raw.masterUserId !== undefined) {
+    if (
+      typeof raw.masterUserId !== 'string' ||
+      raw.masterUserId.trim() === ''
+    ) {
+      issues.push('masterUserId は空でない文字列で指定してください');
+    } else {
+      raw.masterUserId = raw.masterUserId.trim();
+    }
+  }
 
   const host = normalizeHost(
     typeof raw.host === 'string' ? raw.host : '',
@@ -337,6 +386,225 @@ function validateAndResolve(input: RawConfig): Config {
         randomTalk.intervalMinutes = positive(randomTalk.intervalMinutes, 1);
       }
     }
+  }
+
+  // aiProvider.openai.jsonMode の検証
+  if (isObject(raw.aiProvider) && isObject(raw.aiProvider.openai)) {
+    const jsonMode = raw.aiProvider.openai.jsonMode;
+    if (
+      jsonMode !== undefined &&
+      jsonMode !== 'none' &&
+      jsonMode !== 'json_object'
+    ) {
+      issues.push(
+        'aiProvider.openai.jsonMode は "none" または "json_object" を指定してください'
+      );
+    }
+  }
+
+  // aichat セクションの検証と正規化
+  const aichat = isObject(raw.aichat)
+    ? (copyForNormalization(raw.aichat) as Record<string, unknown>)
+    : undefined;
+  if (aichat) {
+    if (
+      aichat.playbookPath !== undefined &&
+      (typeof aichat.playbookPath !== 'string' ||
+        aichat.playbookPath.includes('\0'))
+    ) {
+      issues.push('aichat.playbookPath が不正です');
+    }
+
+    if (isObject(aichat.engagement)) {
+      const engagement = aichat.engagement;
+      if (
+        engagement.blockedUsers !== undefined &&
+        (!Array.isArray(engagement.blockedUsers) ||
+          engagement.blockedUsers.some(
+            (entry) => typeof entry !== 'string' || entry.trim() === ''
+          ))
+      ) {
+        issues.push(
+          'aichat.engagement.blockedUsers は文字列配列で指定してください'
+        );
+      }
+      if (engagement.noResponseBackoffMinutes !== undefined) {
+        const value = Number(engagement.noResponseBackoffMinutes);
+        if (!Number.isFinite(value) || value <= 0) {
+          issues.push(
+            'aichat.engagement.noResponseBackoffMinutes は正の数で指定してください'
+          );
+        }
+      }
+    }
+
+    if (isObject(aichat.llmBudget)) {
+      const budget = aichat.llmBudget;
+      if (budget.maxCallsPerDay !== undefined) {
+        const value = Number(budget.maxCallsPerDay);
+        if (!Number.isInteger(value) || value < 1 || value > 100000) {
+          issues.push(
+            'aichat.llmBudget.maxCallsPerDay は 1〜100000 の整数で指定してください'
+          );
+        }
+      }
+      if (budget.maxConsecutiveErrors !== undefined) {
+        const value = Number(budget.maxConsecutiveErrors);
+        if (!Number.isInteger(value) || value < 1 || value > 100) {
+          issues.push(
+            'aichat.llmBudget.maxConsecutiveErrors は 1〜100 の整数で指定してください'
+          );
+        }
+      }
+      if (budget.errorBackoffMinutes !== undefined) {
+        const value = Number(budget.errorBackoffMinutes);
+        if (!Number.isFinite(value) || value <= 0) {
+          issues.push(
+            'aichat.llmBudget.errorBackoffMinutes は正の数で指定してください'
+          );
+        }
+      }
+    }
+
+    if (isObject(aichat.affinity)) {
+      const affinity = aichat.affinity;
+      if (affinity.ignoreThreshold !== undefined) {
+        const val = Number(affinity.ignoreThreshold);
+        if (!Number.isFinite(val) || val < -100 || val > 0) {
+          issues.push(
+            'aichat.affinity.ignoreThreshold は -100〜0 で指定してください'
+          );
+        }
+        affinity.ignoreThreshold = clamp(
+          Number.isFinite(val) ? val : -30,
+          -100,
+          0
+        );
+      }
+      if (affinity.decayIdleDays !== undefined) {
+        affinity.decayIdleDays = positive(affinity.decayIdleDays, 7);
+      }
+      if (affinity.decayIntervalDays !== undefined) {
+        affinity.decayIntervalDays = positive(affinity.decayIntervalDays, 3);
+      }
+    }
+
+    if (isObject(aichat.emojis)) {
+      if (aichat.emojis.cacheTtlHours !== undefined) {
+        aichat.emojis.cacheTtlHours = positive(aichat.emojis.cacheTtlHours, 6);
+      }
+    }
+
+    if (isObject(aichat.wander)) {
+      const wander = aichat.wander;
+      if (wander.timelines !== undefined) {
+        const allowed = new Set(['home', 'local', 'hybrid', 'global']);
+        if (
+          !Array.isArray(wander.timelines) ||
+          wander.timelines.some(
+            (tl) => typeof tl !== 'string' || !allowed.has(tl)
+          )
+        ) {
+          issues.push(
+            'aichat.wander.timelines は home / local / hybrid / global の配列で指定してください'
+          );
+        }
+      }
+      if (isObject(wander.activeHours)) {
+        for (const key of ['start', 'end'] as const) {
+          const val = wander.activeHours[key];
+          if (val !== undefined) {
+            const hour = Number(val);
+            if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+              issues.push(
+                `aichat.wander.activeHours.${key} は 0〜23 で指定してください`
+              );
+            }
+          }
+        }
+      }
+      for (const probKey of ['replyProbability', 'postProbability'] as const) {
+        if (wander[probKey] !== undefined) {
+          const p = Number(wander[probKey]);
+          if (!Number.isFinite(p) || p < 0 || p > 1) {
+            issues.push(`aichat.wander.${probKey} は 0〜1 で指定してください`);
+          }
+          wander[probKey] = clamp(Number.isFinite(p) ? p : 0, 0, 1);
+        }
+      }
+      for (const posKey of [
+        'minGapMinutes',
+        'postCooldownMinutes',
+        'replyMaxAgeMinutes',
+        'reactionMaxAgeMinutes',
+        'userReplyCooldownMinutes',
+        'userReactionCooldownMinutes',
+      ] as const) {
+        if (wander[posKey] !== undefined) {
+          const v = Number(wander[posKey]);
+          if (!Number.isFinite(v) || v <= 0) {
+            issues.push(`aichat.wander.${posKey} は正の数で指定してください`);
+          }
+        }
+      }
+      if (wander.maxReactionsPerRun !== undefined) {
+        const v = Number(wander.maxReactionsPerRun);
+        if (!Number.isInteger(v) || v < 0 || v > 10) {
+          issues.push(
+            'aichat.wander.maxReactionsPerRun は 0〜10 の整数で指定してください'
+          );
+        }
+      }
+    }
+
+    if (isObject(aichat.reactionFollowUp)) {
+      const followUp = aichat.reactionFollowUp;
+      if (followUp.minAffinity !== undefined) {
+        const val = Number(followUp.minAffinity);
+        if (!Number.isFinite(val) || val < -100 || val > 100) {
+          issues.push(
+            'aichat.reactionFollowUp.minAffinity は -100〜100 で指定してください'
+          );
+        }
+        followUp.minAffinity = clamp(
+          Number.isFinite(val) ? val : 30,
+          -100,
+          100
+        );
+      }
+      if (followUp.probability !== undefined) {
+        const p = Number(followUp.probability);
+        if (!Number.isFinite(p) || p < 0 || p > 1) {
+          issues.push(
+            'aichat.reactionFollowUp.probability は 0〜1 で指定してください'
+          );
+        }
+        followUp.probability = clamp(Number.isFinite(p) ? p : 0.25, 0, 1);
+      }
+      if (followUp.delaySeconds !== undefined) {
+        const d = Number(followUp.delaySeconds);
+        if (!Number.isFinite(d) || d < 0) {
+          issues.push(
+            'aichat.reactionFollowUp.delaySeconds は 0 以上で指定してください'
+          );
+        }
+      }
+      for (const posKey of [
+        'userCooldownMinutes',
+        'noteMaxAgeMinutes',
+      ] as const) {
+        if (followUp[posKey] !== undefined) {
+          const v = Number(followUp[posKey]);
+          if (!Number.isFinite(v) || v <= 0) {
+            issues.push(
+              `aichat.reactionFollowUp.${posKey} は正の数で指定してください`
+            );
+          }
+        }
+      }
+    }
+
+    raw.aichat = aichat;
   }
 
   // 正規化で入力を破壊的に書き換えないよう、対象セクションはコピーしてから扱う
