@@ -115,6 +115,7 @@ type ForecastSnapshot = {
   forecast: HourlyForecast | null;
   startIndex: number;
   fetchedAtLocal: string | null;
+  fetchedAtMs: number | null;
   delta3h: number | null;
   observedAtLocal: string | null;
   observedAtMs: number | null;
@@ -155,9 +156,6 @@ export default class extends Module<KiatsuData> {
    * 取った場合、22:40 の時点で予報は 2時間40分前のものだから。
    */
   private latestObservedAtMs: number | null = null;
-
-  /** `latestDelta3h` の観測時刻（ローカル時刻キー）。返信に添える。 */
-  private latestObservedAt: string | null = null;
 
   /**
    * 警報の状態。投稿したかどうかに関わらず毎回 evaluateAlert の結果で置き換える。
@@ -363,7 +361,6 @@ export default class extends Module<KiatsuData> {
 
     this.latestDelta3h = delta3h;
     this.latestObservedAtMs = parseLocalHourMs(observedAt);
-    this.latestObservedAt = observedAt;
     if (delta3h !== null) {
       this.lastAlertEvaluatedAtMs = now.getTime();
     }
@@ -415,7 +412,11 @@ export default class extends Module<KiatsuData> {
    * 1時間ずれることがあり、そのたびに「データが無い」と扱うのは乱暴なため。
    */
   @bindThis
-  private findCurrentIndex(forecast: HourlyForecast, now: Date): number {
+  private findCurrentIndex(
+    forecast: HourlyForecast,
+    now: Date,
+    options: { silent?: boolean } = {}
+  ): number {
     const exact = indexOfLocalHour(forecast.hours, formatLocalHourKey(now));
     if (exact >= 0) return exact;
 
@@ -429,9 +430,11 @@ export default class extends Module<KiatsuData> {
           formatLocalHourKey(shifted)
         );
         if (index >= 0) {
-          this.log(
-            `現在時刻のデータが無いため ${offset} 時間${sign > 0 ? '後' : '前'}の点を使います。`
-          );
+          if (!options.silent) {
+            this.log(
+              `現在時刻のデータが無いため ${offset} 時間${sign > 0 ? '後' : '前'}の点を使います。`
+            );
+          }
           return index;
         }
       }
@@ -744,16 +747,58 @@ export default class extends Module<KiatsuData> {
     await this.enqueueEvaluation({ allowPost: false, countErrors: false });
   }
 
-  /** 画像アップロード待機中に定期更新が走っても矛盾しないよう、状態を1回で切り出す。 */
-  private captureSnapshot(): ForecastSnapshot {
+  /**
+   * メンション返信用のスナップショットを現在の返信時刻に合わせて切り出す。
+   *
+   * 20:58 に取得した予報キャッシュを 21:03 に再利用する場合でも、配列内に 21:00 の点が
+   * あれば現在時刻の添字と ΔP3h へ進めて返す（警報状態や日次枠は動かさない）。
+   */
+  private captureSnapshot(now: Date = new Date()): ForecastSnapshot {
+    const forecast = this.latestForecast;
+    if (!forecast) {
+      return {
+        forecast: null,
+        startIndex: 0,
+        fetchedAtLocal: null,
+        fetchedAtMs: null,
+        delta3h: null,
+        observedAtLocal: null,
+        observedAtMs: null,
+      };
+    }
+
+    const currentIndex = this.findCurrentIndex(forecast, now, { silent: true });
+    if (currentIndex < 0) {
+      return {
+        forecast,
+        startIndex: this.latestForecastStart,
+        fetchedAtLocal: this.latestForecastFetchedAt,
+        fetchedAtMs: this.latestForecastFetchedAtMs,
+        delta3h: null,
+        observedAtLocal: null,
+        observedAtMs: null,
+      };
+    }
+
+    const observedAtLocal = forecast.hours[currentIndex].timeLocal;
     return {
-      forecast: this.latestForecast,
-      startIndex: this.latestForecastStart,
+      forecast,
+      startIndex: currentIndex,
       fetchedAtLocal: this.latestForecastFetchedAt,
-      delta3h: this.latestDelta3h,
-      observedAtLocal: this.latestObservedAt,
-      observedAtMs: this.latestObservedAtMs,
+      fetchedAtMs: this.latestForecastFetchedAtMs,
+      delta3h: deltaOverHours(forecast.hours, currentIndex, DELTA_HOURS),
+      observedAtLocal,
+      observedAtMs: parseLocalHourMs(observedAtLocal),
     };
+  }
+
+  private async deleteDriveFileBestEffort(fileId: string): Promise<void> {
+    try {
+      await this.ai.api?.('drive/files/delete', { fileId });
+    } catch (error) {
+      this.log(`不要になった予報画像の削除に失敗しました: ${fileId}`);
+      console.warn(error);
+    }
   }
 
   @bindThis
@@ -785,10 +830,16 @@ export default class extends Module<KiatsuData> {
 
     const snapshot = this.captureSnapshot();
     const locationName = this.displayLocationName;
-    const isFreshNow = (): boolean =>
-      snapshot.forecast !== null &&
-      snapshot.observedAtMs !== null &&
-      Date.now() - snapshot.observedAtMs <= STALE_MS;
+    const isFreshNow = (): boolean => {
+      const nowMs = Date.now();
+      return (
+        snapshot.forecast !== null &&
+        snapshot.fetchedAtMs !== null &&
+        nowMs - snapshot.fetchedAtMs <= STALE_MS &&
+        snapshot.observedAtMs !== null &&
+        nowMs - snapshot.observedAtMs <= STALE_MS
+      );
+    };
 
     // 予報自体が鮮度切れのときは古い画像を添付しない（本文「取得できませんでした」との矛盾と
     // 出典 URL 欠落を同時に防ぐ）。
@@ -804,6 +855,9 @@ export default class extends Module<KiatsuData> {
 
     // 画像アップロード中に鮮度上限（STALE_MS）を超えることがあるため、返信直前に再判定して揃える。
     const replyIsFresh = isFreshNow();
+    if (file !== undefined && !replyIsFresh) {
+      await this.deleteDriveFileBestEffort(file.id);
+    }
     const replyFile = replyIsFresh ? file : undefined;
     const deltaForReply = replyIsFresh ? snapshot.delta3h : null;
 

@@ -70,6 +70,7 @@ function createHarness(
     if (param.text) posts.push(param.text);
     return { id: `note-${posts.length}` };
   });
+  const api = vi.fn(async () => ({}));
   const upload = vi.fn(async () => ({ id: 'file-1', name: 'kiatsu.png' }));
   const log = vi.fn((msg: string) => {
     logs.push(msg);
@@ -78,6 +79,7 @@ function createHarness(
 
   const mod = new KiatsuModule();
   mod.init({
+    api,
     post,
     upload,
     log,
@@ -89,7 +91,7 @@ function createHarness(
     },
   } as unknown as Ai);
 
-  return { mod, doc, posts, logs, post, upload, save };
+  return { mod, doc, posts, logs, api, post, upload, save };
 }
 
 function makeMentionMessage(text = '気圧教えて') {
@@ -454,11 +456,11 @@ describe('KiatsuModule (index.ts)', () => {
     run2.mod.dispose();
   });
 
-  it('画像アップロード中に鮮度上限を超えた場合は返信直前の再判定で画像添付と数値を抑止する', async () => {
+  it('画像アップロード中に鮮度上限を超えた場合は返信直前の再判定で画像添付と数値を抑止しドライブからも消す', async () => {
     const fetchSpy = vi.spyOn(openMeteo, 'fetchForecast');
     fetchSpy.mockResolvedValueOnce(buildForecastAt(new Date(), -1.4));
 
-    const { mod, upload } = createHarness({
+    const { mod, api, upload } = createHarness({
       locationName: '高崎市',
       updateIntervalMs: 10_800_000, // 3時間（キャッシュ有効だが鮮度境界手前を作る）
     });
@@ -480,6 +482,84 @@ describe('KiatsuModule (index.ts)', () => {
       expect.stringContaining('取得できませんでした'),
       expect.objectContaining({ file: undefined })
     );
+    expect(api).toHaveBeenCalledWith('drive/files/delete', {
+      fileId: 'file-late',
+    });
+    mod.dispose();
+  });
+
+  it('20:58 取得直後に正時をまたいで 21:03 にメンションされた場合、再取得せず 21:00 の予報点を返す', async () => {
+    vi.setSystemTime(new Date('2026-11-25T11:58:00Z')); // 20:58 JST
+    const forecast: HourlyForecast = {
+      latitude: 36.32,
+      longitude: 139.0,
+      elevationM: 100,
+      hours: [
+        {
+          timeLocal: '2026-11-25T17:00',
+          pressureMsl: 1015.0,
+          temperatureC: 12,
+          weatherCode: 0,
+        },
+        {
+          timeLocal: '2026-11-25T18:00',
+          pressureMsl: 1015.0,
+          temperatureC: 12,
+          weatherCode: 0,
+        },
+        {
+          timeLocal: '2026-11-25T19:00',
+          pressureMsl: 1015.0,
+          temperatureC: 12,
+          weatherCode: 0,
+        },
+        {
+          timeLocal: '2026-11-25T20:00',
+          pressureMsl: 1014.4,
+          temperatureC: 11,
+          weatherCode: 1,
+        }, // 20:00 Δ3h = -0.6
+        {
+          timeLocal: '2026-11-25T21:00',
+          pressureMsl: 1013.3,
+          temperatureC: 10,
+          weatherCode: 2,
+        }, // 21:00 Δ3h = -1.7
+        {
+          timeLocal: '2026-11-25T22:00',
+          pressureMsl: 1013.0,
+          temperatureC: 10,
+          weatherCode: 2,
+        },
+      ],
+    };
+    const fetchSpy = vi
+      .spyOn(openMeteo, 'fetchForecast')
+      .mockResolvedValue(forecast);
+
+    const { mod } = createHarness({
+      locationName: '高崎市',
+      updateIntervalMs: 600_000, // 10分間隔（次は 21:08 JST）
+    });
+    const hooks = mod.getHooks();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // 20:59 JST のメンション → 20:00 時点 (-0.6 hPa)
+    vi.setSystemTime(new Date('2026-11-25T11:59:00Z'));
+    const m1 = makeMentionMessage();
+    await hooks.mentionHook!(m1.message);
+    expect(m1.reply.mock.calls[0]?.[0]).toContain('-0.6 hPa');
+    expect(m1.reply.mock.calls[0]?.[0]).toContain('20:00時点');
+
+    // 21:03 JST のメンション（まだキャッシュ有効） → API 再取得なしで 21:00 時点 (-1.7 hPa) に進む
+    vi.setSystemTime(new Date('2026-11-25T12:03:00Z'));
+    const m2 = makeMentionMessage();
+    await hooks.mentionHook!(m2.message);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(m2.reply.mock.calls[0]?.[0]).toContain('-1.7 hPa');
+    expect(m2.reply.mock.calls[0]?.[0]).toContain('21:00時点');
+
     mod.dispose();
   });
 });
