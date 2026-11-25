@@ -838,3 +838,78 @@ describe('ReactionFollowUpHandler', () => {
     expect(readFileSync(affinityPath, 'utf8')).toBe('{ broken json');
   });
 });
+
+describe('ReactionFollowUpHandler concurrency', () => {
+  it('serializes simultaneous follow-up executions for the same user', async () => {
+    const dir = createTempDir();
+    const nowMs = Date.parse('2026-11-24T12:00:00Z');
+    const db = new loki('followup-concurrency-test');
+    const history = new ChatHistoryRepository(
+      db.addCollection<AiChatHist>('aichatHist')
+    );
+    history.insert({
+      sessionId: 'sess-concurrent',
+      postId: 'bot-note-concurrent',
+      latestPostId: 'bot-note-concurrent',
+      postIds: ['bot-note-concurrent'],
+      createdAt: nowMs - 60_000,
+      updatedAt: nowMs - 60_000,
+      expiresAt: nowMs + 1_800_000,
+      type: 'gemini',
+      fromMention: true,
+      ownerUserId: 'u-alice',
+      history: [{ role: 'model', content: '元気ですか？' }],
+    });
+    const alice = {
+      id: 'u-alice',
+      username: 'alice',
+      host: null,
+      isBot: false,
+    } as User;
+    const note = {
+      id: 'bot-note-concurrent',
+      userId: 'bot-id',
+      visibility: 'public',
+      text: '元気ですか？',
+    } as Note;
+    let releaseLlm!: (value: { shouldReply: boolean; text: string }) => void;
+    const llmGate = new Promise<{ shouldReply: boolean; text: string }>(
+      (resolve) => {
+        releaseLlm = resolve;
+      }
+    );
+    const posts: Array<{ text?: string | null }> = [];
+    const handler = new ReactionFollowUpHandler({
+      selfUserId: 'bot-id',
+      history,
+      affinityStore: new AffinityStore({
+        filePath: join(dir, 'aichat-affinity.json'),
+        now: () => nowMs,
+      }),
+      playbookLoader: new PlaybookLoader({
+        filePath: join(dir, 'PLAYBOOK.md'),
+      }),
+      isMasterUser: () => false,
+      post: async (param) => {
+        posts.push(param);
+        return { id: `bot-followup-${posts.length}` } as Note;
+      },
+      subscribeReply: () => {},
+      now: () => nowMs,
+      rng: () => 0,
+      callLlm: () => llmGate,
+    });
+
+    const first = handler.executeFollowUp('sess-concurrent', note, alice, '🎉');
+    const second = handler.executeFollowUp(
+      'sess-concurrent',
+      note,
+      alice,
+      '🎉'
+    );
+    expect(await second).toBe(false);
+    releaseLlm({ shouldReply: true, text: 'ありがとう！' });
+    expect(await first).toBe(true);
+    expect(posts).toHaveLength(1);
+  });
+});

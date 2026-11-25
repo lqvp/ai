@@ -86,6 +86,7 @@ export class ReactionFollowUpHandler {
   private readonly userLastFollowUpAt = new Map<string, number>();
   private readonly pendingTimers = new Set<NodeJS.Timeout>();
   private readonly userReplyMarkers = new Map<string, number>();
+  private readonly inFlightFollowUpUsers = new Set<string>();
 
   constructor(private readonly deps: ReactionFollowUpDeps) {
     this.log = deps.log ?? (() => {});
@@ -226,6 +227,28 @@ export class ReactionFollowUpHandler {
       return false;
     }
 
+    if (this.inFlightFollowUpUsers.has(reactor.id)) return false;
+    this.inFlightFollowUpUsers.add(reactor.id);
+    try {
+      return await this.executeFollowUpInner(
+        session,
+        sessionId,
+        note,
+        reactor,
+        reaction
+      );
+    } finally {
+      this.inFlightFollowUpUsers.delete(reactor.id);
+    }
+  }
+
+  private async executeFollowUpInner(
+    session: AiChatHist,
+    sessionId: string,
+    note: Note,
+    reactor: User,
+    reaction: string
+  ): Promise<boolean> {
     const playbookText = await this.deps.playbookLoader.load();
     const systemPrompt = [
       SAFETY_CONSTRAINTS,
