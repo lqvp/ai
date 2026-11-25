@@ -11,6 +11,7 @@ import type Message from '../src/message.js';
 import type { Note, User } from '../src/misskey/types.js';
 import { AffinityStore } from '../src/modules/aichat/affinity-store.js';
 import { ChatHandler } from '../src/modules/aichat/chat-handler.js';
+import { TIMEOUT_TIME } from '../src/modules/aichat/constants.js';
 import {
   type AiChatHist,
   ChatHistoryRepository,
@@ -503,6 +504,9 @@ describe('aichat contextHook branching and ignore boundaries', () => {
     expect(captured).toHaveLength(2);
     expect(captured[1].sessionId).toBe('sess-branch-base');
     expect(captured[1].history).toEqual(currentTurn);
+    expect(captured[1].expiresAt).toBeGreaterThanOrEqual(
+      Date.now() + TIMEOUT_TIME - 1000
+    );
     mod.dispose();
   });
 });

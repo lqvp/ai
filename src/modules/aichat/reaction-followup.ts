@@ -344,6 +344,7 @@ export class ReactionFollowUpHandler {
     });
 
     const nowMs = this.now();
+    this.userLastFollowUpAt.set(reactor.id, nowMs);
     const nextHistory = [
       ...(fresh.history ?? []),
       { role: 'model', content: body },
@@ -379,7 +380,6 @@ export class ReactionFollowUpHandler {
       sessionId: key,
       historyLength: nextHistory.length,
     });
-    this.userLastFollowUpAt.set(reactor.id, nowMs);
 
     return true;
   }

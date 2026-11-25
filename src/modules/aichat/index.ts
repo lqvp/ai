@@ -535,6 +535,10 @@ export default class extends Module {
     targetHist: AiChatHist,
     msg: Message
   ): Promise<HandlerResult> {
+    // ユーザー発言自体が活動なので、LLM応答を待たずに期限を延長する。
+    // 長い生成中にスイーパーが進行中セッションを削除するのを防ぐ。
+    targetHist.expiresAt = Date.now() + TIMEOUT_TIME;
+
     const turnSeq = this.affinityStore.issueTurnSeq(msg.user);
     const result = await this.chatHandler.handle(targetHist, msg);
 
