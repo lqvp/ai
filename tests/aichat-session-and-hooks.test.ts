@@ -609,8 +609,31 @@ describe('ReactionFollowUpHandler', () => {
         indices: ['sessionId', 'postId'],
       })
     );
+    const affinityPath = join(dir, 'aichat-affinity.json');
+    const seededLast = new Date(nowMs - 60_000).toISOString();
+    writeFileSync(
+      affinityPath,
+      `${JSON.stringify({
+        version: 1,
+        users: {
+          '@alice': {
+            userId: 'u-alice',
+            score: 35,
+            notes: '',
+            last: seededLast,
+          },
+          '@bob': {
+            userId: 'u-bob',
+            score: 35,
+            notes: '',
+            last: seededLast,
+          },
+        },
+      })}\n`,
+      'utf8'
+    );
     const affinityStore = new AffinityStore({
-      filePath: join(dir, 'aichat-affinity.json'),
+      filePath: affinityPath,
       now: () => nowMs,
     });
     const playbookLoader = new PlaybookLoader({
@@ -623,15 +646,6 @@ describe('ReactionFollowUpHandler', () => {
       host: null,
       isBot: false,
     } as User;
-    await affinityStore.applyInteractionUpdate({
-      user: alice,
-      isMaster: false,
-      delta: 35,
-      note: null,
-      userText: '親しい状態のベース作成用メッセージです',
-      source: 'chat',
-    });
-
     history.insert({
       sessionId: 'sess-f1',
       postId: 'bot-note-1',
@@ -660,7 +674,6 @@ describe('ReactionFollowUpHandler', () => {
       subscribeReply: () => {},
       config: {
         enabled: true,
-        minAffinity: 5,
         probability: 1,
         delaySeconds: 0,
       },
@@ -755,14 +768,6 @@ describe('ReactionFollowUpHandler', () => {
       host: null,
       isBot: false,
     } as User;
-    await affinityStore.applyInteractionUpdate({
-      user: bob,
-      isMaster: false,
-      delta: 35,
-      note: null,
-      userText: '破損前の好感度ベース作成用メッセージです',
-      source: 'chat',
-    });
     history.insert({
       sessionId: 'sess-f3',
       postId: 'bot-note-3',
@@ -776,7 +781,7 @@ describe('ReactionFollowUpHandler', () => {
       ownerUserId: 'u-bob',
       history: [{ role: 'model', content: '破損時の会話' }],
     });
-    writeFileSync(join(dir, 'aichat-affinity.json'), '{ broken json', 'utf8');
+    writeFileSync(affinityPath, '{ broken json', 'utf8');
 
     const bobNotif = {
       ...notif,
@@ -791,8 +796,6 @@ describe('ReactionFollowUpHandler', () => {
     expect(await handler.handleNotification(bobNotif)).toBe(true);
     expect(posts).toHaveLength(2);
     expect(posts[1].text).toBe('@bob 嬉しいリアクションありがとう！');
-    expect(readFileSync(join(dir, 'aichat-affinity.json'), 'utf8')).toBe(
-      '{ broken json'
-    );
+    expect(readFileSync(affinityPath, 'utf8')).toBe('{ broken json');
   });
 });
