@@ -581,8 +581,9 @@ describe('KiatsuModule (index.ts)', () => {
     vi.spyOn(openMeteo, 'fetchForecast').mockResolvedValue(staleSeries);
 
     const { mod, posts } = createHarness({
-      maxErrorRetries: 1,
+      maxErrorRetries: 0,
       updateIntervalMs: 600_000,
+      errorCooldownMs: 650_000,
     });
     mod.getHooks();
 
@@ -590,14 +591,18 @@ describe('KiatsuModule (index.ts)', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(posts).toHaveLength(0);
 
-    // 2回目の連続不一致で errorCount=1（まだ maxErrorRetries=1 以下）
-    await vi.advanceTimersByTimeAsync(600_000);
-    expect(posts).toHaveLength(0);
-
-    // 3回目の連続不一致で errorCount=2 > maxErrorRetries(1) → 一時停止へ移行
+    // 2回目の連続不一致で errorCount=1 > maxErrorRetries(0) → 1回目の一時停止へ移行
     await vi.advanceTimersByTimeAsync(600_000);
     expect(posts).toHaveLength(1);
     expect(posts[0]).toContain('一時停止しました');
+
+    // クールダウン（650秒）明けの再開初回も consecutiveMissingHours がリセットされているため許容され即再休止しない
+    await vi.advanceTimersByTimeAsync(650_000);
+    expect(posts).toHaveLength(1);
+
+    // その次の定期評価（さらに連続不一致）で 2 回目の一時停止に入る
+    await vi.advanceTimersByTimeAsync(550_000);
+    expect(posts).toHaveLength(2);
 
     mod.dispose();
   });
