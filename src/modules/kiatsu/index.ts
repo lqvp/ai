@@ -168,6 +168,15 @@ export default class extends Module<KiatsuData> {
   private alertState: AlertState = { alerting: false };
 
   /**
+   * 有効な ΔP3h（非 null）を最後に評価した時刻（ミリ秒）。
+   *
+   * 日次枠のリセット（`syncPostDay`）や欠測（`delta3h === null`）では進めない。
+   * 取得失敗中に日付をまたいで再起動したとき、古い警報状態の鮮度時刻まで
+   * 新しく上書きしてしまうのを防ぐ。
+   */
+  private lastAlertEvaluatedAtMs: number | null = null;
+
+  /**
    * 送信待ちの警報があるか。投稿に失敗したら次回以降に再試行する。
    *
    * 値ではなくフラグで持つのは、送る直前にそのときの変化量を使うため。
@@ -355,6 +364,9 @@ export default class extends Module<KiatsuData> {
     this.latestDelta3h = delta3h;
     this.latestObservedAtMs = parseLocalHourMs(observedAt);
     this.latestObservedAt = observedAt;
+    if (delta3h !== null) {
+      this.lastAlertEvaluatedAtMs = now.getTime();
+    }
 
     const { state, trigger } = evaluateAlert(
       delta3h,
@@ -450,6 +462,7 @@ export default class extends Module<KiatsuData> {
       this.pendingAlertAttempts = 0;
       this.alertRetryAfter = 0;
       this.alertState = { alerting: false };
+      this.lastAlertEvaluatedAtMs = null;
       this.persistState();
       return;
     }
@@ -634,10 +647,13 @@ export default class extends Module<KiatsuData> {
     const thresholdChanged =
       data.thresholdHpa !== undefined &&
       data.thresholdHpa !== this.alertOptions.thresholdHpa;
+    const savedAtMs =
+      typeof data.savedAtMs === 'number' ? data.savedAtMs : null;
+    const hasSavedAlertState = data.alerting === true || data.pending === true;
     const stateExpired =
-      typeof data.savedAtMs === 'number'
-        ? Date.now() - data.savedAtMs > STALE_MS
-        : false;
+      savedAtMs !== null
+        ? Date.now() - savedAtMs > STALE_MS
+        : hasSavedAlertState;
 
     if (spotChanged || thresholdChanged || stateExpired) {
       // 地点変更・閾値変更・長時間停止後の再起動では、古い警報状態を引き継がない。
@@ -647,10 +663,12 @@ export default class extends Module<KiatsuData> {
       this.alertState = { alerting: false };
       this.pendingAlert = false;
       this.alertRetryAfter = 0;
+      this.lastAlertEvaluatedAtMs = null;
       this.persistState();
     } else {
       this.alertState = { alerting: data.alerting === true };
       this.pendingAlert = data.pending === true;
+      this.lastAlertEvaluatedAtMs = savedAtMs;
     }
 
     // 日付が変わっていれば上限はリセットされる（syncPostDay と同じ規則）。
@@ -662,7 +680,7 @@ export default class extends Module<KiatsuData> {
     this.setData({
       spot: this.spotKey,
       thresholdHpa: this.alertOptions.thresholdHpa,
-      savedAtMs: Date.now(),
+      savedAtMs: this.lastAlertEvaluatedAtMs ?? undefined,
       alerting: this.alertState.alerting,
       pending: this.pendingAlert,
       postsToday: this.postsToday,
@@ -767,7 +785,7 @@ export default class extends Module<KiatsuData> {
 
     const snapshot = this.captureSnapshot();
     const locationName = this.displayLocationName;
-    const isFresh =
+    const isFreshNow = (): boolean =>
       snapshot.forecast !== null &&
       snapshot.observedAtMs !== null &&
       Date.now() - snapshot.observedAtMs <= STALE_MS;
@@ -775,7 +793,7 @@ export default class extends Module<KiatsuData> {
     // 予報自体が鮮度切れのときは古い画像を添付しない（本文「取得できませんでした」との矛盾と
     // 出典 URL 欠落を同時に防ぐ）。
     let file: DriveFile | undefined;
-    if (isFresh) {
+    if (isFreshNow()) {
       try {
         file = await this.generateForecastImageFile(snapshot, locationName);
       } catch (error) {
@@ -784,19 +802,22 @@ export default class extends Module<KiatsuData> {
       }
     }
 
-    const deltaForReply = isFresh ? snapshot.delta3h : null;
+    // 画像アップロード中に鮮度上限（STALE_MS）を超えることがあるため、返信直前に再判定して揃える。
+    const replyIsFresh = isFreshNow();
+    const replyFile = replyIsFresh ? file : undefined;
+    const deltaForReply = replyIsFresh ? snapshot.delta3h : null;
 
     try {
       await message.reply(
         buildMentionMessage(
           locationName,
           deltaForReply,
-          isFresh ? (snapshot.observedAtLocal ?? undefined) : undefined,
-          { hasForecastImage: file !== undefined }
+          replyIsFresh ? (snapshot.observedAtLocal ?? undefined) : undefined,
+          { hasForecastImage: replyFile !== undefined }
         ),
         {
           immediate: true,
-          file,
+          file: replyFile,
         }
       );
     } catch (error) {

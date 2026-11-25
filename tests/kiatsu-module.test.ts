@@ -252,19 +252,22 @@ describe('KiatsuModule (index.ts)', () => {
     await vi.advanceTimersByTimeAsync(0);
     // Day 1 上限済みのため投稿されないが pendingAlert は立つ
     expect(h2.posts).toHaveLength(0);
+    expect(h2.doc.data.pending).toBe(true);
 
-    // Day 2 00:00 JST (15:00Z): -1.5 hPa（ヒステリシス帯、閾値 -2.0 未達）→ 誤投稿しないこと！
+    // Day 2 00:00 JST (15:00Z): -1.5 hPa（ヒステリシス帯、閾値 -2.0 未達）→ 保留のまま誤投稿しないこと！
     fetchSpy.mockResolvedValueOnce(
       buildForecastAt(new Date('2026-11-25T15:00:00Z'), -1.5)
     );
     await vi.advanceTimersByTimeAsync(600_000);
     expect(h2.posts).toHaveLength(0);
+    expect(h2.doc.data.pending).toBe(true);
 
     // Day 2 00:10 JST: 一旦 0.0 hPa で解除 → 00:20 JST に本物の -3.5 hPa が来たら投稿できること！
     fetchSpy.mockResolvedValueOnce(
       buildForecastAt(new Date('2026-11-25T15:10:00Z'), 0)
     );
     await vi.advanceTimersByTimeAsync(600_000);
+    expect(h2.doc.data.pending).toBe(false);
 
     fetchSpy.mockResolvedValueOnce(
       buildForecastAt(new Date('2026-11-25T15:20:00Z'), -3.5)
@@ -286,7 +289,7 @@ describe('KiatsuModule (index.ts)', () => {
         .spyOn(openMeteo, 'fetchForecast')
         .mockRejectedValue(new Error('network down'));
 
-      const { mod, post, posts } = createHarness({
+      const { mod, post } = createHarness({
         maxErrorRetries: 2,
         updateIntervalMs: 600_000,
       });
@@ -295,17 +298,26 @@ describe('KiatsuModule (index.ts)', () => {
       const hooks = mod.getHooks();
       await vi.advanceTimersByTimeAsync(0); // 定期失敗 1回目
 
-      // メンションが6連続で来ても countErrors: false なので停止しない
+      // メンションが6連続で来ても countErrors: false なので停止通知すら試行されない
       for (let i = 0; i < 6; i++) {
         const { message, reply } = makeMentionMessage();
         reply.mockRejectedValueOnce(new Error('reply failed'));
         await hooks.mentionHook!(message);
       }
-      expect(posts).toHaveLength(0);
+      expect(post).not.toHaveBeenCalled();
 
-      // 定期失敗 2回目・3回目（maxErrorRetries=2 超過で停止遷移、post が reject しても安全）
+      // 定期失敗 2回目（まだ閾値 2 以内）
       await vi.advanceTimersByTimeAsync(600_000);
+      expect(post).not.toHaveBeenCalled();
+
+      // 定期失敗 3回目（maxErrorRetries=2 超過で初めて停止通知が1回試行され、post が reject しても安全）
       await vi.advanceTimersByTimeAsync(600_000);
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('一時停止しました'),
+        })
+      );
 
       expect(unhandled).toHaveLength(0);
       expect(fetchSpy).toHaveBeenCalled();
@@ -378,7 +390,8 @@ describe('KiatsuModule (index.ts)', () => {
     spotChanged.mod.getHooks();
     await vi.advanceTimersByTimeAsync(0);
     expect(spotChanged.posts).toHaveLength(0); // 当日枠 1/1 が維持されているため見送り
-    expect(spotChanged.doc.data.alerting).toBe(true); // ただし新地点で新しく trigger して alerting になった
+    expect(spotChanged.doc.data.alerting).toBe(true);
+    expect(spotChanged.doc.data.pending).toBe(true); // 既存状態を捨てて新地点で新規発火・保留された証拠
     spotChanged.mod.dispose();
 
     // 2. 同一地点だが 5時間停止後の再起動（枠は未消費）→ 古い alerting: true に邪魔されず新規発火する
@@ -398,5 +411,75 @@ describe('KiatsuModule (index.ts)', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(expired.posts).toHaveLength(1);
     expired.mod.dispose();
+  });
+
+  it('取得失敗中に日付変更（syncPostDay）を挟んでも古い警報状態の鮮度時刻を更新しない', async () => {
+    // Day 1 20:00 JST (11:00Z) に警報投稿成功
+    const fetchSpy = vi.spyOn(openMeteo, 'fetchForecast');
+    fetchSpy.mockResolvedValueOnce(buildForecastAt(new Date(), -2.5));
+
+    const run1 = createHarness({
+      latitude: 36.32,
+      longitude: 139.0,
+      updateIntervalMs: 3_600_000,
+      maxErrorRetries: 10,
+    });
+    run1.mod.getHooks();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run1.posts).toHaveLength(1);
+    const savedAt20 = run1.doc.data.savedAtMs;
+    expect(typeof savedAt20).toBe('number');
+
+    // 以降ずっと取得失敗にしたまま 4時間経過 → Day 2 00:00 JST (15:00Z) で syncPostDay が走る
+    fetchSpy.mockRejectedValue(new Error('open-meteo down'));
+    await vi.advanceTimersByTimeAsync(4 * 3_600_000);
+    // 日次枠はリセットされても savedAtMs は 20:00 のまま維持されていること
+    expect(run1.doc.data.postsToday).toBe(0);
+    expect(run1.doc.data.savedAtMs).toBe(savedAt20);
+    const persistedSnapshot = { ...run1.doc.data };
+    run1.mod.dispose();
+
+    // 直後の 00:05 JST にプロセス再起動し、取得が復旧（-2.8 hPa）したら古い alerting は期限切れで新規警報が出ること
+    vi.setSystemTime(new Date('2026-11-25T15:05:00Z'));
+    fetchSpy.mockReset();
+    fetchSpy.mockResolvedValueOnce(buildForecastAt(new Date(), -2.8));
+    const run2 = createHarness(
+      { latitude: 36.32, longitude: 139.0 },
+      persistedSnapshot
+    );
+    run2.mod.getHooks();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run2.posts).toHaveLength(1);
+    expect(run2.posts[0]).toContain('-2.8 hPa');
+    run2.mod.dispose();
+  });
+
+  it('画像アップロード中に鮮度上限を超えた場合は返信直前の再判定で画像添付と数値を抑止する', async () => {
+    const fetchSpy = vi.spyOn(openMeteo, 'fetchForecast');
+    fetchSpy.mockResolvedValueOnce(buildForecastAt(new Date(), -1.4));
+
+    const { mod, upload } = createHarness({
+      locationName: '高崎市',
+      updateIntervalMs: 10_800_000, // 3時間（キャッシュ有効だが鮮度境界手前を作る）
+    });
+    const hooks = mod.getHooks();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // 観測時刻（20:00 JST）から 1時間59分59秒後（まだギリギリ STALE_MS=2h 以内）に進める
+    vi.setSystemTime(new Date('2026-11-25T12:59:59Z'));
+    upload.mockImplementationOnce(async () => {
+      // アップロードに 5 秒かかり、完了時点で 2時間0分4秒（鮮度切れ）になる状況を模擬
+      vi.setSystemTime(new Date('2026-11-25T13:00:04Z'));
+      return { id: 'file-late', name: 'kiatsu.png' };
+    });
+
+    const { message, reply } = makeMentionMessage();
+    await hooks.mentionHook!(message);
+
+    expect(reply).toHaveBeenCalledWith(
+      expect.stringContaining('取得できませんでした'),
+      expect.objectContaining({ file: undefined })
+    );
+    mod.dispose();
   });
 });

@@ -329,7 +329,7 @@ describe('境界の浮動小数', () => {
     ];
 
     const raw = hours[3].pressureMsl! - hours[0].pressureMsl!;
-    expect(raw).toBeLessThan(2.3); // 誤差で 2.3 に届かないことを確認
+    expect(raw).toBeGreaterThan(-2.3); // 誤差で -2.3 にわずかに届かない（-2.2999999999999545 > -2.3）ことを確認
 
     const delta = deltaOverHours(hours, 3, 3);
     expect(delta).not.toBeNull();
