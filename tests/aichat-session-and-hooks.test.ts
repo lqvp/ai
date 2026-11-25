@@ -1181,12 +1181,12 @@ describe('aichat engagement commands and streaming contract', () => {
     await hooks.mentionHook!(makeMention('m-optout', 'aichatオプトアウト'));
     expect(replies.at(-1)).toContain('応答を停止しました');
 
-    await hooks.mentionHook!(makeMention('m-normal', 'こんにちは'));
+    await hooks.mentionHook!(makeMention('m-normal', 'aichat こんにちは'));
     expect(handleCalls).toBe(0);
 
     await hooks.mentionHook!(makeMention('m-optin', 'aichat再開'));
     expect(replies.at(-1)).toContain('応答を再開しました');
-    await hooks.mentionHook!(makeMention('m-normal-2', 'こんにちは'));
+    await hooks.mentionHook!(makeMention('m-normal-2', 'aichat こんにちは'));
     expect(handleCalls).toBe(1);
     mod.dispose();
   });
@@ -1215,7 +1215,7 @@ describe('aichat engagement commands and streaming contract', () => {
       }
     ).runStep2Audit = async () => null;
 
-    const mention = createFakeMessage('こんにちは', { id: 'bot-reply-1' }, {
+    const mention = createFakeMessage('aichat こんにちは', { id: 'bot-reply-1' }, {
       id: 'mention-1',
       userId: 'u-alice',
       user: {

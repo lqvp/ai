@@ -4,6 +4,7 @@ import type * as Misskey from 'misskey-js';
 import type { HandlerResult } from '@/ai.js';
 import config from '@/config/index.js';
 import { bindThis } from '@/decorators.js';
+import includes from '@/utils/includes.js';
 import type Message from '@/message.js';
 import type { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
@@ -793,9 +794,12 @@ export default class extends Module {
 
   @bindThis
   private async mentionHook(msg: Message) {
-    // モジュール名（aichat）に加えて aiName（例: ツナ）でも起動できるようにする
+    // モジュール名（aichat）に加えて aiName（例: ツナ）でも起動できるようにする。
+    // 判定は先頭のアカウントメンションを除いた本文に対して行う。
+    // ノート全体を見ると、botのユーザー名がaiNameと一致する場合に
+    // `@bot remind 〜` 等の他モジュールのコマンドまで横取りしてしまう。
     const keywords = [this.name, ...(config.aiName ?? [])];
-    if (!msg.includes(keywords)) {
+    if (!includes(msg.extractedText, keywords)) {
       return false;
     }
     this.log('AiChat requested');
