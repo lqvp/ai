@@ -57,7 +57,7 @@ export function buildMentionMessage(
   const suffix = hour ? `（${hour}時点）` : '';
 
   return [
-    `${locationName}付近の気圧は${describeDelta(deltaHpa)}変化しています${suffix}。`,
+    `${locationName}付近の気圧は${describeDelta(deltaHpa)} 変化しています${suffix}。`,
     ATTRIBUTION,
   ].join('\n');
 }

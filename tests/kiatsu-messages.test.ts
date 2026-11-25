@@ -45,6 +45,7 @@ describe('気圧投稿の文面', () => {
     expect(text).toContain('高崎市');
     expect(text).toContain('-1.8 hPa');
     expect(text).toContain('20:00時点');
+    expect(text).toContain('hPa 変化しています');
     expect(text).toContain(ATTRIBUTION);
   });
 

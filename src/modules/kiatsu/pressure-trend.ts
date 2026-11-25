@@ -58,6 +58,16 @@ function pad2(value: number): string {
  * - NaN / Infinity は比較が常に false になるため、判定が静かに壊れる。
  * いずれも呼び出し側の設定バグなので、既定値で握りつぶさず例外にする。
  */
+/**
+ * 閾値設定の妥当性を検証する。
+ *
+ * `evaluateAlert` は毎回検証するが、設定ミスは起動時に検出したい
+ * （ティックごとに例外を投げて静かに機能停止するより、起動時に落とす）。
+ */
+export function validateAlertOptions(options: AlertOptions): void {
+  assertValidOptions(options);
+}
+
 function assertValidOptions(options: AlertOptions): void {
   const { thresholdHpa, hysteresisHpa } = options;
 

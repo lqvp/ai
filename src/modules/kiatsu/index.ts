@@ -7,6 +7,7 @@ import Module from '@/module.js';
 import { buildAlertMessage, buildMentionMessage } from './messages.js';
 import { fetchForecast, type HourlyForecast } from './open-meteo.js';
 import {
+  type AlertOptions,
   type AlertState,
   backoffDelayMs,
   DEFAULT_ALERT_OPTIONS,
@@ -15,6 +16,7 @@ import {
   formatLocalHourKey,
   indexOfLocalHour,
   shouldNotifySuspension,
+  validateAlertOptions,
 } from './pressure-trend.js';
 import { renderKiatsuImage } from './render-kiatsu.js';
 
@@ -76,6 +78,14 @@ export default class extends Module {
    */
   private latestForecastStart = 0;
 
+  /**
+   * 予報を取得した時刻（ローカル時刻キー）。
+   *
+   * 画像に「取得: HH:MM」として出す。描画した時刻ではなく**取得した時刻**を
+   * 渡さないと、取得に失敗して古い予報を描いたときに最新に見えてしまう。
+   */
+  private latestForecastFetchedAt: string | null = null;
+
   /** 直近の ΔP3h。計算できないときは null。 */
   private latestDelta3h: number | null = null;
 
@@ -119,6 +129,16 @@ export default class extends Module {
 
     this.warnLegacyKeys();
 
+    // 設定ミスは起動時に落とす。ティックごとに evaluateAlert が例外を投げると、
+    // エラーログだけが出て機能が静かに止まる。
+    try {
+      validateAlertOptions(this.alertOptions);
+    } catch (error) {
+      this.log(`気圧監視の設定が不正なため起動しません: ${String(error)}`);
+      console.warn(error);
+      return false;
+    }
+
     this.startMonitoring();
     void this.update(); // 初回実行
 
@@ -140,7 +160,7 @@ export default class extends Module {
     if (found.length === 0) return;
 
     this.log(
-      `[kiatsu] 廃止された設定キーを無視しました: ${found.join(', ')}。` +
+      `廃止された設定キーを無視しました: ${found.join(', ')}。` +
         '地点は latitude / longitude / locationName で指定してください。'
     );
   }
@@ -181,6 +201,7 @@ export default class extends Module {
 
     // 現在時刻のデータが無くても画像は描けるので、取得できた時点で保持する。
     this.latestForecast = forecast;
+    this.latestForecastFetchedAt = formatLocalHourKey(new Date());
 
     const now = new Date();
     const currentIndex = this.findCurrentIndex(forecast, now);
@@ -191,6 +212,9 @@ export default class extends Module {
       this.log(
         `現在時刻 (${formatLocalHourKey(now)}) 付近の気圧データがありません。`
       );
+      // 取得自体は成功しているので、連続失敗としては数えない。
+      // ここで数えると、時刻書式の変更だけで停止しきい値に達してしまう。
+      this.errorCount = 0;
       return;
     }
 
@@ -203,10 +227,11 @@ export default class extends Module {
     this.latestDeltaAt = now.getTime();
     this.latestObservedAt = observedAt;
 
-    const { state, trigger } = evaluateAlert(delta3h, this.alertState, {
-      thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
-      hysteresisHpa: config.kiatsu?.hysteresisHpa ?? DEFAULTS.hysteresisHpa,
-    });
+    const { state, trigger } = evaluateAlert(
+      delta3h,
+      this.alertState,
+      this.alertOptions
+    );
 
     // 投稿の有無に関わらず状態は進める（同じ警報の再 trigger を防ぐ）。
     this.alertState = state;
@@ -237,7 +262,9 @@ export default class extends Module {
     if (exact >= 0) return exact;
 
     for (let offset = 1; offset <= FALLBACK_HOURS; offset++) {
-      for (const sign of [1, -1]) {
+      // 過去を優先する。未来の点を選ぶと「（21:00時点）」のような
+      // 未来時刻を観測時刻として返してしまう。
+      for (const sign of [-1, 1]) {
         const shifted = new Date(now.getTime() + sign * offset * HOUR_MS);
         const index = indexOfLocalHour(
           forecast.hours,
@@ -361,6 +388,14 @@ export default class extends Module {
     this.log(`気圧警報を投稿しました（本日 ${this.postsToday} 件目）。`);
   }
 
+  /** 判定に使う閾値。評価と起動時検証で同じ値を使う。 */
+  private get alertOptions(): AlertOptions {
+    return {
+      thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
+      hysteresisHpa: config.kiatsu?.hysteresisHpa ?? DEFAULTS.hysteresisHpa,
+    };
+  }
+
   /** 投稿文に出す地点名。未設定でも既定地点で動く。 */
   private get locationName(): string {
     return config.kiatsu?.locationName ?? DEFAULTS.locationName;
@@ -386,7 +421,7 @@ export default class extends Module {
       locationName: this.locationName,
       startIndex: this.latestForecastStart,
       thresholdHpa: config.kiatsu?.alertThresholdHpa ?? DEFAULTS.thresholdHpa,
-      fetchedAtLocal: formatLocalHourKey(new Date()),
+      fetchedAtLocal: this.latestForecastFetchedAt ?? undefined,
     });
 
     return await this.ai.upload(image, {
