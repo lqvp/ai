@@ -341,23 +341,31 @@ describe('KiatsuModule (index.ts)', () => {
     const hooks = mod.getHooks();
     await vi.advanceTimersByTimeAsync(0);
 
-    // 以降ずっと取得失敗にしたまま 3時間経過させる（鮮度切れ）
+    // 以降ずっと取得失敗にしたまま 3時間経過させる（鮮度切れ、計 4 回の定期試行）
     fetchSpy.mockRejectedValue(new Error('timeout'));
     await vi.advanceTimersByTimeAsync(3 * 3_600_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
 
+    // 直近の試行から updateIntervalMs 未満の連続メンションは外部 API を再試行せず失敗返信を返す
+    vi.setSystemTime(new Date(Date.now() + 10_000));
     const staleMention = makeMentionMessage();
     await hooks.mentionHook!(staleMention.message);
+    const staleMention2 = makeMentionMessage();
+    await hooks.mentionHook!(staleMention2.message);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
     expect(staleMention.reply).toHaveBeenCalledWith(
       expect.stringContaining('取得できませんでした'),
       expect.objectContaining({ file: undefined })
     );
 
-    // 次に最新予報は取れたが 3時間前の点だけ null のケース
+    // updateIntervalMs 以上経過した後のメンションでは再取得でき、3時間前の点だけ null のケースを処理する
+    vi.setSystemTime(new Date(Date.now() + 3_600_000));
     fetchSpy.mockResolvedValueOnce(
       buildForecastAt(new Date(), null, { prev3hNull: true })
     );
     const partialMention = makeMentionMessage();
     await hooks.mentionHook!(partialMention.message);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
     const [partialText, partialOpts] = partialMention.reply.mock.calls[0] as [
       string,
       { file?: unknown },
@@ -469,12 +477,20 @@ describe('KiatsuModule (index.ts)', () => {
 
     // 観測時刻（20:00 JST）から 1時間59分59秒後（まだギリギリ STALE_MS=2h 以内）に進める
     vi.setSystemTime(new Date('2026-11-25T12:59:59Z'));
+    let rejectDelete!: (reason?: unknown) => void;
+    api.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectDelete = reject;
+        })
+    );
     upload.mockImplementationOnce(async () => {
       // アップロードに 5 秒かかり、完了時点で 2時間0分4秒（鮮度切れ）になる状況を模擬
       vi.setSystemTime(new Date('2026-11-25T13:00:04Z'));
       return { id: 'file-late', name: 'kiatsu.png' };
     });
 
+    // drive/files/delete が未完了でも message.reply がブロックされず即座に完了すること
     const { message, reply } = makeMentionMessage();
     await hooks.mentionHook!(message);
 
@@ -485,6 +501,10 @@ describe('KiatsuModule (index.ts)', () => {
     expect(api).toHaveBeenCalledWith('drive/files/delete', {
       fileId: 'file-late',
     });
+
+    // 遅延して削除が失敗しても UnhandledRejection にならずログに記録されること
+    rejectDelete(new Error('delete timeout'));
+    await Promise.resolve();
     mod.dispose();
   });
 
@@ -603,6 +623,103 @@ describe('KiatsuModule (index.ts)', () => {
     // その次の定期評価（さらに連続不一致）で 2 回目の一時停止に入る
     await vi.advanceTimersByTimeAsync(550_000);
     expect(posts).toHaveLength(2);
+
+    mod.dispose();
+  });
+
+  it('通信失敗を挟んだ時刻不一致は連続扱いせず、実際に2回連続した時点で停止判定に進む', async () => {
+    const staleSeries: HourlyForecast = {
+      latitude: 36.32,
+      longitude: 139.0,
+      elevationM: 100,
+      hours: [
+        {
+          timeLocal: '2026-11-20T00:00',
+          pressureMsl: 1012.0,
+          temperatureC: 10,
+          weatherCode: 0,
+        },
+      ],
+    };
+    const fetchSpy = vi
+      .spyOn(openMeteo, 'fetchForecast')
+      .mockResolvedValueOnce(staleSeries) // 1回目: 時刻不一致 (consecutive=1, errorCount=0)
+      .mockRejectedValueOnce(new Error('network error')) // 2回目: 通信失敗 (consecutive=0, errorCount=1 <= 1)
+      .mockResolvedValueOnce(staleSeries) // 3回目: 時刻不一致 (単発扱い consecutive=1, errorCount=1 のまま)
+      .mockResolvedValueOnce(staleSeries); // 4回目: 連続時刻不一致 (consecutive=2, errorCount=2 > 1 → 停止)
+
+    const { mod, posts } = createHarness({
+      maxErrorRetries: 1,
+      updateIntervalMs: 600_000,
+    });
+    mod.getHooks();
+
+    await vi.advanceTimersByTimeAsync(0); // 1回目
+    expect(posts).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(600_000); // 2回目（通信失敗）
+    expect(posts).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(600_000); // 3回目（通信失敗後の1回目の不一致 → 停止しない）
+    expect(posts).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(600_000); // 4回目（2回連続の不一致 → 停止）
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain('一時停止しました');
+
+    mod.dispose();
+  });
+
+  it('時刻不一致や取得失敗後のメンション再試行も updateIntervalMs でレート制限される', async () => {
+    const staleSeries: HourlyForecast = {
+      latitude: 36.32,
+      longitude: 139.0,
+      elevationM: 100,
+      hours: [
+        {
+          timeLocal: '2026-11-20T00:00',
+          pressureMsl: 1012.0,
+          temperatureC: 10,
+          weatherCode: 0,
+        },
+      ],
+    };
+    const fetchSpy = vi
+      .spyOn(openMeteo, 'fetchForecast')
+      .mockResolvedValue(staleSeries);
+
+    const { mod } = createHarness({
+      updateIntervalMs: 600_000,
+    });
+    const hooks = mod.getHooks();
+    await vi.advanceTimersByTimeAsync(0); // 起動時の試行 1回
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // updateIntervalMs 未満で複数回メンションされても追加の fetchForecast は走らない
+    for (const offsetMs of [1_000, 120_000, 599_000]) {
+      vi.setSystemTime(
+        new Date(new Date('2026-11-25T11:00:00Z').getTime() + offsetMs)
+      );
+      const { message, reply } = makeMentionMessage();
+      await hooks.mentionHook!(message);
+      expect(reply).toHaveBeenCalledWith(
+        expect.stringContaining('取得できませんでした'),
+        expect.objectContaining({ file: undefined })
+      );
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // updateIntervalMs 経過後のメンションで 1 回だけ再試行され、直後のメンションは再び抑制される
+    vi.setSystemTime(new Date('2026-11-25T11:10:00Z'));
+    const afterInterval1 = makeMentionMessage();
+    await hooks.mentionHook!(afterInterval1.message);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    vi.setSystemTime(new Date('2026-11-25T11:10:05Z'));
+    const afterInterval2 = makeMentionMessage();
+    await hooks.mentionHook!(afterInterval2.message);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
 
     mod.dispose();
   });

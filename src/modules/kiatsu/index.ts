@@ -143,8 +143,11 @@ export default class extends Module<KiatsuData> {
    */
   private latestForecastFetchedAt: string | null = null;
 
-  /** 直近で予報取得に成功した時刻（ミリ秒）。メンション時の再取得判定に使う。 */
+  /** 直近で予報取得に成功した時刻（ミリ秒）。キャッシュの鮮度判定に使う。 */
   private latestForecastFetchedAtMs: number | null = null;
+
+  /** 直近で予報取得を試行した時刻（ミリ秒）。失敗・時刻不一致時を含むメンション再試行の間隔制限に使う。 */
+  private lastFetchAttemptAtMs: number | null = null;
 
   /** 直近の ΔP3h。計算できないときは null。 */
   private latestDelta3h: number | null = null;
@@ -321,6 +324,7 @@ export default class extends Module<KiatsuData> {
     this.syncPostDay();
 
     let forecast: HourlyForecast;
+    this.lastFetchAttemptAtMs = Date.now();
 
     try {
       forecast = await fetchForecast({
@@ -332,6 +336,7 @@ export default class extends Module<KiatsuData> {
       this.log('気圧データの取得に失敗しました。');
       console.warn(error);
       if (countErrors) {
+        this.consecutiveMissingHours = 0;
         await this.handleError();
       }
       return;
@@ -746,8 +751,9 @@ export default class extends Module<KiatsuData> {
    * メンション応答の前に、必要なら予報を更新する。
    *
    * - 進行中の評価があればそれに相乗りする。
-   * - 直近 `updateIntervalMs` 以内に取得済みで、現在時刻に対するスナップショットも
-   *   鮮度内なら再取得せず即座に返す（連続メンションで外部 API を叩き続けたり、応答が遅れるのを防ぐ）。
+   * - 成否を問わず直近 `updateIntervalMs` 以内に取得を試行済みなら再取得しない
+   *   （取得失敗中や時刻不一致中に連続メンションが来ても外部 API を叩き続けないようにする）。
+   * - キャッシュ自体の鮮度判定には引き続き取得成功時刻を使う。
    */
   private async ensureFreshForMention(): Promise<void> {
     if (this.inFlightEvaluation) {
@@ -758,13 +764,12 @@ export default class extends Module<KiatsuData> {
     const updateIntervalMs =
       config.kiatsu?.updateIntervalMs ?? DEFAULTS.updateIntervalMs;
     const nowMs = Date.now();
-    const snapshot = this.captureSnapshot(new Date(nowMs));
-    const recentlyFetched =
-      this.latestForecastFetchedAtMs !== null &&
-      nowMs - this.latestForecastFetchedAtMs < updateIntervalMs &&
-      this.isSnapshotFresh(snapshot, nowMs);
-
-    if (recentlyFetched) return;
+    if (
+      this.lastFetchAttemptAtMs !== null &&
+      nowMs - this.lastFetchAttemptAtMs < updateIntervalMs
+    ) {
+      return;
+    }
 
     await this.enqueueEvaluation({ allowPost: false, countErrors: false });
   }
@@ -866,9 +871,10 @@ export default class extends Module<KiatsuData> {
     }
 
     // 画像アップロード中に鮮度上限（STALE_MS）を超えることがあるため、返信直前に再判定して揃える。
+    // 不要になった画像の削除は返信を遅らせないよう完了を待たずに実行する。
     const replyIsFresh = this.isSnapshotFresh(snapshot);
     if (file !== undefined && !replyIsFresh) {
-      await this.deleteDriveFileBestEffort(file.id);
+      void this.deleteDriveFileBestEffort(file.id);
     }
     const replyFile = replyIsFresh ? file : undefined;
     const deltaForReply = replyIsFresh ? snapshot.delta3h : null;
