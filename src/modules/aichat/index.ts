@@ -9,6 +9,7 @@ import type { Note } from '@/misskey/types.js';
 import Module from '@/module.js';
 import { fetchNoteFiles } from '@/services/media.js';
 import type Stream from '@/stream.js';
+import includes from '@/utils/includes.js';
 import {
   AffinityStore,
   formatAffinityPromptContext,
@@ -584,6 +585,7 @@ export default class extends Module {
     turnSeq: number,
     options: { react: boolean }
   ): Promise<string | null> {
+    if (config.aichat?.step2Audit?.enabled === false) return null;
     try {
       const allowReaction =
         options.react && !msg.isChat && !this.toolReactedNoteIds.has(msg.id);
@@ -652,6 +654,9 @@ export default class extends Module {
       }
 
       // react_only の場合のみ Step 2 を使ってリアクション1つを選び、ai.ts へ委譲する
+      if (config.aichat?.step2Audit?.enabled === false) {
+        return { reaction: 'like' };
+      }
       try {
         const validated = await this.auditAndUpdateAffinity(
           msg,
@@ -789,7 +794,12 @@ export default class extends Module {
 
   @bindThis
   private async mentionHook(msg: Message) {
-    if (!msg.includes([this.name])) {
+    // モジュール名（aichat）に加えて aiName（例: ツナ）でも起動できるようにする。
+    // 判定は先頭のアカウントメンションを除いた本文に対して行う。
+    // ノート全体を見ると、botのユーザー名がaiNameと一致する場合に
+    // `@bot remind 〜` 等の他モジュールのコマンドまで横取りしてしまう。
+    const keywords = [this.name, ...(config.aiName ?? [])];
+    if (!includes(msg.extractedText, keywords)) {
       return false;
     }
     this.log('AiChat requested');
