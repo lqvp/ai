@@ -5,6 +5,7 @@ import Message from '@/message.js';
 import type { DriveFile } from '@/misskey/types.js';
 import Module from '@/module.js';
 import { todayKey } from '@/services/clock.js';
+import { getHttpStatus } from '@/services/errors.js';
 import { buildAlertMessage, buildMentionMessage } from './messages.js';
 import { fetchForecast, type HourlyForecast } from './open-meteo.js';
 import {
@@ -915,7 +916,16 @@ export default class extends Module<KiatsuData> {
     } catch (error) {
       this.log('メンションへの返信に失敗しました。');
       console.warn(error);
-      if (replyFile !== undefined) {
+      // タイムアウト・通信切断・5xx では Misskey 側で返信が保存済みの可能性があり、
+      // 削除すると投稿済み返信から画像が失われるため、未作成と確定できる HTTP 4xx のみ削除する。
+      const status = getHttpStatus(error);
+      if (
+        replyFile !== undefined &&
+        status !== undefined &&
+        status >= 400 &&
+        status < 500 &&
+        status !== 408
+      ) {
         void this.deleteDriveFileBestEffort(replyFile.id);
       }
     }

@@ -801,7 +801,7 @@ describe('KiatsuModule (index.ts)', () => {
     mod.dispose();
   });
 
-  it('画像アップロード成功後に message.reply が失敗した場合は孤立しないようドライブ画像を削除する', async () => {
+  it('message.reply 失敗時は未作成と確定できる HTTP 4xx のみドライブ画像を削除し、通信断や 5xx では残す', async () => {
     vi.spyOn(openMeteo, 'fetchForecast').mockResolvedValueOnce(
       buildForecastAt(new Date(), -1.1)
     );
@@ -809,23 +809,52 @@ describe('KiatsuModule (index.ts)', () => {
     const { mod, api, upload, logs } = createHarness({
       locationName: '高崎市',
     });
-    upload.mockResolvedValueOnce({ id: 'file-orphan', name: 'kiatsu.png' });
+    upload
+      .mockResolvedValueOnce({
+        id: 'file-indeterminate-net',
+        name: 'kiatsu.png',
+      })
+      .mockResolvedValueOnce({
+        id: 'file-indeterminate-502',
+        name: 'kiatsu.png',
+      })
+      .mockResolvedValueOnce({ id: 'file-orphan-400', name: 'kiatsu.png' });
     api.mockRejectedValueOnce(new Error('drive delete error'));
 
     const hooks = mod.getHooks();
     await vi.advanceTimersByTimeAsync(0);
 
-    const { message, reply } = makeMentionMessage();
-    reply.mockRejectedValueOnce(new Error('notes/create failed'));
-    await hooks.mentionHook!(message);
+    // 1. 通信切断（statusCode なし）→ 返信が保存済みの可能性があるため削除しない
+    const netFail = makeMentionMessage();
+    netFail.reply.mockRejectedValueOnce(new Error('socket hang up'));
+    await hooks.mentionHook!(netFail.message);
+    expect(api).not.toHaveBeenCalled();
+
+    // 2. HTTP 502 → 同様に作成結果が不明なため削除しない
+    const gatewayFail = makeMentionMessage();
+    gatewayFail.reply.mockRejectedValueOnce(
+      Object.assign(new Error('Bad Gateway'), { response: { statusCode: 502 } })
+    );
+    await hooks.mentionHook!(gatewayFail.message);
+    expect(api).not.toHaveBeenCalled();
+
+    // 3. HTTP 400 → サーバー側で拒否されたことが確定しているため削除し、削除失敗もログ化する
+    const clientFail = makeMentionMessage();
+    clientFail.reply.mockRejectedValueOnce(
+      Object.assign(new Error('NO_SUCH_NOTE'), {
+        response: { statusCode: 400 },
+      })
+    );
+    await hooks.mentionHook!(clientFail.message);
     await Promise.resolve();
 
+    expect(api).toHaveBeenCalledTimes(1);
     expect(api).toHaveBeenCalledWith('drive/files/delete', {
-      fileId: 'file-orphan',
+      fileId: 'file-orphan-400',
     });
     expect(
       logs.some((l) =>
-        l.includes('不要になった予報画像の削除に失敗しました: file-orphan')
+        l.includes('不要になった予報画像の削除に失敗しました: file-orphan-400')
       )
     ).toBe(true);
 
