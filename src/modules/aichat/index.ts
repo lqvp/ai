@@ -29,7 +29,10 @@ import {
 } from './history-repository.js';
 import { auditInteraction } from './interaction-auditor.js';
 import { PlaybookLoader } from './playbook.js';
-import { ReactionFollowUpHandler } from './reaction-followup.js';
+import {
+  createReactionFollowUpStateStore,
+  ReactionFollowUpHandler,
+} from './reaction-followup.js';
 import { resolveProvider } from './structured-llm.js';
 import { TextGenerator } from './text-generator.js';
 import type { AiChat, Base64File } from './types.js';
@@ -44,6 +47,12 @@ import { WanderStore } from './wander-store.js';
 const RESTRICTED_VISIBILITIES = new Set(['specified', 'followers']);
 const WANDER_TICK_MS = 5 * MINUTES_TO_MS;
 const SESSION_SWEEP_INTERVAL_MS = 60_000;
+const CHAT_END_COMMANDS = new Set([
+  'aichat終了',
+  'aichat終わり',
+  'aichatやめる',
+  'aichat止めて',
+]);
 
 export default class extends Module {
   public readonly name = 'aichat';
@@ -238,6 +247,10 @@ export default class extends Module {
         this.subscribeReply(key, isChat, noteId, data),
       postNotPublic: config.postNotPublic,
       affinityEnabled: config.aichat?.affinity?.enabled !== false,
+      stateStore: createReactionFollowUpStateStore(
+        path.join(memoryDir, 'aichat-reaction-followup.json'),
+        { log: (m) => this.log(m) }
+      ),
       config: config.aichat?.reactionFollowUp,
       log: (m) => this.log(m),
     });
@@ -394,6 +407,15 @@ export default class extends Module {
   @bindThis
   private isMasterUser(msg: Message): boolean {
     return this.ai.relationship.isMaster(msg.user);
+  }
+
+  private isChatEndCommand(msg: Message): boolean {
+    if (!msg.isChat || msg.text == null) return false;
+    const normalized = (msg.extractedText ?? msg.text)
+      .trim()
+      .replace(/\s+/g, '')
+      .toLowerCase();
+    return CHAT_END_COMMANDS.has(normalized);
   }
 
   private async runWithSessionLock<T>(
@@ -740,14 +762,7 @@ export default class extends Module {
       return await this.runWithSessionLock(lockKey, async () => {
         // チャットモードで終了コマンドが送られた場合。
         // 進行中ターンと同じセッションロックを取ってから履歴を削除する。
-        if (
-          msg.isChat &&
-          msg.text != null &&
-          (msg.includes(['aichat 終了']) ||
-            msg.includes(['aichat 終わり']) ||
-            msg.includes(['aichat やめる']) ||
-            msg.includes(['aichat 止めて']))
-        ) {
+        if (this.isChatEndCommand(msg)) {
           const endingSession =
             (sessionId ? this.history.findBySessionId(sessionId) : null) ??
             this.history.findChat(msg.userId);

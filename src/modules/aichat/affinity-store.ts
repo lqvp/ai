@@ -11,6 +11,8 @@ export type AffinityEntry = {
 export type AffinityFile = {
   version: 1;
   users: Record<string, AffinityEntry>;
+  reactionDedup: Record<string, number>;
+  dailyReactionBumps: Record<string, number>;
 };
 
 export type AffinityUserRef = {
@@ -145,6 +147,18 @@ function normalizeEntry(raw: unknown): AffinityEntry {
   };
 }
 
+function normalizeTimestampMap(raw: unknown): Record<string, number> {
+  if (raw == null || typeof raw !== 'object') return {};
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(raw)) {
+    const val = (raw as Record<string, unknown>)[key];
+    if (typeof val === 'number' && Number.isFinite(val) && val > 0) {
+      out[key] = val;
+    }
+  }
+  return out as Record<string, number>;
+}
+
 function normalizeAffinityFile(raw: unknown): AffinityFile {
   const safe = stripDangerousKeys(raw);
   const obj =
@@ -163,7 +177,12 @@ function normalizeAffinityFile(raw: unknown): AffinityFile {
     users[normalizedKey] = normalizeEntry(rawUsers[key]);
   }
 
-  return { version: 1, users };
+  return {
+    version: 1,
+    users,
+    reactionDedup: normalizeTimestampMap(obj.reactionDedup),
+    dailyReactionBumps: normalizeTimestampMap(obj.dailyReactionBumps),
+  };
 }
 
 function cloneUsers(
@@ -187,8 +206,6 @@ export class AffinityStore {
   private readonly now: () => number;
 
   private readonly latestTurnSeq = new Map<string, number>();
-  private readonly reactionDedup = new Map<string, number>();
-  private readonly dailyReactionBumps = new Map<string, number>();
 
   constructor(options: AffinityStoreOptions) {
     this.ignoreThreshold = options.ignoreThreshold ?? -30;
@@ -197,7 +214,12 @@ export class AffinityStore {
     this.now = options.now ?? (() => Date.now());
     this.store = new JsonFileStore<AffinityFile>({
       filePath: options.filePath,
-      createDefault: () => ({ version: 1, users: {} }),
+      createDefault: () => ({
+        version: 1,
+        users: {},
+        reactionDedup: {},
+        dailyReactionBumps: {},
+      }),
       normalize: normalizeAffinityFile,
       log: options.log,
       now: this.now,
@@ -345,7 +367,7 @@ export class AffinityStore {
 
       users[writeKey] = updated;
       return {
-        next: { version: 1, users },
+        next: { ...file, users },
         result: updated,
       };
     });
@@ -361,31 +383,42 @@ export class AffinityStore {
   ): Promise<boolean> {
     if (user.isBot) return false;
     const nowMs = this.now();
-    this.pruneReactionDedup(nowMs);
-
     const targetAcct = normalizeAcct(user);
     const userKey = user.id || targetAcct;
     const dedupKey = `${noteId}:${userKey}`;
-    if (this.reactionDedup.has(dedupKey)) {
-      return false;
-    }
-
-    const dayKey = `${userKey}:${todayKey(new Date(nowMs))}`;
-    const todayCount = this.dailyReactionBumps.get(dayKey) ?? 0;
-    if (todayCount >= REACTION_DAILY_CAP) {
-      return false;
-    }
+    const day = todayKey(new Date(nowMs));
+    const dayKey = `${userKey}:${day}`;
 
     // 重複・日次上限の判定と記録は JsonFileStore の直列キュー内で行い、
-    // 同時到着したリアクションの両方が上限前の件数を読む競合を防ぐ。
+    // 同時到着・プロセス再起動の両方で上限を保持する。
     return this.store.update((file) => {
-      this.pruneReactionDedup(nowMs);
-      if (this.reactionDedup.has(dedupKey)) {
-        return { next: file, result: false, write: false };
+      const reactionDedup: Record<string, number> = {};
+      for (const [key, ts] of Object.entries(file.reactionDedup)) {
+        if (nowMs - ts <= REACTION_DEDUP_TTL_MS) reactionDedup[key] = ts;
       }
-      const serializedTodayCount = this.dailyReactionBumps.get(dayKey) ?? 0;
+      const dedupKeys = Object.keys(reactionDedup);
+      while (dedupKeys.length >= REACTION_DEDUP_MAX) {
+        const oldest = dedupKeys.shift();
+        if (oldest === undefined) break;
+        delete reactionDedup[oldest];
+      }
+
+      const dailyReactionBumps: Record<string, number> = {};
+      for (const [key, count] of Object.entries(file.dailyReactionBumps)) {
+        if (key.endsWith(`:${day}`)) dailyReactionBumps[key] = count;
+      }
+
+      const baseFile: AffinityFile = {
+        ...file,
+        reactionDedup,
+        dailyReactionBumps,
+      };
+      if (reactionDedup[dedupKey] != null) {
+        return { next: baseFile, result: false };
+      }
+      const serializedTodayCount = dailyReactionBumps[dayKey] ?? 0;
       if (serializedTodayCount >= REACTION_DAILY_CAP) {
-        return { next: file, result: false, write: false };
+        return { next: baseFile, result: false };
       }
 
       const users = cloneUsers(file.users);
@@ -404,7 +437,7 @@ export class AffinityStore {
         : this.applyPassiveDecay(base.score, base.last, nowMs);
 
       if (!isMaster && decayedScore <= this.ignoreThreshold) {
-        return { next: file, result: false, write: false };
+        return { next: baseFile, result: false };
       }
 
       const writeKey = this.resolveWriteKey(users, user, targetAcct);
@@ -426,20 +459,17 @@ export class AffinityStore {
         notes: base.notes,
         last: new Date(nowMs).toISOString(),
       };
+      reactionDedup[dedupKey] = nowMs;
+      dailyReactionBumps[dayKey] = serializedTodayCount + 1;
 
       return {
-        next: { version: 1, users },
-        result: true,
-        commit: () => {
-          this.reactionDedup.set(dedupKey, nowMs);
-          this.dailyReactionBumps.set(dayKey, serializedTodayCount + 1);
-          // 日次マップの肥大化防止
-          if (this.dailyReactionBumps.size > 1000) {
-            const firstKey = this.dailyReactionBumps.keys().next().value;
-            if (firstKey !== undefined)
-              this.dailyReactionBumps.delete(firstKey);
-          }
+        next: {
+          ...baseFile,
+          users,
+          reactionDedup,
+          dailyReactionBumps,
         },
+        result: true,
       };
     });
   }
@@ -525,19 +555,6 @@ export class AffinityStore {
     }
 
     return targetAcct;
-  }
-
-  private pruneReactionDedup(nowMs: number): void {
-    for (const [key, ts] of this.reactionDedup) {
-      if (nowMs - ts > REACTION_DEDUP_TTL_MS) {
-        this.reactionDedup.delete(key);
-      }
-    }
-    while (this.reactionDedup.size >= REACTION_DEDUP_MAX) {
-      const oldest = this.reactionDedup.keys().next().value;
-      if (oldest === undefined) break;
-      this.reactionDedup.delete(oldest);
-    }
   }
 }
 

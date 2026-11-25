@@ -8,12 +8,50 @@ import type {
   AiChatHist,
   ChatHistoryRepository,
 } from './history-repository.js';
+import { JsonFileStore } from './json-file-store.js';
 import type { PlaybookLoader } from './playbook.js';
 import {
   MISSKEY_FORMAT_CONSTRAINTS,
   SAFETY_CONSTRAINTS,
 } from './prompt-builder.js';
 import { callStructuredJson } from './structured-llm.js';
+
+export type ReactionFollowUpState = {
+  version: 1;
+  userLastFollowUpAt: Record<string, number>;
+};
+
+function normalizeFollowUpState(raw: unknown): ReactionFollowUpState {
+  const obj =
+    raw != null && typeof raw === 'object'
+      ? (raw as Record<string, unknown>)
+      : {};
+  const rawMap =
+    obj.userLastFollowUpAt != null && typeof obj.userLastFollowUpAt === 'object'
+      ? (obj.userLastFollowUpAt as Record<string, unknown>)
+      : {};
+  const userLastFollowUpAt: Record<string, number> = {};
+  for (const key of Object.keys(rawMap)) {
+    const value = rawMap[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      userLastFollowUpAt[key] = value;
+    }
+  }
+  return { version: 1, userLastFollowUpAt };
+}
+
+export function createReactionFollowUpStateStore(
+  filePath: string,
+  options: { log?: (message: string) => void; now?: () => number } = {}
+): JsonFileStore<ReactionFollowUpState> {
+  return new JsonFileStore<ReactionFollowUpState>({
+    filePath,
+    createDefault: () => ({ version: 1, userLastFollowUpAt: {} }),
+    normalize: normalizeFollowUpState,
+    log: options.log,
+    now: options.now,
+  });
+}
 
 export type ReactionFollowUpConfig = {
   enabled?: boolean;
@@ -45,6 +83,7 @@ export type ReactionFollowUpDeps = {
   postNotPublic?: boolean;
   /** false の場合はリアクションによる好感度微増を行わない */
   affinityEnabled?: boolean;
+  stateStore?: JsonFileStore<ReactionFollowUpState>;
   config?: ReactionFollowUpConfig;
   log?: (message: string) => void;
   now?: () => number;
@@ -169,7 +208,7 @@ export class ReactionFollowUpHandler {
     if (!isMaster && entry.score < minAffinity) return false;
 
     const cooldownMs = (cfg.userCooldownMinutes ?? 360) * MINUTES_TO_MS;
-    const lastFollowUp = this.userLastFollowUpAt.get(reactor.id);
+    const lastFollowUp = await this.getLastFollowUpAt(reactor.id);
     if (lastFollowUp != null && nowMs - lastFollowUp < cooldownMs) {
       return false;
     }
@@ -230,7 +269,7 @@ export class ReactionFollowUpHandler {
     return this.runWithFollowUpLock(reactor.id, async () => {
       const cfg = this.deps.config ?? {};
       const cooldownMs = (cfg.userCooldownMinutes ?? 360) * MINUTES_TO_MS;
-      const lastFollowUp = this.userLastFollowUpAt.get(reactor.id);
+      const lastFollowUp = await this.getLastFollowUpAt(reactor.id);
       if (lastFollowUp != null && this.now() - lastFollowUp < cooldownMs) {
         return false;
       }
@@ -242,6 +281,31 @@ export class ReactionFollowUpHandler {
         reaction
       );
     });
+  }
+
+  private async getLastFollowUpAt(userId: string): Promise<number | undefined> {
+    if (!this.deps.stateStore) {
+      return this.userLastFollowUpAt.get(userId);
+    }
+    const state = await this.deps.stateStore.load();
+    return state.userLastFollowUpAt[userId];
+  }
+
+  private async recordFollowUpAt(userId: string, nowMs: number): Promise<void> {
+    if (!this.deps.stateStore) {
+      this.userLastFollowUpAt.set(userId, nowMs);
+      return;
+    }
+    await this.deps.stateStore.update((state) => ({
+      next: {
+        version: 1,
+        userLastFollowUpAt: {
+          ...state.userLastFollowUpAt,
+          [userId]: nowMs,
+        },
+      },
+      result: undefined,
+    }));
   }
 
   private async runWithFollowUpLock<T>(
@@ -344,7 +408,7 @@ export class ReactionFollowUpHandler {
     });
 
     const nowMs = this.now();
-    this.userLastFollowUpAt.set(reactor.id, nowMs);
+    await this.recordFollowUpAt(reactor.id, nowMs);
     const nextHistory = [
       ...(fresh.history ?? []),
       { role: 'model', content: body },

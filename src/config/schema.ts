@@ -81,6 +81,13 @@ export type Config = {
     allowNonMasterWebTools?: boolean;
     /** 交流ルール PLAYBOOK.md のパス（省略時は memoryDir/PLAYBOOK.md） */
     playbookPath?: string;
+    /** LLM呼び出し全体の日次予算と連続エラー時バックオフ */
+    llmBudget?: {
+      enabled?: boolean;
+      maxCallsPerDay?: number;
+      maxConsecutiveErrors?: number;
+      errorBackoffMinutes?: number;
+    };
     /** Misskey操作ツール（ノート検索・ユーザー検索・リアクション等、マスター専用） */
     misskeyTools?: {
       enabled?: boolean;
@@ -401,6 +408,34 @@ function validateAndResolve(input: RawConfig): Config {
         aichat.playbookPath.includes('\0'))
     ) {
       issues.push('aichat.playbookPath が不正です');
+    }
+
+    if (isObject(aichat.llmBudget)) {
+      const budget = aichat.llmBudget;
+      if (budget.maxCallsPerDay !== undefined) {
+        const value = Number(budget.maxCallsPerDay);
+        if (!Number.isInteger(value) || value < 1 || value > 100000) {
+          issues.push(
+            'aichat.llmBudget.maxCallsPerDay は 1〜100000 の整数で指定してください'
+          );
+        }
+      }
+      if (budget.maxConsecutiveErrors !== undefined) {
+        const value = Number(budget.maxConsecutiveErrors);
+        if (!Number.isInteger(value) || value < 1 || value > 100) {
+          issues.push(
+            'aichat.llmBudget.maxConsecutiveErrors は 1〜100 の整数で指定してください'
+          );
+        }
+      }
+      if (budget.errorBackoffMinutes !== undefined) {
+        const value = Number(budget.errorBackoffMinutes);
+        if (!Number.isFinite(value) || value <= 0) {
+          issues.push(
+            'aichat.llmBudget.errorBackoffMinutes は正の数で指定してください'
+          );
+        }
+      }
     }
 
     if (isObject(aichat.affinity)) {

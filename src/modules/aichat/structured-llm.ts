@@ -2,6 +2,7 @@ import got from 'got';
 import config from '@/config/index.js';
 import { getGeminiApiUrl } from './constants.js';
 import { stripDangerousKeys } from './json-file-store.js';
+import { getLlmUsageGuard } from './llm-usage-guard.js';
 import {
   type OpenaiProviderConfig,
   resolveOpenaiSettings,
@@ -166,6 +167,22 @@ export function extractJsonObject(raw: string): Record<string, unknown> | null {
   return tryParsePlainObject(repairJsonString(scanTarget));
 }
 
+/** OpenAI互換APIの message.content を文字列へ正規化する。 */
+export function extractOpenaiContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (part == null || typeof part !== 'object') return '';
+      const obj = part as Record<string, unknown>;
+      if (typeof obj.text === 'string') return obj.text;
+      if (typeof obj.content === 'string') return obj.content;
+      return '';
+    })
+    .join('');
+}
+
 type GeminiStructuredResponse = {
   candidates?: Array<{
     finishReason?: string;
@@ -193,6 +210,21 @@ export async function callStructuredJson<T>(
   const log = options.log ?? (() => {});
   const provider = resolveProvider(options.provider);
   const temperature = options.temperature ?? 0.2;
+  const usageGuard = getLlmUsageGuard(log);
+  let budgetConsumed = false;
+
+  try {
+    const budget = await usageGuard.tryAcquire();
+    if (!budget.allowed) {
+      log(`構造化LLM呼び出しを抑制しました: ${budget.reason}`);
+      return null;
+    }
+    budgetConsumed = true;
+  } catch (err: unknown) {
+    log(
+      `LLM予算状態を更新できないため今回は継続します: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   let rawText = '';
 
@@ -230,8 +262,7 @@ export async function callStructuredJson<T>(
         })
         .json<OpenaiStructuredResponse>();
 
-      const content = res.choices?.[0]?.message?.content;
-      rawText = typeof content === 'string' ? content : '';
+      rawText = extractOpenaiContentText(res.choices?.[0]?.message?.content);
     } else {
       const apiKey = options.geminiConfig?.apiKey ?? config.gemini?.apiKey;
       if (!apiKey) {
@@ -267,7 +298,13 @@ export async function callStructuredJson<T>(
         .map((p) => p.text ?? '')
         .join('');
     }
+    if (budgetConsumed) {
+      await usageGuard.recordOutcome(true).catch(() => undefined);
+    }
   } catch (err: unknown) {
+    if (budgetConsumed) {
+      await usageGuard.recordOutcome(false).catch(() => undefined);
+    }
     log(
       `構造化LLM呼び出しエラー: ${err instanceof Error ? err.message : String(err)}`
     );

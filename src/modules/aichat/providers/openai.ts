@@ -9,7 +9,10 @@ import {
   buildBaseInstruction,
   buildOpenaiMessages,
 } from '../prompt-builder.js';
-import { stripThinkingTags } from '../structured-llm.js';
+import {
+  extractOpenaiContentText,
+  stripThinkingTags,
+} from '../structured-llm.js';
 import { parseToolCallsFromContent } from '../tool-call-parser.js';
 import { buildOpenaiTools, executeToolCall } from '../tools.js';
 import type {
@@ -165,9 +168,7 @@ export async function genTextByOpenaiDetailed(
           : {}),
       });
       const finalMessage = res.choices?.[0]?.message;
-      return typeof finalMessage?.content === 'string'
-        ? finalMessage.content
-        : '';
+      return extractOpenaiContentText(finalMessage?.content);
     };
 
     try {
@@ -230,9 +231,7 @@ export async function genTextByOpenaiDetailed(
       : undefined;
 
     let contentText: string = stripThinkingTags(
-      typeof assistantMessage.content === 'string'
-        ? assistantMessage.content
-        : ''
+      extractOpenaiContentText(assistantMessage.content)
     );
 
     let effectiveToolCalls: OpenaiToolCall[] =
